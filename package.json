@@ -1,0 +1,18 @@
+{
+  "name": "family-ai-orchestrator",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Autonomous family AI orchestrator for local development and Timeweb deployment.",
+  "scripts": {
+    "test": "node --test",
+    "test:domain": "node --test packages/domain/test/*.test.js"
+  },
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "engines": {
+    "node": ">=22"
+  }
+}
