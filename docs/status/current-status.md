@@ -26,24 +26,37 @@ Date: 2026-07-20
 - Timeweb deployment documentation and Docker Compose deployment skeleton.
 - Timeweb PostgreSQL 17 DBaaS cluster provisioned for the MVP.
 - App Platform Docker Compose startup command that runs Prisma migrations inside Timeweb before the API starts.
+- Timeweb App Platform backend app deployed from Git URL repository.
+- Production deploy applied Prisma migration `20260720000000_init`.
+- Public technical domain `/health` check returns 200 OK.
 - Docker healthcheck for `/health`.
 - Prisma schema and initial migration artifact for users, conversations, memory, students, lessons, materials, reminders, jobs, usage, and audit logs.
 - Local automated test suite: 93 passing tests.
 
 ## Not Implemented Yet
 
-- Live PostgreSQL smoke test from inside Timeweb runtime.
+- Live PostgreSQL smoke write test from inside Timeweb runtime.
+- Timeweb AI agent IDs/API key configuration in App Platform.
+- Telegram bot token and webhook registration in App Platform.
+- S3 bucket and object upload integration.
 - Real Telegram webhook registration script.
 - Web cabinet for owner and teacher.
-- File upload to S3.
 - Authentication UI.
 - Background worker loop connected to PostgreSQL.
 - Production budget usage accounting from real model calls.
 
+## Timeweb Runtime
+
+- PostgreSQL DBaaS: `4190345`, status `started`, PostgreSQL 17.
+- App Platform: `225845`, status `active`, preset `2731`, Moscow `ru-3`.
+- Technical domain: `https://griff35victorov-ai-fam-8853.twc1.net`.
+- Git source: `griff35victorov/AI---fam`, branch `main`, commit `46333593387ae1186ccafd9d021a3f251d86f2bf`.
+- Current monthly infrastructure estimate: PostgreSQL 970 RUB/month + App Platform 510 RUB/month = 1480 RUB/month.
+
 ## Next Engineering Slice
 
-1. Push the App Platform-ready Compose changes to the Git remote.
-2. Create/connect the Timeweb App Platform Docker Compose app.
-3. Set production environment variables in Timeweb and let the `web` service run migrations.
-4. Add Telegram webhook registration script and production smoke check.
+1. Configure Timeweb AI agent IDs and API key in App Platform.
+2. Create/configure Telegram bot token and webhook secret.
+3. Add Telegram webhook registration script and production smoke check.
+4. Create S3 bucket and connect material/file upload.
 5. Add teacher workspace API for students, materials, lessons, and lesson notes.

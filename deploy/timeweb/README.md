@@ -4,6 +4,15 @@
 
 Deploy the family AI orchestrator as a Timeweb App Platform Docker Compose application.
 
+## Current Deployment
+
+- App Platform ID: `225845`.
+- Technical domain: `https://griff35victorov-ai-fam-8853.twc1.net`.
+- Source repository: `griff35victorov/AI---fam`, branch `main`.
+- Runtime preset: `2731`, Moscow `ru-3`, 1 CPU, 1 GB RAM, 15 GB NVMe.
+- PostgreSQL DBaaS ID: `4190345`.
+- Last verified deploy: commit `46333593387ae1186ccafd9d021a3f251d86f2bf`, `/health` returned 200 OK.
+
 ## Services
 
 - `web`: public HTTP API, web admin, Telegram webhook.
