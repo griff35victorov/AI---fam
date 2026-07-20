@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { createInMemoryRepositories } from "../../../packages/db/src/index.js";
-import { createAppServerFromEnv } from "../src/server.js";
+import { createAppServerFromEnv, createAppServerFromEnvAsync } from "../src/server.js";
 import { createProductionDependencies } from "../src/production-runtime.js";
 
 function jsonResponse(body) {
@@ -146,6 +146,31 @@ test("production dependencies ignore empty env overrides", async () => {
   );
 });
 
+test("production dependencies build repositories from Prisma client", async () => {
+  const dependencies = createProductionDependencies({
+    env: {
+      TIMEWEB_AI_API_KEY: "timeweb-key",
+      TELEGRAM_BOT_TOKEN: "telegram-token",
+    },
+    prisma: {
+      user: {
+        async findUnique({ where }) {
+          if (where.telegramUserId === "100") {
+            return { id: "owner-1", role: "owner", telegramUserId: "100" };
+          }
+
+          return null;
+        },
+      },
+    },
+  });
+
+  assert.equal(
+    (await dependencies.repositories.users.findByTelegramUserId("100")).id,
+    "owner-1",
+  );
+});
+
 test("server env factory uses production dependencies for Telegram webhook", async () => {
   const repositories = createInMemoryRepositories({
     users: [
@@ -192,5 +217,99 @@ test("server env factory uses production dependencies for Telegram webhook", asy
   assert.equal(
     calls[1][0],
     "https://api.telegram.org/bottelegram-token/sendMessage",
+  );
+});
+
+test("async server env factory creates Prisma repositories when DATABASE_URL is set", async () => {
+  const calls = [];
+  class FakePrismaClient {
+    constructor() {
+      const messages = [];
+      const conversations = [];
+      this.user = {
+        async findUnique({ where }) {
+          if (where.telegramUserId === "100") {
+            return {
+              id: "owner-1",
+              role: "owner",
+              telegramUserId: "100",
+              workspaceId: "workspace-family",
+            };
+          }
+
+          return null;
+        },
+      };
+      this.memoryItem = {
+        async findMany() {
+          return [];
+        },
+      };
+      this.conversation = {
+        async upsert({ where, update, create }) {
+          const existing = conversations.find(
+            (conversation) => conversation.id === where.id,
+          );
+
+          if (existing) {
+            Object.assign(existing, update);
+            return existing;
+          }
+
+          conversations.push(create);
+          return create;
+        },
+      };
+      this.message = {
+        async create({ data }) {
+          if (
+            !conversations.some(
+              (conversation) => conversation.id === data.conversationId,
+            )
+          ) {
+            throw new Error("conversation must exist before message create");
+          }
+
+          messages.push(data);
+          return data;
+        },
+        async findMany() {
+          return messages;
+        },
+      };
+    }
+  }
+
+  const server = await createAppServerFromEnvAsync({
+    env: {
+      DATABASE_URL: "postgresql://family:test@localhost:5432/family_ai",
+      TIMEWEB_AI_API_KEY: "timeweb-key",
+      TIMEWEB_AGENT_OWNER_ASSISTANT: "agent-owner",
+      TELEGRAM_BOT_TOKEN: "telegram-token",
+    },
+    importPrismaClient: async () => ({ PrismaClient: FakePrismaClient }),
+    fetchImpl: async (...args) => {
+      calls.push(args);
+      return jsonResponse({ text: "Postgres-backed answer" });
+    },
+  });
+
+  await withServer(server, async (baseUrl) => {
+    const response = await postJson(`${baseUrl}/telegram/webhook`, {
+      update_id: 901,
+      message: {
+        chat: { id: 777 },
+        from: { id: 100 },
+        text: "hello",
+      },
+    });
+
+    assert.equal(response.status, 200);
+    assert.equal((await response.json()).text, "Postgres-backed answer");
+  });
+
+  assert.equal(
+    calls[0][0],
+    "https://api.timeweb.cloud/api/v1/cloud-ai/agents/agent-owner/call",
   );
 });

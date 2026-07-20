@@ -1,5 +1,6 @@
 import { createServer } from "node:http";
 
+import { createPrismaClient } from "../../../packages/db/src/index.js";
 import { createHealthResponse } from "./health.js";
 import { handleOrchestratorRequest } from "./orchestrator.js";
 import { createProductionDependencies } from "./production-runtime.js";
@@ -24,6 +25,10 @@ function telegramWebhookSecretIsValid(request, secret) {
   }
 
   return request.headers["x-telegram-bot-api-secret-token"] === secret;
+}
+
+function envValue(value) {
+  return typeof value === "string" && value.trim() === "" ? undefined : value;
 }
 
 export function createAppServer(options = {}) {
@@ -84,20 +89,50 @@ export function createAppServer(options = {}) {
 export function createAppServerFromEnv({
   env = process.env,
   repositories,
+  prisma,
   fetchImpl = fetch,
 } = {}) {
   return createAppServer({
     dependencies: createProductionDependencies({
       env,
       repositories,
+      prisma,
       fetchImpl,
     }),
   });
 }
 
+export async function createAppServerFromEnvAsync({
+  env = process.env,
+  repositories,
+  prisma,
+  fetchImpl = fetch,
+  importPrismaClient,
+} = {}) {
+  const resolvedPrisma =
+    prisma ??
+    (!repositories && envValue(env.DATABASE_URL)
+      ? await createPrismaClient({ importClient: importPrismaClient })
+      : undefined);
+
+  return createAppServerFromEnv({
+    env,
+    repositories,
+    prisma: resolvedPrisma,
+    fetchImpl,
+  });
+}
+
 if (import.meta.url === `file://${process.argv[1]}`) {
   const port = Number(process.env.PORT ?? 3000);
-  createAppServerFromEnv().listen(port, () => {
-    console.log(`family-ai api listening on ${port}`);
-  });
+  createAppServerFromEnvAsync()
+    .then((server) => {
+      server.listen(port, () => {
+        console.log(`family-ai api listening on ${port}`);
+      });
+    })
+    .catch((error) => {
+      console.error(error);
+      process.exitCode = 1;
+    });
 }

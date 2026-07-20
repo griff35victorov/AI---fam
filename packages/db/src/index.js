@@ -1,5 +1,8 @@
 let nextId = 1;
 
+export { createPrismaClient } from "./client.js";
+export { createPrismaRepositories } from "./prisma.js";
+
 const cloneDate = (value) => (value == null ? value : new Date(value));
 
 const cloneRecord = (record) => {
@@ -200,7 +203,7 @@ export function createInMemoryRepositories(seed = {}) {
           stored.status = "failed";
           stored.error = result.error ?? null;
           stored.result = result;
-          stored.attempts = result.attempts ?? stored.attempts;
+          stored.attempts = job.attempts ?? result.attempts ?? stored.attempts;
           stored.lockedBy = null;
           stored.lockedUntil = null;
           stored.failedAt = nowDate;

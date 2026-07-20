@@ -52,6 +52,7 @@ export function createRepositoryBackedOrchestrator({
 
   return async function repositoryBackedOrchestrator(request) {
     const conversationId = conversationIdForRequest(request);
+    const requestWorkspaceId = workspaceIdForRequest(request, workspaceId);
     const createdAt = now();
     const { userMessage, assistantMessage } =
       await findExistingTelegramExchange(
@@ -78,6 +79,8 @@ export function createRepositoryBackedOrchestrator({
           intent: request.intent,
           telegramUpdateId: request.telegramUpdateId,
         },
+        userId: request.actor.id,
+        workspaceId: requestWorkspaceId,
         createdAt,
       });
     }
@@ -85,7 +88,7 @@ export function createRepositoryBackedOrchestrator({
     const memories = repositories.memories
       ? await repositories.memories.listForActor({
           actorUserId: request.actor.id,
-          workspaceId: workspaceIdForRequest(request, workspaceId),
+          workspaceId: requestWorkspaceId,
         })
       : [];
 
@@ -108,6 +111,8 @@ export function createRepositoryBackedOrchestrator({
         agentProfile: response.agentProfile,
         modelProfile: response.modelProfile,
       },
+      userId: request.actor.id,
+      workspaceId: requestWorkspaceId,
       createdAt: now(),
     });
 

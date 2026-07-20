@@ -167,7 +167,12 @@ model Job {
   runAt       DateTime
   attempts    Int       @default(0)
   lockedUntil DateTime?
+  lockedBy    String?
   dedupeKey   String?   @unique
+  result      Json?
+  error       String?
+  completedAt DateTime?
+  failedAt    DateTime?
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
 }

@@ -169,4 +169,31 @@ describe("in-memory repositories", () => {
     assert.equal(reclaimed.lockedBy, "worker-2");
     assert.equal(reclaimed.attempts, 2);
   });
+
+  it("does not double-count attempts when failing a claimed job", async () => {
+    const repositories = createInMemoryRepositories({
+      jobs: [
+        {
+          id: "job-1",
+          type: "send-reminder",
+          payload: { reminderId: "reminder-1" },
+          status: "queued",
+          runAt: new Date("2026-07-20T12:00:00.000Z"),
+          attempts: 0,
+        },
+      ],
+    });
+
+    const claimed = await repositories.jobs.claimNextJob(
+      new Date("2026-07-20T12:01:00.000Z"),
+    );
+    const failed = await repositories.jobs.failJob(
+      claimed,
+      { status: "failed", error: "Network error", attempts: 2 },
+      new Date("2026-07-20T12:02:00.000Z"),
+    );
+
+    assert.equal(claimed.attempts, 1);
+    assert.equal(failed.attempts, 1);
+  });
 });

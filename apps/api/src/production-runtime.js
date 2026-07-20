@@ -1,4 +1,5 @@
 import { TimewebAiProvider } from "../../../packages/ai/src/index.js";
+import { createPrismaRepositories } from "../../../packages/db/src/index.js";
 import { TelegramBotSender } from "./telegram-sender.js";
 
 const defaultTimewebBaseUrl = "https://api.timeweb.cloud";
@@ -46,10 +47,11 @@ function resolveTelegramBotToken(env) {
 export function createProductionDependencies({
   env = process.env,
   repositories,
+  prisma,
   fetchImpl = fetch,
 } = {}) {
   return {
-    repositories,
+    repositories: repositories ?? (prisma ? createPrismaRepositories(prisma) : undefined),
     workspaceId: envValue(env.APP_DEFAULT_WORKSPACE_ID) ?? defaultWorkspaceId,
     telegramWebhookSecret: envValue(env.TELEGRAM_WEBHOOK_SECRET),
     aiProvider: new TimewebAiProvider({

@@ -51,6 +51,12 @@ MVP can use PostgreSQL job tables and a polling worker:
 
 Redis/BullMQ can be introduced when throughput or reliability requires it.
 
+## PostgreSQL Integration
+
+The DB package contains a Prisma schema and an initial migration under `packages/db/prisma/migrations`. The runtime repository contract has both in-memory and Prisma-backed adapters; production startup can create Prisma-backed repositories when `DATABASE_URL` is set.
+
+Before deploying against a live Timeweb database, install and generate Prisma client dependencies, then run the initial migration against the target PostgreSQL instance. The migration artifact uses Prisma's default quoted table and column names from `schema.prisma`.
+
 ## MVP Timeweb Services
 
 - App Platform with Docker Compose.
