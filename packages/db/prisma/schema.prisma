@@ -1,0 +1,193 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum UserRole {
+  owner
+  teacher
+  family_child
+  system
+}
+
+enum WorkspaceKind {
+  family
+  child_learning
+  teacher_private
+}
+
+enum Sensitivity {
+  normal
+  private
+  student_personal_data
+  secret
+}
+
+enum MessageRole {
+  user
+  assistant
+  system
+  tool
+}
+
+enum JobStatus {
+  queued
+  running
+  completed
+  failed
+  cancelled
+}
+
+model User {
+  id             String         @id @default(cuid())
+  role           UserRole
+  displayName    String
+  telegramUserId String?        @unique
+  timezone       String         @default("Europe/Moscow")
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+  conversations  Conversation[]
+  memoryItems    MemoryItem[]
+  auditLogs      AuditLog[]
+}
+
+model Workspace {
+  id            String         @id @default(cuid())
+  kind          WorkspaceKind
+  name          String
+  createdAt     DateTime       @default(now())
+  conversations Conversation[]
+  memoryItems   MemoryItem[]
+  materials     Material[]
+}
+
+model Conversation {
+  id          String    @id @default(cuid())
+  workspaceId String
+  userId      String
+  title       String?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  workspace   Workspace @relation(fields: [workspaceId], references: [id])
+  user        User      @relation(fields: [userId], references: [id])
+  messages    Message[]
+}
+
+model Message {
+  id             String       @id @default(cuid())
+  conversationId String
+  role           MessageRole
+  content        String
+  metadata       Json?
+  createdAt      DateTime     @default(now())
+  conversation   Conversation @relation(fields: [conversationId], references: [id])
+}
+
+model MemoryItem {
+  id             String      @id @default(cuid())
+  workspaceId    String
+  ownerUserId    String
+  scope          WorkspaceKind
+  sensitivity    Sensitivity @default(normal)
+  subjectType    String
+  subjectId      String?
+  content        String
+  summary        String?
+  sourceMessageIds String[]   @default([])
+  confidence     Float        @default(1)
+  expiresAt      DateTime?
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+  workspace      Workspace    @relation(fields: [workspaceId], references: [id])
+  owner          User         @relation(fields: [ownerUserId], references: [id])
+}
+
+model Student {
+  id             String          @id @default(cuid())
+  teacherUserId  String
+  displayName    String
+  contact        String?
+  level          String?
+  goal           String?
+  status         String          @default("active")
+  consentId      String?
+  retentionUntil DateTime?
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+  lessons        StudentLesson[]
+}
+
+model StudentLesson {
+  id          String   @id @default(cuid())
+  studentId   String
+  startsAt    DateTime
+  durationMin Int
+  topic       String?
+  notes       String?
+  homework    String?
+  status      String   @default("planned")
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  student     Student  @relation(fields: [studentId], references: [id])
+}
+
+model Material {
+  id          String    @id @default(cuid())
+  workspaceId String
+  ownerUserId String
+  title       String
+  storageKey  String
+  mimeType    String?
+  tags        String[]  @default([])
+  createdAt   DateTime  @default(now())
+  workspace   Workspace @relation(fields: [workspaceId], references: [id])
+}
+
+model Reminder {
+  id          String   @id @default(cuid())
+  userId      String
+  workspaceId String
+  title       String
+  runAt       DateTime
+  timezone    String   @default("Europe/Moscow")
+  status      String   @default("scheduled")
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+model Job {
+  id          String    @id @default(cuid())
+  type        String
+  payload     Json
+  status      JobStatus @default(queued)
+  runAt       DateTime
+  attempts    Int       @default(0)
+  lockedUntil DateTime?
+  dedupeKey   String?   @unique
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+}
+
+model UsageEvent {
+  id          String   @id @default(cuid())
+  userId      String
+  model       String
+  inputTokens Int      @default(0)
+  outputTokens Int     @default(0)
+  costRub     Decimal  @default(0)
+  createdAt   DateTime @default(now())
+}
+
+model AuditLog {
+  id        String   @id @default(cuid())
+  actorId   String?
+  action    String
+  resource  String
+  metadata  Json?
+  createdAt DateTime @default(now())
+  actor     User?    @relation(fields: [actorId], references: [id])
+}
