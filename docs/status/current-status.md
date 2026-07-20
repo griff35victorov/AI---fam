@@ -23,14 +23,16 @@ Date: 2026-07-20
 - Timeweb AI provider contract aligned with orchestrator payload, with legacy direct agent call support.
 - Production dependency factory for Timeweb AI env vars, agent IDs, repositories, and Telegram sender.
 - Budget guard for daily and monthly AI spend limits.
-- Timeweb deployment documentation and Docker Compose skeleton.
+- Timeweb deployment documentation and Docker Compose deployment skeleton.
+- Timeweb PostgreSQL 17 DBaaS cluster provisioned for the MVP.
+- App Platform Docker Compose migration service that runs Prisma migrations inside Timeweb before `web` starts.
+- Docker healthcheck for `/health`.
 - Prisma schema and initial migration artifact for users, conversations, memory, students, lessons, materials, reminders, jobs, usage, and audit logs.
-- Local automated test suite: 79 passing tests.
+- Local automated test suite: 92 passing tests.
 
 ## Not Implemented Yet
 
-- Live PostgreSQL smoke test against a running database.
-- Dependency installation/generation for `@prisma/client`.
+- Live PostgreSQL smoke test from inside Timeweb runtime.
 - Real Telegram webhook registration script.
 - Web cabinet for owner and teacher.
 - File upload to S3.
@@ -40,8 +42,8 @@ Date: 2026-07-20
 
 ## Next Engineering Slice
 
-1. Install/generate Prisma client and run migration against local PostgreSQL.
-2. Add Telegram webhook registration script and production smoke check.
-3. Add teacher workspace API for students, materials, lessons, and lesson notes.
-4. Add web cabinet for owner and teacher workflows.
-5. Add production budget usage accounting from real model calls.
+1. Push the App Platform-ready Compose changes to the Git remote.
+2. Create/connect the Timeweb App Platform Docker Compose app.
+3. Set production environment variables in Timeweb and let the `migrate` service run.
+4. Add Telegram webhook registration script and production smoke check.
+5. Add teacher workspace API for students, materials, lessons, and lesson notes.

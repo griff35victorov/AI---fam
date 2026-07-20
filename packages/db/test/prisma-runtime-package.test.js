@@ -8,7 +8,7 @@ test("root package pins Prisma runtime and CLI packages", async () => {
   );
 
   assert.equal(packageJson.dependencies?.["@prisma/client"], "6.19.2");
-  assert.equal(packageJson.devDependencies?.prisma, "6.19.2");
+  assert.equal(packageJson.dependencies?.prisma, "6.19.2");
 });
 
 test("package lock pins the Prisma install graph for Docker builds", async () => {
@@ -18,7 +18,7 @@ test("package lock pins the Prisma install graph for Docker builds", async () =>
 
   assert.equal(lockfile.lockfileVersion, 3);
   assert.equal(lockfile.packages?.[""]?.dependencies?.["@prisma/client"], "6.19.2");
-  assert.equal(lockfile.packages?.[""]?.devDependencies?.prisma, "6.19.2");
+  assert.equal(lockfile.packages?.[""]?.dependencies?.prisma, "6.19.2");
   assert.equal(lockfile.packages?.["node_modules/@prisma/client"]?.version, "6.19.2");
   assert.equal(lockfile.packages?.["node_modules/prisma"]?.version, "6.19.2");
 });
@@ -52,6 +52,6 @@ test("Docker build installs locked dependencies and generates Prisma Client befo
 
   assert.match(
     dockerfile,
-    /COPY package-lock\.json \.\/[\s\S]*RUN npm ci[\s\S]*RUN npm run db:generate[\s\S]*RUN npm prune --omit=dev[\s\S]*ENV NODE_ENV=production/,
+    /COPY package-lock\.json \.\/[\s\S]*RUN npm ci --omit=dev --ignore-scripts[\s\S]*RUN npm run db:generate[\s\S]*ENV NODE_ENV=production[\s\S]*HEALTHCHECK/,
   );
 });

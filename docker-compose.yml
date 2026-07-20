@@ -2,6 +2,9 @@ services:
   web:
     build:
       context: .
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
     command: ["node", "apps/api/src/server.js"]
     ports:
       - "${PORT:-8080}:8080"
@@ -20,7 +23,17 @@ services:
       S3_ENDPOINT: ${S3_ENDPOINT}
       S3_BUCKET: ${S3_BUCKET}
 
+  migrate:
+    build:
+      context: .
+    command: ["npm", "run", "db:migrate"]
+    restart: "no"
+    environment:
+      NODE_ENV: ${NODE_ENV:-production}
+      DATABASE_URL: ${DATABASE_URL}
+
   worker:
+    profiles: ["background"]
     build:
       context: .
     command: ["node", "apps/worker/src/main.js"]
@@ -38,6 +51,7 @@ services:
       S3_BUCKET: ${S3_BUCKET}
 
   scheduler:
+    profiles: ["background"]
     build:
       context: .
     command: ["node", "apps/worker/src/scheduler.js"]

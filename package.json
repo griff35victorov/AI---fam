@@ -17,9 +17,7 @@
     "packages/*"
   ],
   "dependencies": {
-    "@prisma/client": "6.19.2"
-  },
-  "devDependencies": {
+    "@prisma/client": "6.19.2",
     "prisma": "6.19.2"
   },
   "engines": {
