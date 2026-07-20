@@ -2,6 +2,7 @@ import { createServer } from "node:http";
 
 import { createHealthResponse } from "./health.js";
 import { handleOrchestratorRequest } from "./orchestrator.js";
+import { createRepositoryBackedOrchestrator } from "./runtime.js";
 import { handleTelegramUpdate } from "./telegram.js";
 
 function sendJson(response, statusCode, body) {
@@ -18,11 +19,18 @@ async function readJson(request) {
 
 export function createAppServer(options = {}) {
   const dependencies = options.dependencies ?? {};
+  const repositories = options.repositories ?? dependencies.repositories;
   const users = options.users ?? dependencies.users ?? [];
   const orchestrator =
     options.orchestrator ??
     dependencies.orchestrator ??
-    ((request) => handleOrchestratorRequest(request, dependencies));
+    (repositories
+      ? createRepositoryBackedOrchestrator({
+          repositories,
+          aiProvider: dependencies.aiProvider,
+          workspaceId: dependencies.workspaceId,
+        })
+      : ((request) => handleOrchestratorRequest(request, dependencies)));
 
   return createServer(async (request, response) => {
     try {
@@ -39,7 +47,11 @@ export function createAppServer(options = {}) {
 
       if (request.method === "POST" && request.url === "/telegram/webhook") {
         const body = await readJson(request);
-        const result = await handleTelegramUpdate(body, { users, orchestrator });
+        const result = await handleTelegramUpdate(body, {
+          users,
+          repositories,
+          orchestrator,
+        });
         sendJson(response, 200, { ok: true, ...result });
         return;
       }

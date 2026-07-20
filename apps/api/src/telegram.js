@@ -1,12 +1,32 @@
+function actorFromUser(user) {
+  const actor = {
+    id: user.id,
+    role: user.role,
+  };
+
+  if (user.workspaceId != null) {
+    actor.workspaceId = user.workspaceId;
+  }
+
+  return actor;
+}
+
 export function resolveTelegramActor(message, users) {
   const telegramUserId = String(message?.from?.id ?? "");
   const user = users.find((candidate) => candidate.telegramUserId === telegramUserId);
   if (!user) return null;
 
-  return {
-    id: user.id,
-    role: user.role,
-  };
+  return actorFromUser(user);
+}
+
+export async function resolveTelegramActorFromRepositories(message, repositories) {
+  const telegramUserId = String(message?.from?.id ?? "");
+  if (!telegramUserId) return null;
+
+  const user = await repositories.users.findByTelegramUserId(telegramUserId);
+  if (!user) return null;
+
+  return actorFromUser(user);
 }
 
 export function inferIntentFromText(actor, text) {
@@ -50,11 +70,39 @@ export function buildTelegramRequest(update, { users }) {
     actor,
     intent: inferIntentFromText(actor, text),
     text,
+    telegramUpdateId: update.update_id,
   };
 }
 
-export async function handleTelegramUpdate(update, { users, orchestrator }) {
-  const request = buildTelegramRequest(update, { users });
+export async function buildTelegramRequestFromRepositories(update, { repositories }) {
+  const message = update.message;
+  const actor = await resolveTelegramActorFromRepositories(message, repositories);
+  if (!actor) {
+    return {
+      chatId: message?.chat?.id,
+      rejected: true,
+      reason: "unknown_telegram_user",
+    };
+  }
+
+  const text = message.text ?? "";
+
+  return {
+    chatId: message.chat.id,
+    actor,
+    intent: inferIntentFromText(actor, text),
+    text,
+    telegramUpdateId: update.update_id,
+  };
+}
+
+export async function handleTelegramUpdate(
+  update,
+  { users = [], repositories, orchestrator },
+) {
+  const request = repositories?.users
+    ? await buildTelegramRequestFromRepositories(update, { repositories })
+    : buildTelegramRequest(update, { users });
 
   if (request.rejected) {
     return {
