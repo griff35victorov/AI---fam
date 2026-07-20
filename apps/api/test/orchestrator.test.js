@@ -25,3 +25,44 @@ test("orchestrator marks external messages as confirmation required", async () =
   assert.equal(response.agentProfile, "communication_assistant");
   assert.equal(response.requiresConfirmation, true);
 });
+
+test("orchestrator calls AI provider with allowed memory context and model profile", async () => {
+  const calls = [];
+  const aiProvider = {
+    async complete(payload) {
+      calls.push(payload);
+      return { text: "Draft lesson plan" };
+    },
+  };
+
+  const response = await handleOrchestratorRequest(
+    {
+      actor: { id: "teacher-1", role: "teacher" },
+      intent: "lesson_preparation",
+      text: "Подготовь урок B1 по Past Perfect",
+      memories: [
+        {
+          scope: "teacher_private",
+          sensitivity: "normal",
+          subjectType: "teaching_style",
+          content: "Use short warmups and controlled practice.",
+        },
+        {
+          scope: "family",
+          sensitivity: "secret",
+          subjectType: "credential",
+          content: "Do not leak this token.",
+        },
+      ],
+    },
+    { aiProvider },
+  );
+
+  assert.equal(response.agentProfile, "teacher_methodologist");
+  assert.equal(response.modelProfile.profile, "standard");
+  assert.equal(response.answer.text, "Draft lesson plan");
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].agentProfile, "teacher_methodologist");
+  assert.match(calls[0].messages[0].content, /Use short warmups/);
+  assert.doesNotMatch(calls[0].messages[0].content, /token/);
+});

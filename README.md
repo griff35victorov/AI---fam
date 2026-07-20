@@ -41,5 +41,5 @@ The current GitHub connector can work with existing repositories but does not ex
 - `docs/architecture/overview.md` - architecture overview.
 - `docs/deployment/timeweb.md` - target Timeweb deployment model.
 - `docs/security/privacy.md` - privacy and access boundaries.
+- `docs/status/current-status.md` - current local implementation status.
 - `docs/superpowers/plans/2026-07-20-family-ai-orchestrator-mvp.md` - implementation plan.
-
