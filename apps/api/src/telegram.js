@@ -1,3 +1,7 @@
+const accessNotConfiguredText =
+  "Доступ не настроен. Обратитесь к владельцу семейного оркестратора.";
+const defaultProcessedText = "Принял. Задача обработана.";
+
 function actorFromUser(user) {
   const actor = {
     id: user.id,
@@ -47,7 +51,7 @@ export function inferIntentFromText(actor, text) {
   }
 
   if (normalized.includes("товар") || normalized.includes("купить")) return "product_search";
-  if (normalized.includes("посчитай") || normalized.includes("расчет")) return "calculation";
+  if (normalized.includes("посчитай") || normalized.includes("расчет") || normalized.includes("расчёт")) return "calculation";
 
   return "household";
 }
@@ -96,25 +100,38 @@ export async function buildTelegramRequestFromRepositories(update, { repositorie
   };
 }
 
+async function sendTelegramReply(telegramSender, { chatId, text }) {
+  if (!telegramSender) {
+    return;
+  }
+
+  await telegramSender.sendMessage({ chatId, text });
+}
+
 export async function handleTelegramUpdate(
   update,
-  { users = [], repositories, orchestrator },
+  { users = [], repositories, orchestrator, telegramSender },
 ) {
   const request = repositories?.users
     ? await buildTelegramRequestFromRepositories(update, { repositories })
     : buildTelegramRequest(update, { users });
 
   if (request.rejected) {
+    const text = accessNotConfiguredText;
+    await sendTelegramReply(telegramSender, { chatId: request.chatId, text });
+
     return {
       chatId: request.chatId,
-      text: "Доступ не настроен. Обратитесь к владельцу семейного оркестратора.",
+      text,
     };
   }
 
   const result = await orchestrator(request);
+  const text = result.answer?.text ?? defaultProcessedText;
+  await sendTelegramReply(telegramSender, { chatId: request.chatId, text });
 
   return {
     chatId: request.chatId,
-    text: result.answer?.text ?? "Принял. Задача обработана.",
+    text,
   };
 }

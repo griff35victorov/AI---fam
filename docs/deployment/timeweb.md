@@ -73,6 +73,12 @@ The app should not hardcode one model. It should use model profiles:
 
 The orchestrator chooses a profile, and configuration maps profile to actual Timeweb model.
 
+Production uses `TIMEWEB_AI_API_KEY`, `TIMEWEB_AI_BASE_URL`, and a profile-to-agent mapping. The mapping can be supplied as `TIMEWEB_AGENT_IDS` JSON or as individual variables such as `TIMEWEB_AGENT_OWNER_ASSISTANT`, `TIMEWEB_AGENT_TEACHER_METHODOLOGIST`, and `TIMEWEB_AGENT_DAUGHTER_TUTOR`.
+
+## Telegram Integration
+
+The public webhook endpoint is `POST /telegram/webhook`. In production the API runtime creates a Telegram sender from `TELEGRAM_BOT_TOKEN` and sends the final assistant text back through Bot API `sendMessage` after the local orchestrator finishes.
+
 ## Deployment Checklist
 
 1. Create Timeweb server/app.

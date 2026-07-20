@@ -2,6 +2,7 @@ import { createServer } from "node:http";
 
 import { createHealthResponse } from "./health.js";
 import { handleOrchestratorRequest } from "./orchestrator.js";
+import { createProductionDependencies } from "./production-runtime.js";
 import { createRepositoryBackedOrchestrator } from "./runtime.js";
 import { handleTelegramUpdate } from "./telegram.js";
 
@@ -17,9 +18,20 @@ async function readJson(request) {
   return JSON.parse(Buffer.concat(chunks).toString("utf8"));
 }
 
+function telegramWebhookSecretIsValid(request, secret) {
+  if (!secret) {
+    return true;
+  }
+
+  return request.headers["x-telegram-bot-api-secret-token"] === secret;
+}
+
 export function createAppServer(options = {}) {
   const dependencies = options.dependencies ?? {};
   const repositories = options.repositories ?? dependencies.repositories;
+  const telegramSender = options.telegramSender ?? dependencies.telegramSender;
+  const telegramWebhookSecret =
+    options.telegramWebhookSecret ?? dependencies.telegramWebhookSecret;
   const users = options.users ?? dependencies.users ?? [];
   const orchestrator =
     options.orchestrator ??
@@ -41,16 +53,22 @@ export function createAppServer(options = {}) {
 
       if (request.method === "POST" && request.url === "/orchestrator/handle") {
         const body = await readJson(request);
-        sendJson(response, 200, await handleOrchestratorRequest(body));
+        sendJson(response, 200, await orchestrator(body));
         return;
       }
 
       if (request.method === "POST" && request.url === "/telegram/webhook") {
+        if (!telegramWebhookSecretIsValid(request, telegramWebhookSecret)) {
+          sendJson(response, 401, { error: "telegram_webhook_secret_invalid" });
+          return;
+        }
+
         const body = await readJson(request);
         const result = await handleTelegramUpdate(body, {
           users,
           repositories,
           orchestrator,
+          telegramSender,
         });
         sendJson(response, 200, { ok: true, ...result });
         return;
@@ -63,9 +81,23 @@ export function createAppServer(options = {}) {
   });
 }
 
+export function createAppServerFromEnv({
+  env = process.env,
+  repositories,
+  fetchImpl = fetch,
+} = {}) {
+  return createAppServer({
+    dependencies: createProductionDependencies({
+      env,
+      repositories,
+      fetchImpl,
+    }),
+  });
+}
+
 if (import.meta.url === `file://${process.argv[1]}`) {
   const port = Number(process.env.PORT ?? 3000);
-  createAppServer().listen(port, () => {
+  createAppServerFromEnv().listen(port, () => {
     console.log(`family-ai api listening on ${port}`);
   });
 }
