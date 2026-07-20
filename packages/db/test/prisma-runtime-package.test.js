@@ -55,3 +55,17 @@ test("Docker build installs locked dependencies and generates Prisma Client befo
     /COPY package-lock\.json \.\/[\s\S]*RUN npm ci --omit=dev --ignore-scripts[\s\S]*RUN npm run db:generate[\s\S]*ENV NODE_ENV=production[\s\S]*HEALTHCHECK/,
   );
 });
+
+test("Timeweb Compose runs Prisma migrations in the public web service", async () => {
+  const compose = await readFile(
+    new URL("../../../docker-compose.yml", import.meta.url),
+    "utf8",
+  );
+
+  assert.match(
+    compose,
+    /web:[\s\S]*command: \["sh", "-c", "npm run db:migrate && exec node apps\/api\/src\/server\.js"\]/,
+  );
+  assert.doesNotMatch(compose, /service_completed_successfully/);
+  assert.doesNotMatch(compose, /\n  migrate:/);
+});

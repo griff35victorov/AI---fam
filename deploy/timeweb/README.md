@@ -25,16 +25,15 @@ Deploy the family AI orchestrator as a Timeweb App Platform Docker Compose appli
 5. Create Timeweb AI Agent/API key.
 6. Create App Platform application from the GitHub repository.
 7. Add environment variables from `env.production.example`.
-8. Let the `migrate` Docker Compose service finish before `web` starts.
+8. Let the `web` service run migrations before the API starts.
 9. Open `/health`.
 10. Configure Telegram webhook.
 11. Send `/start` from an allowed Telegram account.
 
 ## Docker Compose Notes
 
-The default deployment starts `web` and the one-off `migrate` service. The
-`web` service waits for `migrate` to complete successfully, so Prisma migrations
-run inside Timeweb before public traffic reaches the API.
+The default deployment starts only `web` for the public API. Its startup command
+runs Prisma migrations inside Timeweb before public traffic reaches the API.
 
 `worker` and `scheduler` are assigned to the `background` Compose profile because
 they are MVP placeholders. Enable `COMPOSE_PROFILES=background` only after their

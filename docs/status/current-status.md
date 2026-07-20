@@ -25,10 +25,10 @@ Date: 2026-07-20
 - Budget guard for daily and monthly AI spend limits.
 - Timeweb deployment documentation and Docker Compose deployment skeleton.
 - Timeweb PostgreSQL 17 DBaaS cluster provisioned for the MVP.
-- App Platform Docker Compose migration service that runs Prisma migrations inside Timeweb before `web` starts.
+- App Platform Docker Compose startup command that runs Prisma migrations inside Timeweb before the API starts.
 - Docker healthcheck for `/health`.
 - Prisma schema and initial migration artifact for users, conversations, memory, students, lessons, materials, reminders, jobs, usage, and audit logs.
-- Local automated test suite: 92 passing tests.
+- Local automated test suite: 93 passing tests.
 
 ## Not Implemented Yet
 
@@ -44,6 +44,6 @@ Date: 2026-07-20
 
 1. Push the App Platform-ready Compose changes to the Git remote.
 2. Create/connect the Timeweb App Platform Docker Compose app.
-3. Set production environment variables in Timeweb and let the `migrate` service run.
+3. Set production environment variables in Timeweb and let the `web` service run migrations.
 4. Add Telegram webhook registration script and production smoke check.
 5. Add teacher workspace API for students, materials, lessons, and lesson notes.

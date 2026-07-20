@@ -58,9 +58,10 @@ The DB package contains a Prisma schema and an initial migration under `packages
 Before deploying against a live Timeweb database, install and generate Prisma client dependencies, then run the initial migration against the target PostgreSQL instance. The migration artifact uses Prisma's default quoted table and column names from `schema.prisma`.
 
 For App Platform Docker Compose deployments, migrations are handled by the
-one-off `migrate` service in `docker-compose.yml`. The public `web` service uses
-`depends_on` with `service_completed_successfully` so it starts only after
-`prisma migrate deploy` succeeds inside Timeweb.
+public `web` service before it starts the API process. The startup command runs
+`prisma migrate deploy`, then starts `apps/api/src/server.js` only if migrations
+succeed. This keeps the first Compose service as the public HTTP service and
+does not rely on App Platform treating a completed one-off container as healthy.
 
 ### Prisma Commands
 
@@ -71,7 +72,7 @@ The root package exposes the live database workflow:
 - `db:migrate:dev` - runs `prisma migrate dev` for local development databases only.
 - `db:smoke` - runs `packages/db/src/smoke.js` against the configured `DATABASE_URL`.
 
-Prisma CLI and Prisma Client are pinned in the root `package.json`, and `package-lock.json` locks the install graph for Docker builds. The Docker image uses `npm ci`, then generates Prisma Client, then prunes development dependencies.
+Prisma CLI and Prisma Client are pinned in the root `package.json`, and `package-lock.json` locks the install graph for Docker builds.
 Prisma CLI and Prisma Client are runtime dependencies because the Timeweb
 deployment runs `prisma migrate deploy` inside the built image. The Docker image
 uses `npm ci --omit=dev --ignore-scripts`, then generates Prisma Client.
@@ -92,7 +93,7 @@ uses `npm ci --omit=dev --ignore-scripts`, then generates Prisma Client.
 1. Create or select the Timeweb PostgreSQL database.
 2. Configure `DATABASE_URL` in the deployment environment or in a protected one-off migration shell.
 3. Run `db:generate` during Docker build.
-4. Let the `migrate` Compose service run `db:migrate` before the API starts.
+4. Let the `web` service run `db:migrate` before the API starts.
 5. Set `FAMILY_AI_DB_SMOKE_ALLOW_WRITE=1` only for the one-off smoke command.
 6. Run `db:smoke` from the same network/runtime context that will run the app.
 
