@@ -170,6 +170,47 @@ describe("in-memory repositories", () => {
     assert.equal(reclaimed.attempts, 2);
   });
 
+  it("can claim only the job matching a dedupe key", async () => {
+    const repositories = createInMemoryRepositories({
+      jobs: [
+        {
+          id: "existing-job",
+          type: "send-reminder",
+          payload: {},
+          status: "queued",
+          runAt: new Date("1969-01-01T00:00:00.000Z"),
+          attempts: 0,
+          dedupeKey: "existing-job",
+        },
+        {
+          id: "target-job",
+          type: "db-smoke",
+          payload: {},
+          status: "queued",
+          runAt: new Date("1970-01-01T00:00:00.000Z"),
+          attempts: 0,
+          dedupeKey: "target-job",
+        },
+      ],
+    });
+
+    const claimed = await repositories.jobs.claim({
+      workerId: "worker-1",
+      now: new Date("1970-01-01T00:00:00.000Z"),
+      dedupeKey: "target-job",
+    });
+
+    assert.equal(claimed.id, "target-job");
+    assert.equal(
+      await repositories.jobs.claim({
+        workerId: "worker-2",
+        now: new Date("1970-01-01T00:00:00.000Z"),
+        dedupeKey: "missing-job",
+      }),
+      null,
+    );
+  });
+
   it("does not double-count attempts when failing a claimed job", async () => {
     const repositories = createInMemoryRepositories({
       jobs: [

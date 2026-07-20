@@ -58,21 +58,31 @@ function normalizeJob(job) {
   };
 }
 
-function claimWhere(now) {
-  return {
+function claimWhere(now, { dedupeKey = null } = {}) {
+  const where = {
     status: { in: ["queued", "running"] },
     runAt: { lte: now },
     OR: [{ lockedUntil: null }, { lockedUntil: { lte: now } }],
   };
+
+  if (dedupeKey != null) {
+    where.dedupeKey = dedupeKey;
+  }
+
+  return where;
 }
 
-async function claimJob(prisma, { workerId = null, now = new Date(), lockMs = defaultLockMs } = {}) {
+async function claimJob(
+  prisma,
+  { workerId = null, now = new Date(), lockMs = defaultLockMs, dedupeKey = null } = {},
+) {
   const nowDate = new Date(now);
   const lockUntil = new Date(nowDate.getTime() + lockMs);
+  const where = claimWhere(nowDate, { dedupeKey });
 
   return prisma.$transaction(async (tx) => {
     const job = await tx.job.findFirst({
-      where: claimWhere(nowDate),
+      where,
       orderBy: { runAt: "asc" },
     });
 
@@ -83,7 +93,7 @@ async function claimJob(prisma, { workerId = null, now = new Date(), lockMs = de
     const claimed = await tx.job.updateMany({
       where: {
         id: job.id,
-        ...claimWhere(nowDate),
+        ...claimWhere(nowDate, { dedupeKey }),
       },
       data: {
         status: "running",

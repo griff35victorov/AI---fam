@@ -5,6 +5,10 @@
   "type": "module",
   "description": "Autonomous family AI orchestrator for local development and Timeweb deployment.",
   "scripts": {
+    "db:generate": "prisma generate --schema packages/db/prisma/schema.prisma",
+    "db:migrate": "prisma migrate deploy --schema packages/db/prisma/schema.prisma",
+    "db:migrate:dev": "prisma migrate dev --schema packages/db/prisma/schema.prisma",
+    "db:smoke": "node packages/db/src/smoke.js",
     "test": "node --test",
     "test:domain": "node --test packages/domain/test/*.test.js"
   },
@@ -12,6 +16,12 @@
     "apps/*",
     "packages/*"
   ],
+  "dependencies": {
+    "@prisma/client": "6.19.2"
+  },
+  "devDependencies": {
+    "prisma": "6.19.2"
+  },
   "engines": {
     "node": ">=22"
   }

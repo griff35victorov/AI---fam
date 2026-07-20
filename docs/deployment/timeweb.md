@@ -57,6 +57,39 @@ The DB package contains a Prisma schema and an initial migration under `packages
 
 Before deploying against a live Timeweb database, install and generate Prisma client dependencies, then run the initial migration against the target PostgreSQL instance. The migration artifact uses Prisma's default quoted table and column names from `schema.prisma`.
 
+### Prisma Commands
+
+The root package exposes the live database workflow:
+
+- `db:generate` - generates Prisma Client from `packages/db/prisma/schema.prisma`.
+- `db:migrate` - runs `prisma migrate deploy` against the configured `DATABASE_URL`; use this for Timeweb and other live/shared PostgreSQL databases.
+- `db:migrate:dev` - runs `prisma migrate dev` for local development databases only.
+- `db:smoke` - runs `packages/db/src/smoke.js` against the configured `DATABASE_URL`.
+
+Prisma CLI and Prisma Client are pinned in the root `package.json`, and `package-lock.json` locks the install graph for Docker builds. The Docker image uses `npm ci`, then generates Prisma Client, then prunes development dependencies.
+
+`db:smoke` intentionally writes temporary rows to validate the repository-backed write path, then deletes its own smoke records. It refuses to run unless `FAMILY_AI_DB_SMOKE_ALLOW_WRITE=1` is set.
+
+### Local PostgreSQL Smoke Flow
+
+1. Start or provision a local PostgreSQL database.
+2. Set `DATABASE_URL`, for example from `.env.example`.
+3. Run `db:generate`.
+4. Run `db:migrate:dev` for an isolated local database, or `db:migrate` when validating the production migration path against a disposable database.
+5. Set `FAMILY_AI_DB_SMOKE_ALLOW_WRITE=1`.
+6. Run `db:smoke`.
+
+### Timeweb PostgreSQL Smoke Flow
+
+1. Create or select the Timeweb PostgreSQL database.
+2. Configure `DATABASE_URL` in the deployment environment or in a protected one-off migration shell.
+3. Run `db:generate` during build or before the migration command.
+4. Run `db:migrate` once against the Timeweb database before enabling webhook traffic.
+5. Set `FAMILY_AI_DB_SMOKE_ALLOW_WRITE=1` only for the one-off smoke command.
+6. Run `db:smoke` from the same network/runtime context that will run the app.
+
+Do not run `db:migrate:dev` against Timeweb or any shared database because it is an interactive development command and may create or modify migration files.
+
 ## MVP Timeweb Services
 
 - App Platform with Docker Compose.

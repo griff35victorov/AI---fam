@@ -2,6 +2,7 @@ let nextId = 1;
 
 export { createPrismaClient } from "./client.js";
 export { createPrismaRepositories } from "./prisma.js";
+export { runPostgresSmoke, runPostgresSmokeCli } from "./smoke.js";
 
 const cloneDate = (value) => (value == null ? value : new Date(value));
 
@@ -59,7 +60,12 @@ export function createInMemoryRepositories(seed = {}) {
   }));
   const jobs = [...(seed.jobs ?? [])].map(normalizeJob);
 
-  const claimJob = ({ workerId = null, now = new Date(), lockMs = 60_000 } = {}) => {
+  const claimJob = ({
+    workerId = null,
+    now = new Date(),
+    lockMs = 60_000,
+    dedupeKey = null,
+  } = {}) => {
     const nowDate = new Date(now);
     const nowTime = nowDate.getTime();
     const claimable = jobs
@@ -71,7 +77,8 @@ export function createInMemoryRepositories(seed = {}) {
         return (
           (job.status === "queued" || job.status === "running") &&
           new Date(job.runAt).getTime() <= nowTime &&
-          lockExpired
+          lockExpired &&
+          (dedupeKey == null || job.dedupeKey === dedupeKey)
         );
       })
       .sort((left, right) => new Date(left.runAt) - new Date(right.runAt))[0];
