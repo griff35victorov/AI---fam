@@ -29,11 +29,7 @@ The first version focuses on a working cloud-ready core:
 
 ## Repository Status
 
-This repository starts locally first. The target GitHub repository is expected to be:
-
-`griff35victorov/family-ai-orchestrator`
-
-The current GitHub connector can work with existing repositories but does not expose repository creation. Create an empty GitHub repository with that name, then the local repository can be pushed there.
+This repository is being built locally first. GitHub synchronization is paused for now, per the current project direction; the working goal is to get the local orchestrator ready for a later Timeweb Cloud deployment.
 
 ## Documentation
 

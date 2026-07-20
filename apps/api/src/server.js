@@ -2,6 +2,7 @@ import { createServer } from "node:http";
 
 import { createHealthResponse } from "./health.js";
 import { handleOrchestratorRequest } from "./orchestrator.js";
+import { handleTelegramUpdate } from "./telegram.js";
 
 function sendJson(response, statusCode, body) {
   response.writeHead(statusCode, { "content-type": "application/json; charset=utf-8" });
@@ -15,7 +16,14 @@ async function readJson(request) {
   return JSON.parse(Buffer.concat(chunks).toString("utf8"));
 }
 
-export function createAppServer() {
+export function createAppServer(options = {}) {
+  const dependencies = options.dependencies ?? {};
+  const users = options.users ?? dependencies.users ?? [];
+  const orchestrator =
+    options.orchestrator ??
+    dependencies.orchestrator ??
+    ((request) => handleOrchestratorRequest(request, dependencies));
+
   return createServer(async (request, response) => {
     try {
       if (request.method === "GET" && request.url === "/health") {
@@ -26,6 +34,13 @@ export function createAppServer() {
       if (request.method === "POST" && request.url === "/orchestrator/handle") {
         const body = await readJson(request);
         sendJson(response, 200, await handleOrchestratorRequest(body));
+        return;
+      }
+
+      if (request.method === "POST" && request.url === "/telegram/webhook") {
+        const body = await readJson(request);
+        const result = await handleTelegramUpdate(body, { users, orchestrator });
+        sendJson(response, 200, { ok: true, ...result });
         return;
       }
 
