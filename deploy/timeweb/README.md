@@ -11,7 +11,7 @@ Deploy the family AI orchestrator as a Timeweb App Platform Docker Compose appli
 - Source repository: `griff35victorov/AI---fam`, branch `main`.
 - Runtime preset: `2731`, Moscow `ru-3`, 1 CPU, 1 GB RAM, 15 GB NVMe.
 - PostgreSQL DBaaS ID: `4190345`.
-- Last verified deploy: commit `46333593387ae1186ccafd9d021a3f251d86f2bf`, `/health` returned 200 OK.
+- Last verified deploy: commit `7b69252777a6b1293336c9e4bb1bcf582c540b23`, `/health` returned 200 OK.
 
 ## Services
 
@@ -49,6 +49,12 @@ Remaining:
 
 Telegram access is controlled by `User.telegramUserId` records in PostgreSQL.
 `TELEGRAM_ALLOWED_USER_IDS` is not used by the runtime.
+
+Read-only inventory on 2026-07-21:
+
+- Timeweb AI agents in the account: `0`.
+- Timeweb S3 presets available: Cold 1 GB pay-as-you-go, Hot 1 GB promo, Hot 10 GB, Hot 100 GB, Hot 250 GB pay-as-you-go.
+- Lowest practical S3 Hot preset for MVP materials: 10 GB, 79 RUB/month.
 
 ## Production Commands
 

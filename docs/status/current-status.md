@@ -51,8 +51,11 @@ Date: 2026-07-21
 - PostgreSQL DBaaS: `4190345`, status `started`, PostgreSQL 17.
 - App Platform: `225845`, status `active`, preset `2731`, Moscow `ru-3`.
 - Technical domain: `https://griff35victorov-ai-fam-8853.twc1.net`.
-- Git source: `griff35victorov/AI---fam`, branch `main`, commit `46333593387ae1186ccafd9d021a3f251d86f2bf`.
+- Git source: `griff35victorov/AI---fam`, branch `main`.
+- Deployed app commit: `7b69252777a6b1293336c9e4bb1bcf582c540b23`.
 - Current monthly infrastructure estimate: PostgreSQL 970 RUB/month + App Platform 510 RUB/month = 1480 RUB/month.
+- Timeweb AI agents inventory: 0 existing agents.
+- Timeweb S3 inventory: 5 available presets; Hot 10 GB is 79 RUB/month.
 
 ## Next Engineering Slice
 
