@@ -1,6 +1,6 @@
 # Current Local Status
 
-Date: 2026-07-20
+Date: 2026-07-21
 
 ## Implemented Locally
 
@@ -29,9 +29,11 @@ Date: 2026-07-20
 - Timeweb App Platform backend app deployed from Git URL repository.
 - Production deploy applied Prisma migration `20260720000000_init`.
 - Public technical domain `/health` check returns 200 OK.
+- Production CLI utilities for Telegram webhook registration, production health checks, and family Telegram user bootstrap.
+- Idempotent PostgreSQL user bootstrap from `FAMILY_AI_BOOTSTRAP_USERS`, guarded by `FAMILY_AI_BOOTSTRAP_USERS_ALLOW_WRITE`.
 - Docker healthcheck for `/health`.
 - Prisma schema and initial migration artifact for users, conversations, memory, students, lessons, materials, reminders, jobs, usage, and audit logs.
-- Local automated test suite: 93 passing tests.
+- Local automated test suite: 104 passing tests.
 
 ## Not Implemented Yet
 
@@ -39,7 +41,6 @@ Date: 2026-07-20
 - Timeweb AI agent IDs/API key configuration in App Platform.
 - Telegram bot token and webhook registration in App Platform.
 - S3 bucket and object upload integration.
-- Real Telegram webhook registration script.
 - Web cabinet for owner and teacher.
 - Authentication UI.
 - Background worker loop connected to PostgreSQL.
@@ -55,8 +56,8 @@ Date: 2026-07-20
 
 ## Next Engineering Slice
 
-1. Configure Timeweb AI agent IDs and API key in App Platform.
-2. Create/configure Telegram bot token and webhook secret.
-3. Add Telegram webhook registration script and production smoke check.
-4. Create S3 bucket and connect material/file upload.
+1. Inventory existing Timeweb AI agents/models and configure agent IDs/API key.
+2. Add real family Telegram user IDs and run guarded user bootstrap.
+3. Create/configure Telegram bot token and webhook secret, then register webhook.
+4. Create private S3 bucket after price confirmation and connect material/file upload.
 5. Add teacher workspace API for students, materials, lessons, and lesson notes.

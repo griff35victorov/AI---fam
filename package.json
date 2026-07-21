@@ -9,6 +9,11 @@
     "db:migrate": "prisma migrate deploy --schema packages/db/prisma/schema.prisma",
     "db:migrate:dev": "prisma migrate dev --schema packages/db/prisma/schema.prisma",
     "db:smoke": "node packages/db/src/smoke.js",
+    "users:bootstrap": "node packages/db/src/bootstrap-users.js",
+    "telegram:webhook:set": "node scripts/telegram-webhook.js set",
+    "telegram:webhook:delete": "node scripts/telegram-webhook.js delete",
+    "telegram:webhook:info": "node scripts/telegram-webhook.js info",
+    "production:health": "node scripts/production-health.js",
     "test": "node --test",
     "test:domain": "node --test packages/domain/test/*.test.js"
   },

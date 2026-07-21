@@ -1,6 +1,9 @@
 import { createServer } from "node:http";
 
-import { createPrismaClient } from "../../../packages/db/src/index.js";
+import {
+  bootstrapUsersFromEnv,
+  createPrismaClient,
+} from "../../../packages/db/src/index.js";
 import { createHealthResponse } from "./health.js";
 import { handleOrchestratorRequest } from "./orchestrator.js";
 import { createProductionDependencies } from "./production-runtime.js";
@@ -114,6 +117,10 @@ export async function createAppServerFromEnvAsync({
     (!repositories && envValue(env.DATABASE_URL)
       ? await createPrismaClient({ importClient: importPrismaClient })
       : undefined);
+
+  if (resolvedPrisma) {
+    await bootstrapUsersFromEnv({ prisma: resolvedPrisma, env });
+  }
 
   return createAppServerFromEnv({
     env,

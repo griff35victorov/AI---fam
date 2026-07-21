@@ -3,6 +3,12 @@ let nextId = 1;
 export { createPrismaClient } from "./client.js";
 export { createPrismaRepositories } from "./prisma.js";
 export { runPostgresSmoke, runPostgresSmokeCli } from "./smoke.js";
+export {
+  bootstrapUsers,
+  bootstrapUsersFromEnv,
+  parseBootstrapUsers,
+  runBootstrapUsersCli,
+} from "./bootstrap-users.js";
 
 const cloneDate = (value) => (value == null ? value : new Date(value));
 

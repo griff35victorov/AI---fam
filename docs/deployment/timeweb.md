@@ -131,15 +131,44 @@ Production uses `TIMEWEB_AI_API_KEY`, `TIMEWEB_AI_BASE_URL`, and a profile-to-ag
 
 The public webhook endpoint is `POST /telegram/webhook`. In production the API runtime creates a Telegram sender from `TELEGRAM_BOT_TOKEN` and sends the final assistant text back through Bot API `sendMessage` after the local orchestrator finishes.
 
+Telegram webhook registration is handled by `npm run telegram:webhook:set`.
+It uses `APP_PUBLIC_URL`, `TELEGRAM_BOT_TOKEN`, and optional
+`TELEGRAM_WEBHOOK_SECRET`. The script validates the bot with `getMe`, then calls
+Telegram `setWebhook` with `allowed_updates: ["message"]`.
+
+Telegram access is granted by rows in `User.telegramUserId`. Bootstrap initial
+family users with `FAMILY_AI_BOOTSTRAP_USERS` and
+`FAMILY_AI_BOOTSTRAP_USERS_ALLOW_WRITE=1`, then switch the write flag back to
+`0` after the deploy creates or updates users. `TELEGRAM_ALLOWED_USER_IDS` is not
+used by the runtime.
+
+## Production Utility Commands
+
+- `users:bootstrap` - writes initial family users from `FAMILY_AI_BOOTSTRAP_USERS`.
+- `telegram:webhook:set` - registers the production webhook.
+- `telegram:webhook:info` - reads Telegram webhook status.
+- `telegram:webhook:delete` - removes the webhook.
+- `production:health` - checks `APP_PUBLIC_URL/health`.
+
+## S3 Integration
+
+Use a private Timeweb S3 bucket for uploaded lesson materials, family files,
+exports, and generated assets. Prefer a restricted S3 user/key for this bucket
+instead of the main storage user. Keep object prefixes separated by data domain,
+for example `teacher/`, `family/`, `child/`, and `exports/`.
+
+Do not make the bucket public. Store S3 credentials only in Timeweb App Platform
+environment variables.
+
 ## Deployment Checklist
 
 1. Create Timeweb server/app.
 2. Create PostgreSQL.
-3. Create S3 bucket.
+3. Create private S3 bucket.
 4. Configure environment variables.
 5. Connect GitHub repository to App Platform.
 6. Run database migrations.
-7. Configure Telegram webhooks.
+7. Bootstrap Telegram users and configure Telegram webhook.
 8. Run smoke tests.
 9. Enable backups.
 10. Set AI cost limits.

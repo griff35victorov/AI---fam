@@ -27,17 +27,36 @@ Deploy the family AI orchestrator as a Timeweb App Platform Docker Compose appli
 
 ## First Manual Setup
 
-1. Create an empty GitHub repository: `griff35victorov/family-ai-orchestrator`.
-2. Push this local project to `main`.
-3. Create Timeweb PostgreSQL.
-4. Create Timeweb S3 bucket.
-5. Create Timeweb AI Agent/API key.
-6. Create App Platform application from the GitHub repository.
-7. Add environment variables from `env.production.example`.
-8. Let the `web` service run migrations before the API starts.
-9. Open `/health`.
-10. Configure Telegram webhook.
-11. Send `/start` from an allowed Telegram account.
+Completed:
+
+- Git repository is connected from `griff35victorov/AI---fam`.
+- PostgreSQL DBaaS is created.
+- App Platform Docker Compose app is deployed.
+- The `web` service applies Prisma migrations before the API starts.
+- `/health` returns 200 OK.
+
+Remaining:
+
+1. Create or select Timeweb AI Agents and API access key.
+2. Add `TIMEWEB_AI_API_KEY` and `TIMEWEB_AGENT_*` variables.
+3. Add real `FAMILY_AI_BOOTSTRAP_USERS` records and set `FAMILY_AI_BOOTSTRAP_USERS_ALLOW_WRITE=1` for exactly one deploy.
+4. Return `FAMILY_AI_BOOTSTRAP_USERS_ALLOW_WRITE=0` after users are created.
+5. Add `TELEGRAM_BOT_TOKEN`, `TELEGRAM_WEBHOOK_SECRET`, and `APP_PUBLIC_URL`.
+6. Run `npm run telegram:webhook:set`.
+7. Create a private S3 bucket and restricted S3 access keys.
+8. Add S3 variables from `env.production.example`.
+9. Send a test message from each allowed Telegram account.
+
+Telegram access is controlled by `User.telegramUserId` records in PostgreSQL.
+`TELEGRAM_ALLOWED_USER_IDS` is not used by the runtime.
+
+## Production Commands
+
+- `npm run users:bootstrap` - upserts family Telegram users into PostgreSQL. Requires `FAMILY_AI_BOOTSTRAP_USERS_ALLOW_WRITE=1`.
+- `npm run telegram:webhook:set` - registers `APP_PUBLIC_URL/telegram/webhook` in Telegram after validating the bot token.
+- `npm run telegram:webhook:info` - reads Telegram webhook status.
+- `npm run telegram:webhook:delete` - removes Telegram webhook.
+- `npm run production:health` - checks `APP_PUBLIC_URL/health`.
 
 ## Docker Compose Notes
 
