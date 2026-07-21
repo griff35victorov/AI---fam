@@ -21,9 +21,10 @@ Date: 2026-07-21
 - Owner, daughter, and teacher Telegram bot tokens stored in Timeweb App Platform env.
 - Owner, daughter, and teacher Telegram users bootstrapped into PostgreSQL.
 - Owner, daughter, and teacher Telegram webhooks registered with Telegram.
-- Telegram replies use webhook-response mode to avoid outbound Telegram API calls from Timeweb.
-- Telegram `/start` is handled through a fast local response before AI routing.
-- Normal Telegram messages in webhook-response mode return a fast acknowledgement before AI routing; the final AI answer is sent asynchronously through the dedicated bot sender.
+- Telegram replies use webhook-response mode for the first visible answer because outbound Telegram `sendMessage` from Timeweb App Platform can time out.
+- Telegram `/start` and fast acknowledgements are returned through Telegram-compatible webhook response after the Telegram user and bot role are authorized.
+- Unknown Telegram users and wrong-role bot routes receive an immediate webhook-response refusal instead of a connected/start message.
+- Normal Telegram messages in webhook-response mode return a fast visible acknowledgement before AI routing; the final AI answer is still attempted asynchronously through the dedicated bot sender.
 - In-memory repositories for users, memories, conversations, reminders, and jobs.
 - Prisma/PostgreSQL repository adapter for users, memories, conversations, reminders, and jobs.
 - Async production startup hook that can create Prisma repositories when `DATABASE_URL` is set.
@@ -45,7 +46,7 @@ Date: 2026-07-21
 - Timeweb Agent API adapter verified against `agent.timeweb.cloud` OpenAI-compatible endpoint.
 - App Platform env updated with S3 credentials, Agent API base URL, AI token, and agent Access ID mappings.
 - Prisma schema and initial migration artifact for users, conversations, memory, students, lessons, materials, reminders, jobs, usage, and audit logs.
-- Local automated test suite: 118 passing tests.
+- Local automated test suite: 124 passing tests.
 
 ## Not Implemented Yet
 
@@ -62,15 +63,16 @@ Date: 2026-07-21
 - App Platform: `225845`, status `active`, preset `2731`, Moscow `ru-3`.
 - Technical domain: `https://griff35victorov-ai-fam-8853.twc1.net`.
 - Git source: `griff35victorov/AI---fam`, branch `main`.
-- Deployed app commit: `afc94e55f37ffc18b64a9c07ca6f7676ad3a3fa2`.
-- Latest production checks: `/health` returned 200 OK, owner webhook endpoint returned Telegram webhook-response in 577-598 ms with the configured secret, and the stuck owner Telegram pending update was read, manually replayed through production, consumed, and returned to zero pending updates.
+- Deployed app commit: `bf044226476d518c5588a77b80355e491b5be310`.
+- Latest production checks: `/health` returned 200 OK; protected owner webhook with a Telegram-like unknown `/start` returned Telegram-compatible `sendMessage` refusal in 756 ms; owner, daughter, and teacher Telegram webhook pending queues are all `0`.
+- Known production limitation: Timeweb App Platform logs show outbound Telegram `sendMessage` can fail with `Telegram sendMessage network failed: fetch failed`, so the first visible bot reply is intentionally delivered via webhook response. A durable job queue or alternate Telegram delivery path is still needed for reliable final AI answers.
 - Current monthly infrastructure estimate: PostgreSQL 970 RUB/month + App Platform 510 RUB/month + S3 Hot 10 GB 79 RUB/month + Timeweb AI agents/token package usage. Practical MVP estimate after agent creation is about 2060-2065 RUB/month before variable overage.
 - Timeweb AI agents: 5 private active agents created on GPT 4.1 mini.
 - Timeweb S3: private bucket `family-ai-prod-dq508761`, Hot 10 GB.
 
 ## Next Engineering Slice
 
-1. Send fresh real test messages from owner, daughter, and teacher Telegram accounts after the `afc94e55` deploy.
+1. Send fresh real test messages from owner, daughter, and teacher Telegram accounts after the `bf04422` deploy.
 2. Connect material/file upload to the private S3 bucket.
 3. Add teacher workspace API for students, materials, lessons, and lesson notes.
 4. Add web cabinet for owner and teacher.

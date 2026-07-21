@@ -15,7 +15,12 @@
 - [x] Protected daughter webhook endpoint returns Telegram webhook-response after the `7f06488` deploy.
 - [x] Owner stuck pending update was replayed through production and cleared after the `afc94e55` deploy.
 - [x] Protected owner webhook endpoint fast-acks normal messages after the `afc94e55` deploy.
+- [x] Telegram webhook-response authorization is preserved for `/start`, unknown users, and wrong-role routes after the `bf04422` deploy.
+- [x] Owner, daughter, and teacher Telegram pending queues are all `0` after the `bf04422` deploy.
 - [ ] Allowed Telegram user can send `/start`.
+- [ ] Fresh real Telegram message from owner account is confirmed visible in Telegram after the `bf04422` deploy.
+- [ ] Fresh real Telegram message from daughter account is confirmed visible in Telegram after the `bf04422` deploy.
+- [ ] Fresh real Telegram message from teacher account is confirmed visible in Telegram after the `bf04422` deploy.
 - [ ] Test owner request is routed.
 - [ ] Test teacher request is routed.
 - [ ] Test child request is routed.

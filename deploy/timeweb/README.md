@@ -13,7 +13,7 @@ Deploy the family AI orchestrator as a Timeweb App Platform Docker Compose appli
 - PostgreSQL DBaaS ID: `4190345`.
 - S3 bucket: `family-ai-prod-dq508761`, private Hot 10 GB.
 - Timeweb AI: five private GPT 4.1 mini agents mapped to family roles through Agent API Access IDs.
-- Last verified deploy: commit `afc94e55f37ffc18b64a9c07ca6f7676ad3a3fa2`, `/health` returned 200 OK.
+- Last verified deploy: commit `bf044226476d518c5588a77b80355e491b5be310`, `/health` returned 200 OK.
 
 ## Services
 
@@ -41,14 +41,15 @@ Completed:
 - Dedicated Telegram webhook endpoints are deployed and protected by webhook secrets.
 - Owner, daughter, and teacher users are bootstrapped into PostgreSQL.
 - Owner, daughter, and teacher Telegram webhooks are registered.
-- Telegram replies use webhook-response mode because direct outbound `sendMessage` from Timeweb is not reliable in this runtime.
-- Telegram `/start` uses a fast local reply before AI routing, which avoids Telegram webhook timeout on first bot start.
-- Normal Telegram messages use a fast webhook acknowledgement before AI routing, then send the final AI answer asynchronously through the dedicated bot sender.
+- Telegram replies use webhook-response mode for the first visible answer because direct outbound `sendMessage` from Timeweb is not reliable in this runtime.
+- Telegram `/start` uses a fast local webhook-response after user and bot-role authorization, which avoids Telegram webhook timeout on first bot start without bypassing access control.
+- Normal Telegram messages use a fast visible webhook acknowledgement before AI routing, then attempt the final AI answer asynchronously through the dedicated bot sender.
+- Owner, daughter, and teacher webhooks are registered with the App Platform IP address and protected by dedicated Telegram webhook secrets.
 - `/health` returns 200 OK.
 
 Remaining:
 
-1. Send a fresh test message from each allowed Telegram account in their dedicated bot.
+1. Send a fresh test message from each allowed Telegram account in their dedicated bot after the `bf04422` deploy.
 2. Connect material/file upload to the private S3 bucket.
 3. Add teacher workspace APIs and web cabinet.
 
