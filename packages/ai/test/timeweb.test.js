@@ -107,6 +107,29 @@ test("TimewebAiProvider.complete keeps legacy agentId and model payload support"
   assert.deepEqual(result, { answer: { text: "Legacy response" } });
 });
 
+test("TimewebAiProvider.complete labels network failures", async () => {
+  const provider = new TimewebAiProvider({
+    baseUrl: "https://timeweb.example",
+    apiKey: "test-key",
+    agentIds: {
+      tutor: "agent-123",
+    },
+    fetchImpl: async () => {
+      throw new TypeError("fetch failed");
+    },
+  });
+
+  await assert.rejects(
+    () =>
+      provider.complete({
+        agentProfile: "tutor",
+        modelProfile: { model: "tw-model" },
+        messages: [{ role: "user", content: "Hello" }],
+      }),
+    /Timeweb AI request network failed: fetch failed/,
+  );
+});
+
 test("TimewebAiProvider.complete explains missing api key", async () => {
   const provider = new TimewebAiProvider({
     baseUrl: "https://timeweb.example",

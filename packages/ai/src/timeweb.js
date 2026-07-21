@@ -15,21 +15,28 @@ export class TimewebAiProvider extends AiProvider {
     const agentId = directAgentId ?? this.agentIds[agentProfile];
     if (!agentId) throw new Error(`Timeweb agentId is required for agentProfile "${agentProfile}"`);
 
-    const response = await this.fetchImpl(
-      `${this.baseUrl}/api/v1/cloud-ai/agents/${agentId}/v1/chat/completions`,
-      {
-        method: "POST",
-        headers: {
-          "authorization": `Bearer ${this.apiKey}`,
-          "content-type": "application/json",
+    let response;
+    try {
+      response = await this.fetchImpl(
+        `${this.baseUrl}/api/v1/cloud-ai/agents/${agentId}/v1/chat/completions`,
+        {
+          method: "POST",
+          headers: {
+            "authorization": `Bearer ${this.apiKey}`,
+            "content-type": "application/json",
+          },
+          body: JSON.stringify({
+            model: model ?? modelProfile?.model ?? "model",
+            messages,
+            stream: false,
+          }),
         },
-        body: JSON.stringify({
-          model: model ?? modelProfile?.model ?? "model",
-          messages,
-          stream: false,
-        }),
-      },
-    );
+      );
+    } catch (error) {
+      throw new Error(`Timeweb AI request network failed: ${error.message}`, {
+        cause: error,
+      });
+    }
 
     if (!response.ok) {
       throw new Error(`Timeweb AI request failed with ${response.status}`);
