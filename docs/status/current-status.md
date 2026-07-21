@@ -32,15 +32,18 @@ Date: 2026-07-21
 - Production CLI utilities for Telegram webhook registration, production health checks, and family Telegram user bootstrap.
 - Idempotent PostgreSQL user bootstrap from `FAMILY_AI_BOOTSTRAP_USERS`, guarded by `FAMILY_AI_BOOTSTRAP_USERS_ALLOW_WRITE`.
 - Docker healthcheck for `/health`.
+- Private Timeweb S3 bucket created for production family materials.
+- Five private Timeweb AI agents created and wired to owner, teacher, daughter, design, and scheduler profiles.
+- Timeweb Agent API adapter verified against `agent.timeweb.cloud` OpenAI-compatible endpoint.
+- App Platform env updated with S3 credentials, Agent API base URL, AI token, and agent Access ID mappings.
 - Prisma schema and initial migration artifact for users, conversations, memory, students, lessons, materials, reminders, jobs, usage, and audit logs.
 - Local automated test suite: 104 passing tests.
 
 ## Not Implemented Yet
 
 - Live PostgreSQL smoke write test from inside Timeweb runtime.
-- Timeweb AI agent IDs/API key configuration in App Platform.
 - Telegram bot token and webhook registration in App Platform.
-- S3 bucket and object upload integration.
+- Application-level S3 object upload workflow and teacher material ingestion.
 - Web cabinet for owner and teacher.
 - Authentication UI.
 - Background worker loop connected to PostgreSQL.
@@ -53,14 +56,14 @@ Date: 2026-07-21
 - Technical domain: `https://griff35victorov-ai-fam-8853.twc1.net`.
 - Git source: `griff35victorov/AI---fam`, branch `main`.
 - Deployed app commit: `7b69252777a6b1293336c9e4bb1bcf582c540b23`.
-- Current monthly infrastructure estimate: PostgreSQL 970 RUB/month + App Platform 510 RUB/month = 1480 RUB/month.
-- Timeweb AI agents inventory: 0 existing agents.
-- Timeweb S3 inventory: 5 available presets; Hot 10 GB is 79 RUB/month.
+- Current monthly infrastructure estimate: PostgreSQL 970 RUB/month + App Platform 510 RUB/month + S3 Hot 10 GB 79 RUB/month + Timeweb AI agents/token package usage. Practical MVP estimate after agent creation is about 2060-2065 RUB/month before variable overage.
+- Timeweb AI agents: 5 private active agents created on GPT 4.1 mini.
+- Timeweb S3: private bucket `family-ai-prod-dq508761`, Hot 10 GB.
 
 ## Next Engineering Slice
 
-1. Inventory existing Timeweb AI agents/models and configure agent IDs/API key.
+1. Push and deploy the Timeweb Agent API endpoint fix.
 2. Add real family Telegram user IDs and run guarded user bootstrap.
 3. Create/configure Telegram bot token and webhook secret, then register webhook.
-4. Create private S3 bucket after price confirmation and connect material/file upload.
+4. Connect material/file upload to the private S3 bucket.
 5. Add teacher workspace API for students, materials, lessons, and lesson notes.

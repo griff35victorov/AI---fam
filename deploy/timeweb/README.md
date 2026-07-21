@@ -11,6 +11,8 @@ Deploy the family AI orchestrator as a Timeweb App Platform Docker Compose appli
 - Source repository: `griff35victorov/AI---fam`, branch `main`.
 - Runtime preset: `2731`, Moscow `ru-3`, 1 CPU, 1 GB RAM, 15 GB NVMe.
 - PostgreSQL DBaaS ID: `4190345`.
+- S3 bucket: `family-ai-prod-dq508761`, private Hot 10 GB.
+- Timeweb AI: five private GPT 4.1 mini agents mapped to family roles through Agent API Access IDs.
 - Last verified deploy: commit `7b69252777a6b1293336c9e4bb1bcf582c540b23`, `/health` returned 200 OK.
 
 ## Services
@@ -33,28 +35,27 @@ Completed:
 - PostgreSQL DBaaS is created.
 - App Platform Docker Compose app is deployed.
 - The `web` service applies Prisma migrations before the API starts.
+- Private S3 bucket is created and wired in App Platform env.
+- Timeweb AI agents are created and wired in App Platform env.
 - `/health` returns 200 OK.
 
 Remaining:
 
-1. Create or select Timeweb AI Agents and API access key.
-2. Add `TIMEWEB_AI_API_KEY` and `TIMEWEB_AGENT_*` variables.
-3. Add real `FAMILY_AI_BOOTSTRAP_USERS` records and set `FAMILY_AI_BOOTSTRAP_USERS_ALLOW_WRITE=1` for exactly one deploy.
-4. Return `FAMILY_AI_BOOTSTRAP_USERS_ALLOW_WRITE=0` after users are created.
-5. Add `TELEGRAM_BOT_TOKEN`, `TELEGRAM_WEBHOOK_SECRET`, and `APP_PUBLIC_URL`.
-6. Run `npm run telegram:webhook:set`.
-7. Create a private S3 bucket and restricted S3 access keys.
-8. Add S3 variables from `env.production.example`.
-9. Send a test message from each allowed Telegram account.
+1. Deploy the latest commit that uses `https://agent.timeweb.cloud`.
+2. Add real `FAMILY_AI_BOOTSTRAP_USERS` records and set `FAMILY_AI_BOOTSTRAP_USERS_ALLOW_WRITE=1` for exactly one deploy.
+3. Return `FAMILY_AI_BOOTSTRAP_USERS_ALLOW_WRITE=0` after users are created.
+4. Add `TELEGRAM_BOT_TOKEN`, `TELEGRAM_WEBHOOK_SECRET`, and `APP_PUBLIC_URL`.
+5. Run `npm run telegram:webhook:set`.
+6. Send a test message from each allowed Telegram account.
 
 Telegram access is controlled by `User.telegramUserId` records in PostgreSQL.
 `TELEGRAM_ALLOWED_USER_IDS` is not used by the runtime.
 
 Read-only inventory on 2026-07-21:
 
-- Timeweb AI agents in the account: `0`.
+- Timeweb AI agents in the account: `5`, private, GPT 4.1 mini.
 - Timeweb S3 presets available: Cold 1 GB pay-as-you-go, Hot 1 GB promo, Hot 10 GB, Hot 100 GB, Hot 250 GB pay-as-you-go.
-- Lowest practical S3 Hot preset for MVP materials: 10 GB, 79 RUB/month.
+- Selected S3 Hot preset for MVP materials: 10 GB, 79 RUB/month.
 
 ## Production Commands
 

@@ -2,7 +2,7 @@ import { TimewebAiProvider } from "../../../packages/ai/src/index.js";
 import { createPrismaRepositories } from "../../../packages/db/src/index.js";
 import { TelegramBotSender } from "./telegram-sender.js";
 
-const defaultTimewebBaseUrl = "https://api.timeweb.cloud";
+const defaultTimewebBaseUrl = "https://agent.timeweb.cloud";
 const defaultWorkspaceId = "workspace-family";
 
 function agentProfileFromEnvName(name) {

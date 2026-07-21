@@ -22,7 +22,9 @@ test("TimewebAiProvider.complete uses agentProfile and modelProfile for Timeweb 
     },
     fetchImpl: async (...args) => {
       calls.push(args);
-      return jsonResponse({ answer: { text: "Hi there" } });
+      return jsonResponse({
+        choices: [{ message: { content: "Hi there", role: "assistant" } }],
+      });
     },
   });
 
@@ -33,17 +35,23 @@ test("TimewebAiProvider.complete uses agentProfile and modelProfile for Timeweb 
   });
 
   assert.equal(calls.length, 1);
-  assert.equal(calls[0][0], "https://timeweb.example/api/v1/cloud-ai/agents/agent-123/call");
+  assert.equal(
+    calls[0][0],
+    "https://timeweb.example/api/v1/cloud-ai/agents/agent-123/v1/chat/completions",
+  );
   assert.equal(calls[0][1].method, "POST");
   assert.equal(calls[0][1].headers.authorization, "Bearer test-key");
   assert.equal(calls[0][1].headers["content-type"], "application/json");
   assert.deepEqual(JSON.parse(calls[0][1].body), {
-    messages,
     model: "tw-model",
+    messages,
+    stream: false,
   });
   assert.deepEqual(result, {
     text: "Hi there",
-    raw: { answer: { text: "Hi there" } },
+    raw: {
+      choices: [{ message: { content: "Hi there", role: "assistant" } }],
+    },
   });
 });
 
@@ -87,10 +95,14 @@ test("TimewebAiProvider.complete keeps legacy agentId and model payload support"
     messages,
   });
 
-  assert.equal(calls[0][0], "https://timeweb.example/api/v1/cloud-ai/agents/legacy-agent/call");
+  assert.equal(
+    calls[0][0],
+    "https://timeweb.example/api/v1/cloud-ai/agents/legacy-agent/v1/chat/completions",
+  );
   assert.deepEqual(JSON.parse(calls[0][1].body), {
-    messages,
     model: "legacy-model",
+    messages,
+    stream: false,
   });
   assert.deepEqual(result, { answer: { text: "Legacy response" } });
 });

@@ -125,7 +125,7 @@ The app should not hardcode one model. It should use model profiles:
 
 The orchestrator chooses a profile, and configuration maps profile to actual Timeweb model.
 
-Production uses `TIMEWEB_AI_API_KEY`, `TIMEWEB_AI_BASE_URL`, and a profile-to-agent mapping. The mapping can be supplied as `TIMEWEB_AGENT_IDS` JSON or as individual variables such as `TIMEWEB_AGENT_OWNER_ASSISTANT`, `TIMEWEB_AGENT_TEACHER_METHODOLOGIST`, and `TIMEWEB_AGENT_DAUGHTER_TUTOR`.
+Production uses `TIMEWEB_AI_API_KEY`, `TIMEWEB_AI_BASE_URL`, and a profile-to-agent mapping. `TIMEWEB_AI_BASE_URL` must point to the Agent API runtime, `https://agent.timeweb.cloud`, not the resource-management API. The mapping can be supplied as `TIMEWEB_AGENT_IDS` JSON or as individual variables such as `TIMEWEB_AGENT_OWNER_ASSISTANT`, `TIMEWEB_AGENT_TEACHER_METHODOLOGIST`, and `TIMEWEB_AGENT_DAUGHTER_TUTOR`.
 
 ## Telegram Integration
 

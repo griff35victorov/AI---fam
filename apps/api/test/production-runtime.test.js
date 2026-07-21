@@ -70,12 +70,13 @@ test("production dependencies wire Timeweb AI and Telegram sender from env", asy
 
   assert.equal(
     calls[0][0],
-    "https://timeweb.example/api/v1/cloud-ai/agents/agent-owner/call",
+    "https://timeweb.example/api/v1/cloud-ai/agents/agent-owner/v1/chat/completions",
   );
   assert.equal(calls[0][1].headers.authorization, "Bearer timeweb-key");
   assert.deepEqual(JSON.parse(calls[0][1].body), {
-    messages: [{ role: "user", content: "hello" }],
     model: "tw-model",
+    messages: [{ role: "user", content: "hello" }],
+    stream: false,
   });
 
   assert.equal(
@@ -111,7 +112,7 @@ test("production dependencies also read individual Timeweb agent id env vars", a
 
   assert.equal(
     calls[0][0],
-    "https://api.timeweb.cloud/api/v1/cloud-ai/agents/agent-design/call",
+    "https://agent.timeweb.cloud/api/v1/cloud-ai/agents/agent-design/v1/chat/completions",
   );
 });
 
@@ -142,7 +143,7 @@ test("production dependencies ignore empty env overrides", async () => {
 
   assert.equal(
     calls[0][0],
-    "https://api.timeweb.cloud/api/v1/cloud-ai/agents/agent-owner/call",
+    "https://agent.timeweb.cloud/api/v1/cloud-ai/agents/agent-owner/v1/chat/completions",
   );
 });
 
@@ -212,7 +213,7 @@ test("server env factory uses production dependencies for Telegram webhook", asy
 
   assert.equal(
     calls[0][0],
-    "https://api.timeweb.cloud/api/v1/cloud-ai/agents/agent-owner/call",
+    "https://agent.timeweb.cloud/api/v1/cloud-ai/agents/agent-owner/v1/chat/completions",
   );
   assert.equal(
     calls[1][0],
@@ -310,6 +311,6 @@ test("async server env factory creates Prisma repositories when DATABASE_URL is 
 
   assert.equal(
     calls[0][0],
-    "https://api.timeweb.cloud/api/v1/cloud-ai/agents/agent-owner/call",
+    "https://agent.timeweb.cloud/api/v1/cloud-ai/agents/agent-owner/v1/chat/completions",
   );
 });
