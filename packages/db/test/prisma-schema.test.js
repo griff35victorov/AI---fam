@@ -46,3 +46,19 @@ test("initial migration seeds default family workspace", async () => {
   assert.match(migration, /INSERT INTO "Workspace"/);
   assert.match(migration, /workspace-family/);
 });
+
+test("material chunk migration adds searchable library storage", async () => {
+  const schema = await readFile(
+    new URL("../prisma/schema.prisma", import.meta.url),
+    "utf8",
+  );
+  const migration = await readFile(
+    new URL("../prisma/migrations/20260721000000_material_chunks/migration.sql", import.meta.url),
+    "utf8",
+  );
+
+  assert.match(schema, /model MaterialChunk/);
+  assert.match(schema, /chunks\s+MaterialChunk\[\]/);
+  assert.match(migration, /CREATE TABLE "MaterialChunk"/);
+  assert.match(migration, /MaterialChunk_workspaceId_ownerUserId_idx/);
+});

@@ -56,6 +56,125 @@ const normalizeMemory = (memory) => ({
   updatedAt: cloneDate(memory.updatedAt) ?? new Date(),
 });
 
+const normalizeMaterial = (material) => {
+  const id = material.id ?? createId("material");
+
+  return {
+    id,
+    workspaceId: material.workspaceId,
+    ownerUserId: material.ownerUserId,
+    scope: material.scope ?? "teacher_private",
+    sensitivity: material.sensitivity ?? "normal",
+    title: material.title,
+    storageKey: material.storageKey ?? `inline:${id}`,
+    mimeType: material.mimeType ?? "text/plain",
+    description: material.description ?? null,
+    tags: material.tags ?? [],
+    sourceMessageIds: material.sourceMessageIds ?? [],
+    createdAt: cloneDate(material.createdAt) ?? new Date(),
+    updatedAt: cloneDate(material.updatedAt) ?? new Date(),
+  };
+};
+
+const tokenPattern = /[\p{L}\p{N}]{3,}/gu;
+
+function tokenizeSearchText(text) {
+  return Array.from(String(text ?? "").toLowerCase().matchAll(tokenPattern))
+    .map((match) => match[0])
+    .filter((token, index, tokens) => tokens.indexOf(token) === index);
+}
+
+function splitMaterialContent(content, maxChunkLength = 1200) {
+  const normalized = String(content ?? "").replace(/\r\n/g, "\n").trim();
+  if (!normalized) return [];
+
+  const chunks = [];
+  let current = "";
+
+  for (const paragraph of normalized.split(/\n{2,}/)) {
+    const next = current ? `${current}\n\n${paragraph}` : paragraph;
+    if (next.length <= maxChunkLength) {
+      current = next;
+      continue;
+    }
+
+    if (current) {
+      chunks.push(current);
+    }
+
+    if (paragraph.length <= maxChunkLength) {
+      current = paragraph;
+      continue;
+    }
+
+    for (let index = 0; index < paragraph.length; index += maxChunkLength) {
+      chunks.push(paragraph.slice(index, index + maxChunkLength).trim());
+    }
+    current = "";
+  }
+
+  if (current) {
+    chunks.push(current);
+  }
+
+  return chunks.filter(Boolean);
+}
+
+function buildMaterialChunks(material, content) {
+  const chunks = splitMaterialContent(content);
+  const titleKeywords = tokenizeSearchText(material.title);
+  const tagKeywords = tokenizeSearchText((material.tags ?? []).join(" "));
+
+  return chunks.map((chunkContent, index) => {
+    const keywords = [
+      ...titleKeywords,
+      ...tagKeywords,
+      ...tokenizeSearchText(chunkContent).slice(0, 24),
+    ].filter((keyword, keywordIndex, keywords) => keywords.indexOf(keyword) === keywordIndex);
+
+    return {
+      id: createId("material_chunk"),
+      materialId: material.id,
+      workspaceId: material.workspaceId,
+      ownerUserId: material.ownerUserId,
+      scope: material.scope,
+      sensitivity: material.sensitivity,
+      chunkIndex: index,
+      content: chunkContent,
+      keywords,
+      tokenEstimate: Math.ceil(chunkContent.length / 4),
+      metadata: null,
+      createdAt: material.createdAt,
+    };
+  });
+}
+
+function scoreMaterialChunk(chunk, material, queryTerms) {
+  if (queryTerms.length === 0) return 1;
+
+  const title = String(material?.title ?? "").toLowerCase();
+  const content = String(chunk.content ?? "").toLowerCase();
+  const tags = (material?.tags ?? []).join(" ").toLowerCase();
+  const keywords = (chunk.keywords ?? []).join(" ").toLowerCase();
+
+  return queryTerms.reduce((score, term) => {
+    if (title.includes(term)) score += 6;
+    if (tags.includes(term)) score += 4;
+    if (keywords.includes(term)) score += 3;
+    if (content.includes(term)) score += 2;
+    return score;
+  }, 0);
+}
+
+const normalizeAuditLog = (auditLog) => ({
+  id: auditLog.id ?? createId("audit"),
+  actorId: auditLog.actorId ?? null,
+  action: auditLog.action,
+  resource: auditLog.resource,
+  metadata: auditLog.metadata ?? null,
+  createdAt: cloneDate(auditLog.createdAt) ?? new Date(),
+});
+
 const normalizeJob = (job) => ({
   id: job.id ?? createId("job"),
   type: job.type,
@@ -78,6 +197,8 @@ export const databasePackage = {
 export function createInMemoryRepositories(seed = {}) {
   const users = [...(seed.users ?? [])].map(cloneRecord);
   const memories = [...(seed.memories ?? [])].map(normalizeMemory);
+  const materials = [...(seed.materials ?? [])].map(normalizeMaterial);
+  const materialChunks = [...(seed.materialChunks ?? [])].map(cloneRecord);
   const messages = [...(seed.messages ?? [])].map((message) => ({
     ...cloneRecord(message),
     createdAt: cloneDate(message.createdAt) ?? new Date(),
@@ -87,6 +208,7 @@ export function createInMemoryRepositories(seed = {}) {
     runAt: cloneDate(reminder.runAt),
   }));
   const jobs = [...(seed.jobs ?? [])].map(normalizeJob);
+  const auditLogs = [...(seed.auditLogs ?? [])].map(normalizeAuditLog);
 
   const claimJob = ({
     workerId = null,
@@ -171,6 +293,68 @@ export function createInMemoryRepositories(seed = {}) {
       },
     },
 
+    materials: {
+      async create(material) {
+        const stored = normalizeMaterial(material);
+        const chunks = buildMaterialChunks(stored, material.content ?? "");
+        materials.push(stored);
+        materialChunks.push(...chunks);
+        return {
+          ...cloneRecord(stored),
+          chunks: chunks.map(cloneRecord),
+        };
+      },
+
+      async listForActor({ actorUserId, workspaceId, limit = null }) {
+        const visibleMaterials = materials
+          .filter((material) => {
+            if (workspaceId != null && material.workspaceId !== workspaceId) {
+              return false;
+            }
+
+            return material.ownerUserId === actorUserId && material.sensitivity !== "secret";
+          })
+          .sort(byCreatedAtAsc);
+
+        return applyRecentLimit(visibleMaterials, limit)
+          .map(cloneRecord);
+      },
+
+      async search({ actorUserId, workspaceId, query, limit = 4 }) {
+        const queryTerms = tokenizeSearchText(query);
+        const materialsById = new Map(
+          materials
+            .filter((material) => {
+              if (workspaceId != null && material.workspaceId !== workspaceId) {
+                return false;
+              }
+
+              return material.ownerUserId === actorUserId && material.sensitivity !== "secret";
+            })
+            .map((material) => [material.id, material]),
+        );
+
+        return materialChunks
+          .filter((chunk) => materialsById.has(chunk.materialId))
+          .map((chunk) => {
+            const material = materialsById.get(chunk.materialId);
+            return {
+              ...cloneRecord(chunk),
+              materialTitle: material.title,
+              title: material.title,
+              tags: [...(material.tags ?? [])],
+              score: scoreMaterialChunk(chunk, material, queryTerms),
+            };
+          })
+          .filter((chunk) => chunk.score > 0)
+          .sort((left, right) => {
+            if (right.score !== left.score) return right.score - left.score;
+            return new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime();
+          })
+          .slice(0, Math.max(0, limit));
+      },
+    },
+
     conversations: {
       async appendMessage(conversationId, message) {
         const stored = normalizeMessage(conversationId, message);
@@ -199,6 +383,24 @@ export function createInMemoryRepositories(seed = {}) {
               new Date(reminder.runAt).getTime() <= nowTime,
           )
           .sort((left, right) => new Date(left.runAt) - new Date(right.runAt))
+          .map(cloneRecord);
+      },
+    },
+
+    auditLogs: {
+      async create(auditLog) {
+        const stored = normalizeAuditLog(auditLog);
+        auditLogs.push(stored);
+        return cloneRecord(stored);
+      },
+
+      async listRecent({ actorId = null, action = null, limit = 20 } = {}) {
+        const visibleAuditLogs = auditLogs
+          .filter((auditLog) => actorId == null || auditLog.actorId === actorId)
+          .filter((auditLog) => action == null || auditLog.action === action)
+          .sort(byCreatedAtAsc);
+
+        return applyRecentLimit(visibleAuditLogs, limit)
           .map(cloneRecord);
       },
     },

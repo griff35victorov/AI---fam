@@ -353,3 +353,219 @@ test("repository backed orchestrator sends memory and recent history to AI", asy
     ],
   );
 });
+
+test("repository backed orchestrator extracts safe facts from ordinary dialogue", async () => {
+  const repositories = createInMemoryRepositories({
+    users: [
+      {
+        id: "owner-1",
+        role: "owner",
+        telegramUserId: "100",
+        workspaceId: "workspace-family",
+      },
+    ],
+  });
+  const orchestrator = createRepositoryBackedOrchestrator({
+    repositories,
+    aiProvider: {
+      async complete() {
+        return { text: "Учту." };
+      },
+    },
+  });
+
+  await orchestrator({
+    chatId: 777,
+    actor: { id: "owner-1", role: "owner" },
+    intent: "household",
+    text: "Я люблю короткие ответы без воды",
+    telegramUpdateId: 792,
+  });
+
+  const memories = await repositories.memories.listForActor({
+    actorUserId: "owner-1",
+    workspaceId: "workspace-family",
+  });
+
+  assert.equal(memories.length, 1);
+  assert.equal(memories[0].subjectType, "auto_observed_fact");
+  assert.equal(memories[0].content, "Я люблю короткие ответы без воды");
+});
+
+test("repository backed orchestrator does not auto-store secrets from ordinary dialogue", async () => {
+  const repositories = createInMemoryRepositories();
+  const orchestrator = createRepositoryBackedOrchestrator({
+    repositories,
+    aiProvider: {
+      async complete() {
+        return { text: "Не сохраняю секреты." };
+      },
+    },
+  });
+
+  await orchestrator({
+    chatId: 777,
+    actor: { id: "owner-1", role: "owner" },
+    intent: "household",
+    text: "Я люблю пароль qwerty1234567890 как тест",
+    telegramUpdateId: 793,
+  });
+
+  const memories = await repositories.memories.listForActor({
+    actorUserId: "owner-1",
+    workspaceId: "workspace-family",
+  });
+
+  assert.equal(memories.length, 0);
+});
+
+test("repository backed orchestrator does not auto-store student details from ordinary dialogue", async () => {
+  const repositories = createInMemoryRepositories();
+  const orchestrator = createRepositoryBackedOrchestrator({
+    repositories,
+    aiProvider: {
+      async complete() {
+        return { text: "Принято." };
+      },
+    },
+  });
+
+  await orchestrator({
+    chatId: 777,
+    actor: { id: "teacher-1", role: "teacher" },
+    intent: "lesson_preparation",
+    text: "На уроках ученик Иван часто путает Past Simple",
+    telegramUpdateId: 799,
+  });
+
+  const memories = await repositories.memories.listForActor({
+    actorUserId: "teacher-1",
+    workspaceId: "workspace-family",
+  });
+
+  assert.equal(memories.length, 0);
+});
+
+test("repository backed orchestrator stores teacher materials and uses them as RAG context", async () => {
+  const repositories = createInMemoryRepositories();
+  const aiCalls = [];
+  const orchestrator = createRepositoryBackedOrchestrator({
+    repositories,
+    aiProvider: {
+      async complete(payload) {
+        aiCalls.push(payload);
+        return { text: "План урока готов." };
+      },
+    },
+  });
+
+  const stored = await orchestrator({
+    chatId: 777,
+    actor: { id: "teacher-1", role: "teacher" },
+    intent: "material_search",
+    text: "Сохрани материал: Past Simple warm-up\nIrregular verbs drill for A2 students.",
+    telegramUpdateId: 794,
+  });
+
+  assert.equal(stored.answer.source, "material_write");
+  assert.match(stored.answer.text, /Материал сохранен/);
+
+  await orchestrator({
+    chatId: 777,
+    actor: { id: "teacher-1", role: "teacher" },
+    intent: "lesson_preparation",
+    text: "Подготовь урок про irregular verbs",
+    telegramUpdateId: 795,
+  });
+
+  assert.equal(aiCalls.length, 1);
+  assert.match(aiCalls[0].messages[0].content, /Relevant library materials/);
+  assert.match(aiCalls[0].messages[0].content, /Irregular verbs drill/);
+});
+
+test("repository backed orchestrator answers diagnostics without calling AI", async () => {
+  const repositories = createInMemoryRepositories();
+  const orchestrator = createRepositoryBackedOrchestrator({
+    repositories,
+    aiProvider: {
+      async complete() {
+        throw new Error("AI should not be called for diagnostics");
+      },
+    },
+  });
+
+  const response = await orchestrator({
+    chatId: 777,
+    actor: { id: "owner-1", role: "owner" },
+    intent: "household",
+    text: "диагностика",
+    telegramUpdateId: 796,
+  });
+
+  assert.equal(response.answer.source, "diagnostics");
+  assert.match(response.answer.text, /Самодиагностика/);
+});
+
+test("repository backed orchestrator uses weather capability before AI", async () => {
+  const repositories = createInMemoryRepositories();
+  const orchestrator = createRepositoryBackedOrchestrator({
+    repositories,
+    capabilityRegistry: {
+      has(capabilityId) {
+        return capabilityId === "weather_forecast";
+      },
+      async run(capabilityId, args) {
+        assert.equal(capabilityId, "weather_forecast");
+        assert.equal(args.location, "Москва");
+        return {
+          text: "Погода: без осадков.",
+          source: "weather_forecast",
+        };
+      },
+    },
+    aiProvider: {
+      async complete() {
+        throw new Error("AI should not be called for weather");
+      },
+    },
+  });
+
+  const response = await orchestrator({
+    chatId: 777,
+    actor: { id: "owner-1", role: "owner" },
+    intent: "household",
+    text: "Какая погода в Москве на выходных?",
+    telegramUpdateId: 797,
+  });
+
+  assert.equal(response.answer.source, "weather_forecast");
+  assert.equal(response.answer.text, "Погода: без осадков.");
+});
+
+test("repository backed orchestrator returns missing capability instead of dead end", async () => {
+  const repositories = createInMemoryRepositories();
+  const orchestrator = createRepositoryBackedOrchestrator({
+    repositories,
+    capabilityRegistry: {
+      has() {
+        return false;
+      },
+    },
+    aiProvider: {
+      async complete() {
+        throw new Error("AI should not be called for current data without tools");
+      },
+    },
+  });
+
+  const response = await orchestrator({
+    chatId: 777,
+    actor: { id: "owner-1", role: "owner" },
+    intent: "household",
+    text: "Какая актуальная цена iPhone?",
+    telegramUpdateId: 798,
+  });
+
+  assert.equal(response.answer.source, "capability_missing");
+  assert.match(response.answer.text, /web_current_data/);
+});

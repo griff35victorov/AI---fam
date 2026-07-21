@@ -83,6 +83,14 @@ function resolveTelegramSender({ botKey, telegramSender, telegramSenders }) {
   return telegramSenders?.[botKey];
 }
 
+function resolveVoiceTranscriber({ botKey, voiceTranscriber, voiceTranscribers }) {
+  if (!botKey) {
+    return voiceTranscriber;
+  }
+
+  return voiceTranscribers?.[botKey] ?? voiceTranscriber;
+}
+
 function resolveTelegramWebhookSecret({ botKey, telegramWebhookSecret, telegramWebhookSecrets }) {
   if (!botKey) {
     return telegramWebhookSecret;
@@ -182,6 +190,9 @@ export function createAppServer(options = {}) {
     options.telegramBackgroundSender ?? dependencies.telegramBackgroundSender;
   const telegramBackgroundSenders =
     options.telegramBackgroundSenders ?? dependencies.telegramBackgroundSenders ?? {};
+  const voiceTranscriber = options.voiceTranscriber ?? dependencies.voiceTranscriber;
+  const voiceTranscribers =
+    options.voiceTranscribers ?? dependencies.voiceTranscribers ?? {};
   const telegramWebhookSecret =
     options.telegramWebhookSecret ?? dependencies.telegramWebhookSecret;
   const telegramWebhookSecrets =
@@ -204,6 +215,7 @@ export function createAppServer(options = {}) {
       ? createRepositoryBackedOrchestrator({
           repositories,
           aiProvider: dependencies.aiProvider,
+          capabilityRegistry: dependencies.capabilityRegistry,
           workspaceId: dependencies.workspaceId,
         })
       : ((request) => handleOrchestratorRequest(request, dependencies)));
@@ -275,6 +287,11 @@ export function createAppServer(options = {}) {
                   telegramSender: telegramBackgroundSender,
                   telegramSenders: telegramBackgroundSenders,
                 }),
+                voiceTranscriber: resolveVoiceTranscriber({
+                  botKey,
+                  voiceTranscriber,
+                  voiceTranscribers,
+                }),
                 botKey,
                 backgroundKey,
                 telegramBackgroundUpdates,
@@ -293,6 +310,11 @@ export function createAppServer(options = {}) {
             routeReplyMode === "webhook_response"
               ? undefined
               : resolveTelegramSender({ botKey, telegramSender, telegramSenders }),
+          voiceTranscriber: resolveVoiceTranscriber({
+            botKey,
+            voiceTranscriber,
+            voiceTranscribers,
+          }),
           botKey,
         });
         sendJson(response, 200, buildTelegramWebhookResponse(result, routeReplyMode));

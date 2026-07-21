@@ -100,6 +100,40 @@ describe("in-memory repositories", () => {
     );
   });
 
+  it("stores material chunks and searches them for the owner", async () => {
+    const repositories = createInMemoryRepositories();
+
+    const material = await repositories.materials.create({
+      workspaceId: "workspace-family",
+      ownerUserId: "teacher-1",
+      scope: "teacher_private",
+      title: "Past Simple warm-up",
+      content: "Past Simple drill with regular and irregular verbs.\n\nUse controlled practice.",
+      tags: ["grammar", "A2"],
+    });
+
+    assert.equal(material.chunks.length, 1);
+
+    const results = await repositories.materials.search({
+      actorUserId: "teacher-1",
+      workspaceId: "workspace-family",
+      query: "irregular verbs",
+    });
+
+    assert.equal(results.length, 1);
+    assert.equal(results[0].materialTitle, "Past Simple warm-up");
+    assert.match(results[0].content, /irregular verbs/);
+
+    assert.deepEqual(
+      await repositories.materials.search({
+        actorUserId: "owner-1",
+        workspaceId: "workspace-family",
+        query: "irregular verbs",
+      }),
+      [],
+    );
+  });
+
   it("appends and lists conversation messages in creation order", async () => {
     const repositories = createInMemoryRepositories();
 

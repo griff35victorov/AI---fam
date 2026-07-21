@@ -1,6 +1,8 @@
 import { TimewebAiProvider } from "../../../packages/ai/src/index.js";
 import { createPrismaRepositories } from "../../../packages/db/src/index.js";
+import { createCapabilityRegistry } from "./capabilities.js";
 import { TelegramBotSender, TelegramRelaySender } from "./telegram-sender.js";
+import { TelegramVoiceTranscriber } from "./voice.js";
 
 const defaultTimewebBaseUrl = "https://agent.timeweb.cloud";
 const defaultWorkspaceId = "workspace-family";
@@ -61,6 +63,11 @@ function resolveTelegramBotTokenForKey(env, botKey) {
   return envName ? envValue(env[envName]) : undefined;
 }
 
+function parseNumber(value, fallback) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
 function resolveTelegramWebhookSecretForKey(env, botKey) {
   const envName = `TELEGRAM_${botKey.toUpperCase()}_WEBHOOK_SECRET`;
   return envValue(env[envName]);
@@ -104,6 +111,31 @@ export function createTelegramBackgroundSenders(env = {}, fetchImpl = fetch) {
   return senders;
 }
 
+export function createVoiceTranscribers(env = {}, fetchImpl = fetch) {
+  const transcriptionUrl = envValue(env.VOICE_TRANSCRIPTION_URL);
+  const transcriptionApiKey = envValue(env.VOICE_TRANSCRIPTION_API_KEY);
+  if (!transcriptionUrl) {
+    return {};
+  }
+
+  const transcribers = {};
+  for (const botKey of Object.keys(telegramBotEnv)) {
+    const botToken = resolveTelegramBotTokenForKey(env, botKey);
+    if (!botToken) {
+      continue;
+    }
+
+    transcribers[botKey] = new TelegramVoiceTranscriber({
+      botToken,
+      transcriptionUrl,
+      transcriptionApiKey,
+      fetchImpl,
+    });
+  }
+
+  return transcribers;
+}
+
 export function parseTelegramWebhookSecrets(env = {}) {
   const secrets = {};
 
@@ -123,9 +155,17 @@ export function createProductionDependencies({
   prisma,
   fetchImpl = fetch,
 } = {}) {
+  const voiceTranscribers = createVoiceTranscribers(env, fetchImpl);
+  const capabilityRegistry = createCapabilityRegistry({
+    fetchImpl,
+    weatherTimeoutMs: parseNumber(env.WEATHER_TIMEOUT_MS, 6000),
+    voiceTranscriber: Object.values(voiceTranscribers)[0],
+  });
+
   return {
     repositories: repositories ?? (prisma ? createPrismaRepositories(prisma) : undefined),
     workspaceId: envValue(env.APP_DEFAULT_WORKSPACE_ID) ?? defaultWorkspaceId,
+    capabilityRegistry,
     telegramWebhookSecret: envValue(env.TELEGRAM_WEBHOOK_SECRET),
     telegramWebhookSecrets: parseTelegramWebhookSecrets(env),
     telegramRelayWebhookSecret: envValue(env.TELEGRAM_RELAY_UPSTREAM_SECRET),
@@ -146,5 +186,6 @@ export function createProductionDependencies({
     }),
     telegramSenders: createTelegramSenders(env, fetchImpl),
     telegramBackgroundSenders: createTelegramBackgroundSenders(env, fetchImpl),
+    voiceTranscribers,
   };
 }

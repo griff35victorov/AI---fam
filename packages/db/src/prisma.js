@@ -58,6 +58,95 @@ function normalizeJob(job) {
   };
 }
 
+const tokenPattern = /[\p{L}\p{N}]{3,}/gu;
+
+function tokenizeSearchText(text) {
+  return Array.from(String(text ?? "").toLowerCase().matchAll(tokenPattern))
+    .map((match) => match[0])
+    .filter((token, index, tokens) => tokens.indexOf(token) === index);
+}
+
+function splitMaterialContent(content, maxChunkLength = 1200) {
+  const normalized = String(content ?? "").replace(/\r\n/g, "\n").trim();
+  if (!normalized) return [];
+
+  const chunks = [];
+  let current = "";
+
+  for (const paragraph of normalized.split(/\n{2,}/)) {
+    const next = current ? `${current}\n\n${paragraph}` : paragraph;
+    if (next.length <= maxChunkLength) {
+      current = next;
+      continue;
+    }
+
+    if (current) {
+      chunks.push(current);
+    }
+
+    if (paragraph.length <= maxChunkLength) {
+      current = paragraph;
+      continue;
+    }
+
+    for (let index = 0; index < paragraph.length; index += maxChunkLength) {
+      chunks.push(paragraph.slice(index, index + maxChunkLength).trim());
+    }
+    current = "";
+  }
+
+  if (current) {
+    chunks.push(current);
+  }
+
+  return chunks.filter(Boolean);
+}
+
+function buildMaterialChunkData(material, content) {
+  const chunks = splitMaterialContent(content);
+  const titleKeywords = tokenizeSearchText(material.title);
+  const tagKeywords = tokenizeSearchText((material.tags ?? []).join(" "));
+
+  return chunks.map((chunkContent, index) => {
+    const keywords = [
+      ...titleKeywords,
+      ...tagKeywords,
+      ...tokenizeSearchText(chunkContent).slice(0, 24),
+    ].filter((keyword, keywordIndex, keywords) => keywords.indexOf(keyword) === keywordIndex);
+
+    return {
+      materialId: material.id,
+      workspaceId: material.workspaceId,
+      ownerUserId: material.ownerUserId,
+      scope: material.scope,
+      sensitivity: material.sensitivity,
+      chunkIndex: index,
+      content: chunkContent,
+      keywords,
+      tokenEstimate: Math.ceil(chunkContent.length / 4),
+      metadata: null,
+      createdAt: material.createdAt ?? new Date(),
+    };
+  });
+}
+
+function scoreMaterialChunk(chunk, material, queryTerms) {
+  if (queryTerms.length === 0) return 1;
+
+  const title = String(material?.title ?? "").toLowerCase();
+  const content = String(chunk.content ?? "").toLowerCase();
+  const tags = (material?.tags ?? []).join(" ").toLowerCase();
+  const keywords = (chunk.keywords ?? []).join(" ").toLowerCase();
+
+  return queryTerms.reduce((score, term) => {
+    if (title.includes(term)) score += 6;
+    if (tags.includes(term)) score += 4;
+    if (keywords.includes(term)) score += 3;
+    if (content.includes(term)) score += 2;
+    return score;
+  }, 0);
+}
+
 function claimWhere(now, { dedupeKey = null } = {}) {
   const where = {
     status: { in: ["queued", "running"] },
@@ -171,6 +260,120 @@ export function createPrismaRepositories(prisma) {
       },
     },
 
+    ...(prisma.material?.create && prisma.materialChunk?.create
+      ? {
+          materials: {
+            async create(material) {
+              const createdAt = material.createdAt ?? new Date();
+              const storedMaterial = await prisma.material.create({
+                data: {
+                  workspaceId: material.workspaceId,
+                  ownerUserId: material.ownerUserId,
+                  scope: material.scope ?? "teacher_private",
+                  sensitivity: material.sensitivity ?? "normal",
+                  title: material.title,
+                  storageKey: material.storageKey ?? "inline",
+                  mimeType: material.mimeType ?? "text/plain",
+                  description: material.description ?? null,
+                  tags: material.tags ?? [],
+                  sourceMessageIds: material.sourceMessageIds ?? [],
+                  createdAt,
+                },
+              });
+
+              const chunkData = buildMaterialChunkData(
+                storedMaterial,
+                material.content ?? "",
+              );
+              const chunks = [];
+              for (const chunk of chunkData) {
+                chunks.push(await prisma.materialChunk.create({ data: chunk }));
+              }
+
+              return {
+                ...storedMaterial,
+                chunks,
+              };
+            },
+
+            async listForActor({ actorUserId, workspaceId, limit = null }) {
+              const where = {
+                ownerUserId: actorUserId,
+                sensitivity: { not: "secret" },
+              };
+
+              if (workspaceId != null) {
+                where.workspaceId = workspaceId;
+              }
+
+              const materials = await prisma.material.findMany({
+                where,
+                orderBy: { createdAt: limit == null ? "asc" : "desc" },
+                take: limit ?? undefined,
+              });
+
+              return limit == null ? materials : materials.reverse();
+            },
+
+            async search({ actorUserId, workspaceId, query, limit = 4 }) {
+              const where = {
+                ownerUserId: actorUserId,
+                sensitivity: { not: "secret" },
+              };
+
+              if (workspaceId != null) {
+                where.workspaceId = workspaceId;
+              }
+
+              const chunks = await prisma.materialChunk.findMany({
+                where,
+                orderBy: { createdAt: "desc" },
+                take: 200,
+              });
+
+              const materialIds = [
+                ...new Set(chunks.map((chunk) => chunk.materialId)),
+              ];
+              if (materialIds.length === 0) {
+                return [];
+              }
+
+              const materials = await prisma.material.findMany({
+                where: {
+                  id: { in: materialIds },
+                  ownerUserId: actorUserId,
+                },
+              });
+              const materialsById = new Map(
+                materials.map((material) => [material.id, material]),
+              );
+              const queryTerms = tokenizeSearchText(query);
+
+              return chunks
+                .map((chunk) => {
+                  const material = materialsById.get(chunk.materialId);
+                  return {
+                    ...chunk,
+                    materialTitle: material?.title ?? "Material",
+                    title: material?.title ?? "Material",
+                    tags: material?.tags ?? [],
+                    score: scoreMaterialChunk(chunk, material, queryTerms),
+                  };
+                })
+                .filter((chunk) => chunk.score > 0)
+                .sort((left, right) => {
+                  if (right.score !== left.score) return right.score - left.score;
+                  return (
+                    new Date(right.createdAt).getTime() -
+                    new Date(left.createdAt).getTime()
+                  );
+                })
+                .slice(0, Math.max(0, limit));
+            },
+          },
+        }
+      : {}),
+
     conversations: {
       async appendMessage(conversationId, message) {
         await ensureConversation(prisma, conversationId, message);
@@ -202,6 +405,38 @@ export function createPrismaRepositories(prisma) {
         });
       },
     },
+
+    ...(prisma.auditLog?.create
+      ? {
+          auditLogs: {
+            async create(auditLog) {
+              return prisma.auditLog.create({
+                data: {
+                  actorId: auditLog.actorId ?? null,
+                  action: auditLog.action,
+                  resource: auditLog.resource,
+                  metadata: auditLog.metadata ?? null,
+                  createdAt: auditLog.createdAt ?? new Date(),
+                },
+              });
+            },
+
+            async listRecent({ actorId = null, action = null, limit = 20 } = {}) {
+              const where = {};
+              if (actorId != null) where.actorId = actorId;
+              if (action != null) where.action = action;
+
+              const auditLogs = await prisma.auditLog.findMany({
+                where,
+                orderBy: { createdAt: "desc" },
+                take: limit,
+              });
+
+              return auditLogs.reverse();
+            },
+          },
+        }
+      : {}),
 
     jobs: {
       async enqueue(job) {

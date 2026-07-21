@@ -1,8 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import { createInMemoryRepositories } from "../../../packages/db/src/index.js";
 import {
   buildTelegramRequest,
+  buildTelegramRequestFromRepositories,
   handleTelegramUpdate,
   inferIntentFromText,
   resolveTelegramActor,
@@ -19,6 +21,82 @@ test("resolveTelegramActor maps known telegram user to local actor", () => {
   const actor = resolveTelegramActor({ from: { id: 200 } }, users);
 
   assert.deepEqual(actor, { id: "teacher-1", role: "teacher" });
+});
+
+test("buildTelegramRequestFromRepositories transcribes voice before routing", async () => {
+  const repositories = createInMemoryRepositories({
+    users: [
+      {
+        id: "owner-1",
+        role: "owner",
+        telegramUserId: "100",
+        workspaceId: "workspace-family",
+      },
+    ],
+  });
+
+  const request = await buildTelegramRequestFromRepositories(
+    {
+      update_id: 555,
+      message: {
+        chat: { id: 777 },
+        from: { id: 100 },
+        voice: { file_id: "voice-file", duration: 4 },
+      },
+    },
+    {
+      repositories,
+      voiceTranscriber: {
+        async transcribeTelegramVoice({ fileId }) {
+          assert.equal(fileId, "voice-file");
+          return { ok: true, text: "Посчитай 2 плюс 2" };
+        },
+      },
+    },
+  );
+
+  assert.equal(request.text, "Посчитай 2 плюс 2");
+  assert.equal(request.intent, "calculation");
+  assert.equal(request.voiceTranscribed, true);
+});
+
+test("handleTelegramUpdate rejects voice before orchestrator when STT is not configured", async () => {
+  const repositories = createInMemoryRepositories({
+    users: [
+      {
+        id: "owner-1",
+        role: "owner",
+        telegramUserId: "100",
+        workspaceId: "workspace-family",
+      },
+    ],
+  });
+  const sent = [];
+
+  const response = await handleTelegramUpdate(
+    {
+      update_id: 556,
+      message: {
+        chat: { id: 777 },
+        from: { id: 100 },
+        voice: { file_id: "voice-file", duration: 4 },
+      },
+    },
+    {
+      repositories,
+      orchestrator: async () => {
+        throw new Error("orchestrator should not receive untranscribed voice");
+      },
+      telegramSender: {
+        async sendMessage(message) {
+          sent.push(message);
+        },
+      },
+    },
+  );
+
+  assert.match(response.text, /Голосовой ввод пока не настроен/);
+  assert.equal(sent.length, 1);
 });
 
 test("resolveTelegramActor returns null for unknown telegram user", () => {

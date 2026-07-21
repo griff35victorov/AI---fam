@@ -2,6 +2,8 @@ export const accessNotConfiguredText =
   "Доступ не настроен. Обратитесь к владельцу семейного оркестратора.";
 export const defaultProcessedText = "Принял. Задача обработана.";
 export const startCommandText = "Бот подключен. Напишите задачу одним сообщением.";
+export const voiceInputNotConfiguredText =
+  "Голосовой ввод пока не настроен. Нужно подключить speech-to-text endpoint в VOICE_TRANSCRIPTION_URL.";
 
 const expectedRoleByBotKey = {
   owner: "owner",
@@ -24,6 +26,61 @@ function actorFromUser(user) {
 
 function telegramUserIdFromMessage(message) {
   return String(message?.from?.id ?? "");
+}
+
+function telegramMessageText(message) {
+  return message?.text ?? message?.caption ?? "";
+}
+
+async function resolveTelegramMessageText(message, { voiceTranscriber, botKey } = {}) {
+  const text = telegramMessageText(message);
+  if (text) {
+    return { text };
+  }
+
+  const voice = message?.voice;
+  if (!voice?.file_id) {
+    return { text: "" };
+  }
+
+  if (!voiceTranscriber?.transcribeTelegramVoice) {
+    return {
+      text: "",
+      voiceRejected: true,
+      voiceError: "voice_transcription_not_configured",
+      voiceReplyText: voiceInputNotConfiguredText,
+    };
+  }
+
+  try {
+    const transcription = await voiceTranscriber.transcribeTelegramVoice({
+      fileId: voice.file_id,
+      duration: voice.duration,
+      botKey,
+    });
+
+    if (!transcription?.ok || !transcription.text) {
+      return {
+        text: "",
+        voiceRejected: true,
+        voiceError: transcription?.error ?? "voice_transcription_empty",
+        voiceReplyText: transcription?.text || "Не удалось распознать голосовое сообщение. Попробуйте сказать короче или отправьте текстом.",
+      };
+    }
+
+    return {
+      text: transcription.text,
+      voiceTranscribed: true,
+      voiceFileId: voice.file_id,
+    };
+  } catch (error) {
+    return {
+      text: "",
+      voiceRejected: true,
+      voiceError: "voice_transcription_failed",
+      voiceReplyText: "Не удалось распознать голосовое сообщение из-за ошибки STT-сервиса. Попробуйте текстом или напишите: диагностика.",
+    };
+  }
 }
 
 export function accessNotConfiguredTextForRequest(request) {
@@ -62,6 +119,14 @@ export function inferIntentFromText(actor, text) {
   if (normalized.includes("бесед")) return "gazebo_design";
 
   if (actor.role === "teacher") {
+    if (
+      normalized.includes("материал") ||
+      normalized.includes("библиотек") ||
+      normalized.includes("worksheet") ||
+      normalized.includes("materials")
+    ) {
+      return "material_search";
+    }
     if (normalized.includes("урок") || normalized.includes("lesson")) return "lesson_preparation";
     if (normalized.includes("ученик")) return "student_schedule";
   }
@@ -100,7 +165,7 @@ export function buildTelegramRequest(update, { users, botKey } = {}) {
     };
   }
 
-  const text = message.text ?? "";
+  const text = telegramMessageText(message);
 
   return {
     chatId: message.chat.id,
@@ -113,7 +178,10 @@ export function buildTelegramRequest(update, { users, botKey } = {}) {
   };
 }
 
-export async function buildTelegramRequestFromRepositories(update, { repositories, botKey } = {}) {
+export async function buildTelegramRequestFromRepositories(
+  update,
+  { repositories, botKey, voiceTranscriber } = {},
+) {
   const message = update.message;
   const telegramUserId = telegramUserIdFromMessage(message);
   const actor = await resolveTelegramActorFromRepositories(message, repositories);
@@ -135,7 +203,11 @@ export async function buildTelegramRequestFromRepositories(update, { repositorie
     };
   }
 
-  const text = message.text ?? "";
+  const voiceState = await resolveTelegramMessageText(message, {
+    voiceTranscriber,
+    botKey,
+  });
+  const text = voiceState.text ?? "";
 
   return {
     chatId: message.chat.id,
@@ -143,6 +215,11 @@ export async function buildTelegramRequestFromRepositories(update, { repositorie
     intent: inferIntentFromText(actor, text),
     isStartCommand: text.trim().toLowerCase() === "/start",
     text,
+    voiceRejected: voiceState.voiceRejected,
+    voiceError: voiceState.voiceError,
+    voiceReplyText: voiceState.voiceReplyText,
+    voiceTranscribed: voiceState.voiceTranscribed,
+    voiceFileId: voiceState.voiceFileId,
     telegramUpdateId: update.update_id,
     telegramBotKey: botKey,
   };
@@ -158,10 +235,14 @@ async function sendTelegramReply(telegramSender, { chatId, text }) {
 
 export async function handleTelegramUpdate(
   update,
-  { users = [], repositories, orchestrator, telegramSender, botKey },
+  { users = [], repositories, orchestrator, telegramSender, botKey, voiceTranscriber },
 ) {
   const request = repositories?.users
-    ? await buildTelegramRequestFromRepositories(update, { repositories, botKey })
+    ? await buildTelegramRequestFromRepositories(update, {
+        repositories,
+        botKey,
+        voiceTranscriber,
+      })
     : buildTelegramRequest(update, { users, botKey });
 
   if (request.rejected) {
@@ -176,6 +257,16 @@ export async function handleTelegramUpdate(
 
   if (request.isStartCommand) {
     const text = startCommandText;
+    await sendTelegramReply(telegramSender, { chatId: request.chatId, text });
+
+    return {
+      chatId: request.chatId,
+      text,
+    };
+  }
+
+  if (request.voiceRejected) {
+    const text = request.voiceReplyText ?? voiceInputNotConfiguredText;
     await sendTelegramReply(telegramSender, { chatId: request.chatId, text });
 
     return {

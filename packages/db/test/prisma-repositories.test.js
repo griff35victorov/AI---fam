@@ -90,18 +90,24 @@ function createFakePrisma(seed = {}) {
     users: [...(seed.users ?? [])].map(clone),
     conversations: [...(seed.conversations ?? [])].map(clone),
     memoryItems: [...(seed.memoryItems ?? [])].map(clone),
+    materials: [...(seed.materials ?? [])].map(clone),
+    materialChunks: [...(seed.materialChunks ?? [])].map(clone),
     messages: [...(seed.messages ?? [])].map(clone),
     reminders: [...(seed.reminders ?? [])].map(clone),
     jobs: [...(seed.jobs ?? [])].map(clone),
+    auditLogs: [...(seed.auditLogs ?? [])].map(clone),
   };
 
   const prisma = {
     user: createDelegate(data.users, "user"),
     conversation: createDelegate(data.conversations, "conversation"),
     memoryItem: createDelegate(data.memoryItems, "memory"),
+    material: createDelegate(data.materials, "material"),
+    materialChunk: createDelegate(data.materialChunks, "material-chunk"),
     message: createDelegate(data.messages, "message"),
     reminder: createDelegate(data.reminders, "reminder"),
     job: createDelegate(data.jobs, "job"),
+    auditLog: createDelegate(data.auditLogs, "audit"),
     async $transaction(callback) {
       return callback(prisma);
     },
@@ -250,6 +256,37 @@ describe("Prisma repositories", () => {
       })).map((memory) => memory.id),
       ["memory-2", "memory-3"],
     );
+  });
+
+  it("stores and searches material chunks", async () => {
+    const repositories = createPrismaRepositories(createFakePrisma());
+
+    const material = await repositories.materials.create({
+      workspaceId: "workspace-family",
+      ownerUserId: "teacher-1",
+      scope: "teacher_private",
+      title: "Past Simple warm-up",
+      content: "Past Simple drill with regular and irregular verbs.",
+      tags: ["grammar"],
+    });
+
+    assert.equal(material.chunks.length, 1);
+
+    const results = await repositories.materials.search({
+      actorUserId: "teacher-1",
+      workspaceId: "workspace-family",
+      query: "irregular verbs",
+    });
+
+    assert.equal(results.length, 1);
+    assert.equal(results[0].materialTitle, "Past Simple warm-up");
+
+    const list = await repositories.materials.listForActor({
+      actorUserId: "teacher-1",
+      workspaceId: "workspace-family",
+    });
+
+    assert.deepEqual(list.map((item) => item.title), ["Past Simple warm-up"]);
   });
 
   it("appends and lists conversation messages", async () => {

@@ -3,7 +3,12 @@ import {
   routeAgentProfile,
 } from "../../../packages/domain/src/index.js";
 import { resolveModelProfile } from "../../../packages/ai/src/index.js";
-import { buildAllowedMemoryContext, formatMemoryContext } from "./context.js";
+import {
+  buildAllowedMaterialContext,
+  buildAllowedMemoryContext,
+  formatMaterialContext,
+  formatMemoryContext,
+} from "./context.js";
 
 const taskTypeByIntent = {
   gazebo_design: "gazebo_design",
@@ -39,8 +44,11 @@ const agentProfileDescriptions = {
     "помощник по календарю и напоминаниям: помогает сформулировать событие, дату, время и подтверждение",
 };
 
-function buildSystemMessage({ agentProfile, memoryContext }) {
+function buildSystemMessage({ agentProfile, memoryContext, materialContext }) {
   const contextBlock = memoryContext ? `\n\nAllowed memory:\n${memoryContext}` : "";
+  const materialBlock = materialContext
+    ? `\n\nRelevant library materials:\n${materialContext}`
+    : "";
   return {
     role: "system",
     content: [
@@ -48,8 +56,10 @@ function buildSystemMessage({ agentProfile, memoryContext }) {
       "Отвечай по-русски, конкретно и полезно. Не изображай всезнание: если данных мало, задай 1-2 точных уточняющих вопроса.",
       "Используй разрешенную память и недавнюю историю диалога. Не раскрывай секреты, токены, приватные данные других членов семьи или учеников.",
       "Если задача требует внешнего действия, покупки, сообщения, удаления данных или траты денег, сначала попроси подтверждение.",
+      "Если вопрос требует актуальных данных или внешнего источника, не отправляй пользователя проверять сайт самостоятельно. Скажи, какой инструмент нужен, если он не подключен.",
       "Для учебы не просто давай ответ: объясняй ход решения и проверяй понимание. Для бытовых задач давай практичный план действий.",
       contextBlock,
+      materialBlock,
     ]
       .filter(Boolean)
       .join("\n"),
@@ -140,8 +150,14 @@ export async function handleOrchestratorRequest(request, dependencies = {}) {
     action: "read",
   });
   const memoryContext = formatMemoryContext(allowedMemories);
+  const allowedMaterials = buildAllowedMaterialContext({
+    actor: request.actor,
+    materials: request.materials ?? [],
+    action: "read",
+  });
+  const materialContext = formatMaterialContext(allowedMaterials);
   const messages = [
-    buildSystemMessage({ agentProfile, memoryContext }),
+    buildSystemMessage({ agentProfile, memoryContext, materialContext }),
     ...recentMessagesForPrompt(request.recentMessages),
     { role: "user", content: request.text ?? "" },
   ];

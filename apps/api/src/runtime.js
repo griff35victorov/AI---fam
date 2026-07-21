@@ -1,10 +1,22 @@
 import { handleOrchestratorRequest } from "./orchestrator.js";
 import { canStoreMemory } from "../../../packages/domain/src/index.js";
 import { buildAllowedMemoryContext } from "./context.js";
+import {
+  buildCapabilitiesAnswer,
+  buildMissingCurrentDataCapabilityAnswer,
+  createCapabilityRegistry,
+  isCurrentDataRequest,
+  isWeatherRequest,
+  parseWeatherRequest,
+} from "./capabilities.js";
 
 const defaultAnswer = "Принял. Задача обработана.";
 const memoryContextLimit = 20;
+const materialContextLimit = 4;
 const recentConversationLookupLimit = 16;
+const diagnosticsLookupLimit = 24;
+const slowResponseThresholdMs = 8000;
+const telegramSafeAnswerLimit = 3900;
 
 function conversationIdForRequest(request) {
   return request.conversationId ?? `telegram:${request.chatId}:${request.actor.id}`;
@@ -51,6 +63,16 @@ function memoryScopeForActor(actor) {
   if (actor?.role === "teacher") return "teacher_private";
   if (actor?.role === "family_child") return "child_learning";
   return "family";
+}
+
+function materialScopeForActor(actor) {
+  if (actor?.role === "teacher") return "teacher_private";
+  if (actor?.role === "family_child") return "child_learning";
+  return "family";
+}
+
+function canStoreMaterial(actor) {
+  return actor?.role === "teacher" || actor?.role === "owner";
 }
 
 function extractExplicitMemory(text) {
@@ -109,6 +131,281 @@ function isSensitiveMemoryContent(content) {
   return sensitiveMemoryPatterns.some((pattern) => pattern.test(content));
 }
 
+function hasHighRiskSecretShape(content) {
+  return (
+    /[A-Za-z0-9_-]{32,}/.test(content) ||
+    /https?:\/\/\S*(?:token|key|secret|auth|password)\S*/i.test(content)
+  );
+}
+
+function isUnsafeLongTermContent(content) {
+  return isSensitiveMemoryContent(content) || hasHighRiskSecretShape(content);
+}
+
+function canonicalMemoryContent(content) {
+  return normalizeText(content)
+    .replace(/[«»"']/g, "")
+    .replace(/\s+/g, " ");
+}
+
+function memoryAlreadyExists(memories, content) {
+  const canonical = canonicalMemoryContent(content);
+  return memories.some((memory) => canonicalMemoryContent(memory.content) === canonical);
+}
+
+function shouldSkipAutomaticMemory(text) {
+  const normalized = normalizeText(text);
+  if (!normalized || normalized.length < 12) return true;
+  if (normalized.startsWith("/")) return true;
+  if (extractExplicitMemory(text)) return true;
+  if (isMemoryRecallRequest(text)) return true;
+  if (isDiagnosticsRequest(text)) return true;
+  if (isMaterialListRequest(text) || parseMaterialCommand(text)?.matched) return true;
+  if (/[?？]$/.test(String(text ?? "").trim())) return true;
+
+  return [
+    "статус",
+    "проверка",
+    "тест",
+    "сделай",
+    "найди",
+    "посчитай",
+    "подготовь",
+    "нарисуй",
+  ].some((prefix) => normalized.startsWith(prefix));
+}
+
+function looksLikeStudentPersonalData(sentence) {
+  return /(?:ученик|ученица|student|контакт|телефон|родител)/i.test(sentence);
+}
+
+function automaticMemorySubjectType(actor, sentence) {
+  if (
+    actor?.role === "teacher" &&
+    /(?:стиль|на уроках|я преподаю|warmup|worksheet|домашн)/i.test(sentence)
+  ) {
+    return "teaching_style";
+  }
+
+  if (actor?.role === "family_child") {
+    return "study_preference";
+  }
+
+  return "auto_observed_fact";
+}
+
+function extractAutomaticMemoryCandidates(text, actor) {
+  if (shouldSkipAutomaticMemory(text)) return [];
+
+  const sentences = String(text ?? "")
+    .split(/[\n.!?]+/)
+    .map((sentence) => sentence.trim())
+    .filter(Boolean);
+
+  const stableFactPatterns = [
+    /(?:я\s+(?:люблю|предпочитаю|обычно|часто|всегда)|мне\s+(?:важно|удобно|нравится))/i,
+    /\b(?:i\s+(?:like|prefer|usually|always)|it is important to me)\b/i,
+  ];
+  const teacherPatterns = [
+    /(?:мой стиль|стиль преподавания|на уроках|я преподаю|я обычно на уроках)/i,
+    /\b(?:my teaching style|in my lessons|i teach)\b/i,
+  ];
+  const patterns = actor?.role === "teacher"
+    ? [...stableFactPatterns, ...teacherPatterns]
+    : stableFactPatterns;
+
+  return sentences
+    .filter((sentence) => sentence.length >= 12 && sentence.length <= 240)
+    .filter((sentence) => patterns.some((pattern) => pattern.test(sentence)))
+    .filter((sentence) => !looksLikeStudentPersonalData(sentence))
+    .filter((sentence) => !isUnsafeLongTermContent(sentence))
+    .slice(0, 2)
+    .map((sentence) => ({
+      scope: memoryScopeForActor(actor),
+      sensitivity: "normal",
+      subjectType: automaticMemorySubjectType(actor, sentence),
+      content: sentence.replace(/[.!?]+$/g, "").trim(),
+      confidence: 0.74,
+    }));
+}
+
+async function storeAutomaticMemories({
+  repositories,
+  request,
+  storedUserMessage,
+  workspaceId,
+  memories,
+}) {
+  if (!repositories.memories?.create) return [];
+
+  const candidates = extractAutomaticMemoryCandidates(request.text, request.actor)
+    .filter((candidate) => !memoryAlreadyExists(memories, candidate.content))
+    .map((candidate) => ({
+      ...candidate,
+      workspaceId,
+      ownerUserId: request.actor.id,
+      sourceMessageIds: storedUserMessage?.id ? [storedUserMessage.id] : [],
+    }))
+    .filter((candidate) => canStoreMemory(request.actor, candidate));
+
+  const stored = [];
+  for (const candidate of candidates) {
+    try {
+      const memory = await repositories.memories.create(candidate);
+      stored.push(memory);
+      memories.push(memory);
+    } catch (error) {
+      console.error("automatic memory write failed", error);
+    }
+  }
+
+  return stored;
+}
+
+function splitMaterialBody(titleHint, body) {
+  const lines = String(body ?? "")
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  const title = String(titleHint ?? lines.shift() ?? "").trim();
+  const content = lines.join("\n").trim();
+
+  return { title, content };
+}
+
+function parseMaterialCommand(text) {
+  const normalized = String(text ?? "").trim();
+  if (!normalized) return null;
+
+  const slashMatch = normalized.match(/^\/materials\s+add(?:\s+([^\n]+))?(?:\n([\s\S]+))?$/i);
+  if (slashMatch) {
+    const parsed = splitMaterialBody(slashMatch[1], slashMatch[2] ?? "");
+    return { matched: true, ...parsed };
+  }
+
+  const russianMatch =
+    normalized.match(/^(?:добавь|сохрани|запиши)\s+материал\s*:?\s*([\s\S]+)$/i) ??
+    normalized.match(/^материал\s*:?\s*([\s\S]+)$/i);
+
+  if (!russianMatch) return null;
+
+  return {
+    matched: true,
+    ...splitMaterialBody(null, russianMatch[1]),
+  };
+}
+
+function isMaterialListRequest(text) {
+  const normalized = normalizeText(text);
+  return (
+    normalized === "/materials" ||
+    normalized === "/materials list" ||
+    normalized === "библиотека" ||
+    normalized === "материалы" ||
+    normalized.includes("что есть в библиотек") ||
+    normalized.includes("список материалов")
+  );
+}
+
+function isDiagnosticsRequest(text) {
+  const normalized = normalizeText(text);
+  return (
+    normalized === "/diag" ||
+    normalized === "/diagnostics" ||
+    normalized.includes("диагностик") ||
+    normalized.includes("почему долго") ||
+    normalized.includes("бот тупит") ||
+    normalized.includes("бот долго")
+  );
+}
+
+function isCapabilitiesRequest(text) {
+  const normalized = normalizeText(text);
+  return (
+    normalized === "/tools" ||
+    normalized === "/capabilities" ||
+    normalized === "инструменты" ||
+    normalized === "скилы" ||
+    normalized === "skills" ||
+    normalized.includes("какие инструменты")
+  );
+}
+
+function safeTelegramAnswerText(text) {
+  const answerText = String(text ?? defaultAnswer).trim() || defaultAnswer;
+  if (answerText.length <= telegramSafeAnswerLimit) {
+    return answerText;
+  }
+
+  return `${answerText.slice(0, telegramSafeAnswerLimit - 90).trim()}\n\nОтвет был слишком длинным, поэтому я сократил его. Напишите: продолжи.`;
+}
+
+function durationLabel(durationMs) {
+  if (durationMs == null) return "нет данных";
+  if (durationMs < 1000) return `${durationMs} мс`;
+  return `${(durationMs / 1000).toFixed(1)} сек`;
+}
+
+function recentAssistantDiagnostics(messages) {
+  return messages
+    .filter((message) => message.role === "assistant")
+    .map((message) => ({
+      action: message.metadata?.action ?? message.metadata?.source ?? "unknown",
+      durationMs:
+        typeof message.metadata?.durationMs === "number"
+          ? message.metadata.durationMs
+          : null,
+      modelProfile: message.metadata?.modelProfile ?? null,
+      createdAt: message.createdAt,
+    }));
+}
+
+function buildDiagnosticsAnswer({ messages, memories, materialRepositoryAvailable }) {
+  const assistantDiagnostics = recentAssistantDiagnostics(messages);
+  const durations = assistantDiagnostics
+    .map((diagnostic) => diagnostic.durationMs)
+    .filter((durationMs) => durationMs != null);
+  const last = assistantDiagnostics.at(-1);
+  const slowCount = durations.filter((durationMs) => durationMs >= slowResponseThresholdMs).length;
+
+  return [
+    "Самодиагностика бота:",
+    "- Telegram-поток работает: команда дошла до сервера.",
+    `- Память: доступна, записей в контексте сейчас ${memories.length}.`,
+    `- Библиотека материалов: ${materialRepositoryAvailable ? "доступна" : "пока не настроена"}.`,
+    `- Последний ответ: ${durationLabel(last?.durationMs)}; режим: ${last?.action ?? "нет данных"}.`,
+    `- Медленных ответов в последних сообщениях: ${slowCount} (порог ${durationLabel(slowResponseThresholdMs)}).`,
+    "Если обычные вопросы отвечают долго, узкое место почти всегда внешний AI-вызов. Быстрые команды, память и библиотека отвечают локально.",
+  ].join("\n");
+}
+
+function buildMaterialListAnswer(materials) {
+  if (materials.length === 0) {
+    return [
+      "В библиотеке пока нет материалов.",
+      "Чтобы добавить материал, напишите:",
+      "Сохрани материал: Past Simple warm-up",
+      "текст упражнения или плана урока",
+    ].join("\n");
+  }
+
+  return [
+    "Материалы в библиотеке:",
+    ...materials.slice(-10).map((material) => `- ${material.title}`),
+  ].join("\n");
+}
+
+async function writeAuditLog(repositories, auditLog) {
+  if (!repositories.auditLogs?.create) return;
+
+  try {
+    await repositories.auditLogs.create(auditLog);
+  } catch (error) {
+    console.error("audit log write failed", error);
+  }
+}
+
 function recentMessagesForPrompt(messages, telegramUpdateId, limit = 6) {
   return messages
     .filter((message) => message.role === "user" || message.role === "assistant")
@@ -129,6 +426,7 @@ function recentMessagesForPrompt(messages, telegramUpdateId, limit = 6) {
 export function createRepositoryBackedOrchestrator({
   repositories,
   aiProvider,
+  capabilityRegistry = createCapabilityRegistry(),
   workspaceId = "workspace-family",
   now = () => new Date(),
 } = {}) {
@@ -137,6 +435,7 @@ export function createRepositoryBackedOrchestrator({
   }
 
   return async function repositoryBackedOrchestrator(request) {
+    const requestStartedMs = Date.now();
     const conversationId = conversationIdForRequest(request);
     const requestWorkspaceId = workspaceIdForRequest(request, workspaceId);
     const createdAt = now();
@@ -156,7 +455,7 @@ export function createRepositoryBackedOrchestrator({
       };
     }
 
-    const appendAssistantMessage = async ({ answerText, action }) =>
+    const appendAssistantMessage = async ({ answerText, action, metadata = {} }) =>
       repositories.conversations.appendMessage(conversationId, {
         role: "assistant",
         content: answerText,
@@ -164,6 +463,7 @@ export function createRepositoryBackedOrchestrator({
           source: "telegram",
           replyToTelegramUpdateId: request.telegramUpdateId,
           action,
+          ...metadata,
         },
         userId: request.actor.id,
         workspaceId: requestWorkspaceId,
@@ -188,10 +488,14 @@ export function createRepositoryBackedOrchestrator({
 
     const explicitMemory = extractExplicitMemory(request.text);
     if (explicitMemory) {
-      if (isSensitiveMemoryContent(explicitMemory)) {
+      if (isUnsafeLongTermContent(explicitMemory)) {
         const answerText =
           "Я не буду сохранять пароли, токены, ключи, данные карт или документы в память. Лучше не отправлять такие данные в чат.";
-        await appendAssistantMessage({ answerText, action: "memory_rejected" });
+        await appendAssistantMessage({
+          answerText,
+          action: "memory_rejected",
+          metadata: { durationMs: Date.now() - requestStartedMs },
+        });
 
         return {
           accepted: true,
@@ -217,7 +521,11 @@ export function createRepositoryBackedOrchestrator({
       if (repositories.memories?.create && canStoreMemory(request.actor, memory)) {
         await repositories.memories.create(memory);
         const answerText = `Запомнил: ${explicitMemory}`;
-        await appendAssistantMessage({ answerText, action: "memory_write" });
+        await appendAssistantMessage({
+          answerText,
+          action: "memory_write",
+          metadata: { durationMs: Date.now() - requestStartedMs },
+        });
 
         return {
           accepted: true,
@@ -230,7 +538,7 @@ export function createRepositoryBackedOrchestrator({
       }
     }
 
-    const memories = repositories.memories
+    let memories = repositories.memories
       ? await repositories.memories.listForActor({
           actorUserId: request.actor.id,
           workspaceId: requestWorkspaceId,
@@ -238,12 +546,231 @@ export function createRepositoryBackedOrchestrator({
         })
       : [];
 
+    if (isCapabilitiesRequest(request.text)) {
+      const answerText = buildCapabilitiesAnswer(capabilityRegistry);
+      const durationMs = Date.now() - requestStartedMs;
+      await appendAssistantMessage({
+        answerText,
+        action: "capability_list",
+        metadata: { durationMs },
+      });
+
+      return {
+        accepted: true,
+        answer: {
+          text: answerText,
+          source: "capability_list",
+        },
+        conversationId,
+      };
+    }
+
+    if (isDiagnosticsRequest(request.text)) {
+      const diagnosticMessages = repositories.conversations.listMessages
+        ? await repositories.conversations.listMessages(conversationId, {
+            limit: diagnosticsLookupLimit,
+          })
+        : messages;
+      const answerText = buildDiagnosticsAnswer({
+        messages: diagnosticMessages,
+        memories,
+        materialRepositoryAvailable: Boolean(repositories.materials?.search),
+      });
+      const durationMs = Date.now() - requestStartedMs;
+      await writeAuditLog(repositories, {
+        actorId: request.actor.id,
+        action: "bot_diagnostics_requested",
+        resource: conversationId,
+        metadata: { durationMs, telegramUpdateId: request.telegramUpdateId },
+        createdAt: now(),
+      });
+      await appendAssistantMessage({
+        answerText,
+        action: "diagnostics",
+        metadata: { durationMs },
+      });
+
+      return {
+        accepted: true,
+        answer: {
+          text: answerText,
+          source: "diagnostics",
+        },
+        conversationId,
+      };
+    }
+
+    const requestIsMaterialCommand =
+      parseMaterialCommand(request.text)?.matched || isMaterialListRequest(request.text);
+
+    if (!requestIsMaterialCommand && isWeatherRequest(request.text)) {
+      let answerText;
+      let source = "weather_forecast";
+      let metadata = {};
+
+      if (!capabilityRegistry?.has?.("weather_forecast")) {
+        answerText = buildMissingCurrentDataCapabilityAnswer(request.text);
+        source = "capability_missing";
+      } else {
+        try {
+          const weather = await capabilityRegistry.run(
+            "weather_forecast",
+            parseWeatherRequest(request.text),
+          );
+          answerText = weather.text;
+          metadata = weather.metadata ?? {};
+        } catch (error) {
+          answerText = [
+            "Я попытался получить прогноз погоды через инструмент, но источник не ответил.",
+            "Нужный инструмент: weather_forecast.",
+            "Попробуйте повторить запрос чуть позже или напишите: диагностика.",
+          ].join("\n");
+          source = "weather_error";
+          metadata = {
+            errorMessage: String(error.message ?? "").slice(0, 240),
+          };
+        }
+      }
+
+      const durationMs = Date.now() - requestStartedMs;
+      await appendAssistantMessage({
+        answerText,
+        action: source,
+        metadata: { ...metadata, durationMs },
+      });
+
+      return {
+        accepted: true,
+        answer: {
+          text: answerText,
+          source,
+        },
+        conversationId,
+      };
+    }
+
+    if (
+      isCurrentDataRequest(request.text) &&
+      !requestIsMaterialCommand &&
+      !capabilityRegistry?.has?.("web_current_data")
+    ) {
+      const answerText = buildMissingCurrentDataCapabilityAnswer(request.text);
+      const durationMs = Date.now() - requestStartedMs;
+      await appendAssistantMessage({
+        answerText,
+        action: "capability_missing",
+        metadata: { capability: "web_current_data", durationMs },
+      });
+
+      return {
+        accepted: true,
+        answer: {
+          text: answerText,
+          source: "capability_missing",
+        },
+        conversationId,
+      };
+    }
+
+    const materialCommand = parseMaterialCommand(request.text);
+    if (materialCommand?.matched) {
+      let answerText;
+      let source = "material_write";
+      let metadata = {};
+
+      if (!canStoreMaterial(request.actor)) {
+        answerText = "Сохранять материалы может владелец или бот преподавателя.";
+        source = "material_rejected";
+      } else if (!repositories.materials?.create) {
+        answerText = "Библиотека материалов пока не подключена к базе.";
+        source = "material_unavailable";
+      } else if (!materialCommand.title || !materialCommand.content) {
+        answerText = [
+          "Не вижу название или текст материала.",
+          "Формат:",
+          "Сохрани материал: Past Simple warm-up",
+          "текст упражнения или плана урока",
+        ].join("\n");
+        source = "material_invalid";
+      } else if (isUnsafeLongTermContent(`${materialCommand.title}\n${materialCommand.content}`)) {
+        answerText = "Я не буду сохранять материалы с паролями, токенами, ключами или данными карт.";
+        source = "material_rejected";
+      } else {
+        const storedMaterial = await repositories.materials.create({
+          workspaceId: requestWorkspaceId,
+          ownerUserId: request.actor.id,
+          scope: materialScopeForActor(request.actor),
+          sensitivity: "normal",
+          title: materialCommand.title.slice(0, 160),
+          content: materialCommand.content,
+          mimeType: "text/plain",
+          sourceMessageIds: storedUserMessage?.id ? [storedUserMessage.id] : [],
+        });
+        metadata = {
+          materialId: storedMaterial.id,
+          chunkCount: storedMaterial.chunks?.length ?? 0,
+        };
+        answerText = [
+          `Материал сохранен: ${storedMaterial.title}`,
+          `Фрагментов в библиотеке: ${metadata.chunkCount}.`,
+          "Теперь я буду искать по нему при подготовке уроков и ответах по материалам.",
+        ].join("\n");
+      }
+
+      const durationMs = Date.now() - requestStartedMs;
+      await appendAssistantMessage({
+        answerText,
+        action: source,
+        metadata: { ...metadata, durationMs },
+      });
+
+      return {
+        accepted: true,
+        answer: {
+          text: answerText,
+          source,
+        },
+        conversationId,
+      };
+    }
+
+    if (isMaterialListRequest(request.text)) {
+      const materials = repositories.materials?.listForActor
+        ? await repositories.materials.listForActor({
+            actorUserId: request.actor.id,
+            workspaceId: requestWorkspaceId,
+            limit: 10,
+          })
+        : [];
+      const answerText = buildMaterialListAnswer(materials);
+      const durationMs = Date.now() - requestStartedMs;
+      await appendAssistantMessage({
+        answerText,
+        action: "material_list",
+        metadata: { durationMs, materialCount: materials.length },
+      });
+
+      return {
+        accepted: true,
+        answer: {
+          text: answerText,
+          source: "material_list",
+        },
+        conversationId,
+      };
+    }
+
     if (isMemoryRecallRequest(request.text)) {
       const answerText = buildMemoryRecallAnswer({
         actor: request.actor,
         memories,
       });
-      await appendAssistantMessage({ answerText, action: "memory_recall" });
+      const durationMs = Date.now() - requestStartedMs;
+      await appendAssistantMessage({
+        answerText,
+        action: "memory_recall",
+        metadata: { durationMs },
+      });
 
       return {
         accepted: true,
@@ -255,16 +782,92 @@ export function createRepositoryBackedOrchestrator({
       };
     }
 
-    const response = await handleOrchestratorRequest(
-      {
-        ...request,
-        memories,
-        recentMessages: recentMessagesForPrompt(messages, request.telegramUpdateId),
-      },
-      { aiProvider },
-    );
+    const automaticMemories = await storeAutomaticMemories({
+      repositories,
+      request,
+      storedUserMessage,
+      workspaceId: requestWorkspaceId,
+      memories,
+    });
+    if (automaticMemories.length > 0) {
+      memories = memories.slice(-memoryContextLimit);
+    }
+
+    const materialChunks = repositories.materials?.search
+      ? await repositories.materials.search({
+          actorUserId: request.actor.id,
+          workspaceId: requestWorkspaceId,
+          query: request.text,
+          limit: materialContextLimit,
+        })
+      : [];
+
+    let response;
+    try {
+      response = await handleOrchestratorRequest(
+        {
+          ...request,
+          memories,
+          materials: materialChunks,
+          recentMessages: recentMessagesForPrompt(messages, request.telegramUpdateId),
+        },
+        { aiProvider },
+      );
+    } catch (error) {
+      const durationMs = Date.now() - requestStartedMs;
+      const answerText =
+        "AI-сервис сейчас не дал ответ. Я записал сбой в самодиагностику. Попробуйте повторить вопрос короче или напишите: диагностика.";
+      await writeAuditLog(repositories, {
+        actorId: request.actor.id,
+        action: "ai_response_failed",
+        resource: conversationId,
+        metadata: {
+          durationMs,
+          errorName: error.name,
+          errorMessage: String(error.message ?? "").slice(0, 240),
+          telegramUpdateId: request.telegramUpdateId,
+        },
+        createdAt: now(),
+      });
+      await appendAssistantMessage({
+        answerText,
+        action: "ai_error",
+        metadata: { durationMs },
+      });
+
+      return {
+        accepted: true,
+        answer: {
+          text: answerText,
+          source: "ai_error",
+        },
+        conversationId,
+      };
+    }
+
     const answer = response.answer ?? { text: defaultAnswer };
-    const answerText = answer.text ?? defaultAnswer;
+    const answerText = safeTelegramAnswerText(answer.text ?? defaultAnswer);
+    const durationMs = Date.now() - requestStartedMs;
+    const action =
+      answer.text && String(answer.text).trim()
+        ? answer.source ?? "ai_response"
+        : "ai_empty";
+
+    if (durationMs >= slowResponseThresholdMs || action === "ai_empty") {
+      await writeAuditLog(repositories, {
+        actorId: request.actor.id,
+        action: durationMs >= slowResponseThresholdMs ? "ai_response_slow" : "ai_response_empty",
+        resource: conversationId,
+        metadata: {
+          durationMs,
+          action,
+          materialContextCount: materialChunks.length,
+          automaticMemoryCount: automaticMemories.length,
+          telegramUpdateId: request.telegramUpdateId,
+        },
+        createdAt: now(),
+      });
+    }
 
     await repositories.conversations.appendMessage(conversationId, {
       role: "assistant",
@@ -272,8 +875,12 @@ export function createRepositoryBackedOrchestrator({
       metadata: {
         source: "telegram",
         replyToTelegramUpdateId: request.telegramUpdateId,
+        action,
         agentProfile: response.agentProfile,
         modelProfile: response.modelProfile,
+        durationMs,
+        materialContextCount: materialChunks.length,
+        automaticMemoryCount: automaticMemories.length,
       },
       userId: request.actor.id,
       workspaceId: requestWorkspaceId,

@@ -52,6 +52,8 @@ model User {
   updatedAt      DateTime       @updatedAt
   conversations  Conversation[]
   memoryItems    MemoryItem[]
+  materials      Material[]
+  materialChunks MaterialChunk[]
   auditLogs      AuditLog[]
 }
 
@@ -63,6 +65,7 @@ model Workspace {
   conversations Conversation[]
   memoryItems   MemoryItem[]
   materials     Material[]
+  materialChunks MaterialChunk[]
 }
 
 model Conversation {
@@ -139,12 +142,40 @@ model Material {
   id          String    @id @default(cuid())
   workspaceId String
   ownerUserId String
+  scope       WorkspaceKind @default(teacher_private)
+  sensitivity Sensitivity @default(normal)
   title       String
   storageKey  String
   mimeType    String?
+  description String?
   tags        String[]  @default([])
+  sourceMessageIds String[] @default([])
   createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
   workspace   Workspace @relation(fields: [workspaceId], references: [id])
+  owner       User      @relation(fields: [ownerUserId], references: [id])
+  chunks      MaterialChunk[]
+}
+
+model MaterialChunk {
+  id          String    @id @default(cuid())
+  materialId  String
+  workspaceId String
+  ownerUserId String
+  scope       WorkspaceKind @default(teacher_private)
+  sensitivity Sensitivity @default(normal)
+  chunkIndex  Int
+  content     String
+  keywords    String[] @default([])
+  tokenEstimate Int @default(0)
+  metadata    Json?
+  createdAt   DateTime @default(now())
+  material    Material  @relation(fields: [materialId], references: [id], onDelete: Cascade)
+  workspace   Workspace @relation(fields: [workspaceId], references: [id])
+  owner       User      @relation(fields: [ownerUserId], references: [id])
+
+  @@index([workspaceId, ownerUserId])
+  @@index([materialId, chunkIndex])
 }
 
 model Reminder {
