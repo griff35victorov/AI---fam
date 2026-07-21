@@ -3,10 +3,16 @@ import { canStoreMemory } from "../../../packages/domain/src/index.js";
 import { buildAllowedMemoryContext } from "./context.js";
 import {
   buildCapabilitiesAnswer,
+  buildMissingCapabilityAnswer,
   buildMissingCurrentDataCapabilityAnswer,
   createCapabilityRegistry,
-  isCurrentDataRequest,
+  detectRequiredCapability,
+  extractUrls,
+  isTimeLocationRequest,
+  isTravelLocalRequest,
+  isWebFetchRequest,
   isWeatherRequest,
+  parseLocationLookupRequest,
   parseWeatherRequest,
 } from "./capabilities.js";
 
@@ -603,29 +609,31 @@ export function createRepositoryBackedOrchestrator({
     const requestIsMaterialCommand =
       parseMaterialCommand(request.text)?.matched || isMaterialListRequest(request.text);
 
-    if (!requestIsMaterialCommand && isWeatherRequest(request.text)) {
+    if (!requestIsMaterialCommand && isWebFetchRequest(request.text)) {
       let answerText;
-      let source = "weather_forecast";
+      let source = "web_fetch_url";
       let metadata = {};
 
-      if (!capabilityRegistry?.has?.("weather_forecast")) {
-        answerText = buildMissingCurrentDataCapabilityAnswer(request.text);
+      if (!capabilityRegistry?.has?.("web_fetch_url")) {
+        answerText = buildMissingCapabilityAnswer("web_fetch_url", request.text);
         source = "capability_missing";
+        metadata = { capability: "web_fetch_url" };
       } else {
         try {
-          const weather = await capabilityRegistry.run(
-            "weather_forecast",
-            parseWeatherRequest(request.text),
-          );
-          answerText = weather.text;
-          metadata = weather.metadata ?? {};
+          const urls = extractUrls(request.text);
+          const result = await capabilityRegistry.run("web_fetch_url", {
+            url: urls[0],
+            text: request.text,
+          });
+          answerText = result.text;
+          metadata = result.metadata ?? {};
         } catch (error) {
           answerText = [
-            "Я попытался получить прогноз погоды через инструмент, но источник не ответил.",
-            "Нужный инструмент: weather_forecast.",
-            "Попробуйте повторить запрос чуть позже или напишите: диагностика.",
+            "Я попытался прочитать ссылку через инструмент, но источник не ответил.",
+            "Нужный инструмент: web_fetch_url.",
+            "Попробуйте позже или пришлите другую ссылку.",
           ].join("\n");
-          source = "weather_error";
+          source = "web_fetch_error";
           metadata = {
             errorMessage: String(error.message ?? "").slice(0, 240),
           };
@@ -649,17 +657,194 @@ export function createRepositoryBackedOrchestrator({
       };
     }
 
+    if (!requestIsMaterialCommand && isWeatherRequest(request.text)) {
+      let answerText;
+      let source = "weather_forecast";
+      let metadata = {};
+      const weatherArgs = parseWeatherRequest(request.text);
+
+      if (
+        !capabilityRegistry?.has?.("weather_forecast") &&
+        !capabilityRegistry?.has?.("weather_fallback_wttr")
+      ) {
+        answerText = buildMissingCurrentDataCapabilityAnswer(request.text);
+        source = "capability_missing";
+      } else {
+        try {
+          const weather = capabilityRegistry?.has?.("weather_forecast")
+            ? await capabilityRegistry.run("weather_forecast", weatherArgs)
+            : await capabilityRegistry.run("weather_fallback_wttr", weatherArgs);
+          answerText = weather.text;
+          metadata = weather.metadata ?? {};
+        } catch (error) {
+          if (
+            capabilityRegistry?.has?.("weather_forecast") &&
+            capabilityRegistry?.has?.("weather_fallback_wttr")
+          ) {
+            try {
+              const fallbackWeather = await capabilityRegistry.run(
+                "weather_fallback_wttr",
+                weatherArgs,
+              );
+              const durationMs = Date.now() - requestStartedMs;
+              await appendAssistantMessage({
+                answerText: fallbackWeather.text,
+                action: source,
+                metadata: {
+                  ...(fallbackWeather.metadata ?? {}),
+                  fallbackSource: "weather_fallback_wttr",
+                  primaryErrorMessage: String(error.message ?? "").slice(0, 240),
+                  durationMs,
+                },
+              });
+
+              return {
+                accepted: true,
+                answer: {
+                  text: fallbackWeather.text,
+                  source,
+                },
+                conversationId,
+              };
+            } catch (fallbackError) {
+              metadata = {
+                errorMessage: String(error.message ?? "").slice(0, 240),
+                fallbackErrorMessage: String(fallbackError.message ?? "").slice(0, 240),
+              };
+            }
+          }
+
+          answerText = [
+            "Я попытался получить прогноз погоды через инструмент, но источник не ответил.",
+            "Нужный инструмент: weather_forecast.",
+            "Попробуйте повторить запрос чуть позже или напишите: диагностика.",
+          ].join("\n");
+          source = "weather_error";
+          metadata = {
+            ...metadata,
+            errorMessage: String(error.message ?? "").slice(0, 240),
+          };
+        }
+      }
+
+      const durationMs = Date.now() - requestStartedMs;
+      await appendAssistantMessage({
+        answerText,
+        action: source,
+        metadata: { ...metadata, durationMs },
+      });
+
+      return {
+        accepted: true,
+        answer: {
+          text: answerText,
+          source,
+        },
+        conversationId,
+      };
+    }
+
+    if (!requestIsMaterialCommand && isTimeLocationRequest(request.text)) {
+      let answerText;
+      let source = "time_location_context";
+      let metadata = {};
+
+      if (!capabilityRegistry?.has?.("time_location_context")) {
+        answerText = buildMissingCapabilityAnswer("time_location_context", request.text);
+        source = "capability_missing";
+        metadata = { capability: "time_location_context" };
+      } else {
+        const result = await capabilityRegistry.run("time_location_context", {
+          text: request.text,
+        });
+        answerText = result.text;
+        metadata = result.metadata ?? {};
+      }
+
+      const durationMs = Date.now() - requestStartedMs;
+      await appendAssistantMessage({
+        answerText,
+        action: source,
+        metadata: { ...metadata, durationMs },
+      });
+
+      return {
+        accepted: true,
+        answer: {
+          text: answerText,
+          source,
+        },
+        conversationId,
+      };
+    }
+
+    if (!requestIsMaterialCommand && isTravelLocalRequest(request.text)) {
+      let answerText;
+      let source = "travel_local";
+      let metadata = {};
+
+      if (!capabilityRegistry?.has?.("travel_local")) {
+        answerText = buildMissingCapabilityAnswer("travel_local", request.text);
+        source = "capability_missing";
+        metadata = { capability: "travel_local" };
+      } else {
+        try {
+          const result = await capabilityRegistry.run("travel_local", {
+            ...parseLocationLookupRequest(request.text),
+            text: request.text,
+          });
+          answerText = result.text;
+          metadata = result.metadata ?? {};
+        } catch (error) {
+          answerText = [
+            "Я попытался найти место через карту, но источник не ответил.",
+            "Нужный инструмент: travel_local.",
+            "Попробуйте повторить запрос позже или уточните адрес.",
+          ].join("\n");
+          source = "travel_local_error";
+          metadata = {
+            errorMessage: String(error.message ?? "").slice(0, 240),
+          };
+        }
+      }
+
+      const durationMs = Date.now() - requestStartedMs;
+      await appendAssistantMessage({
+        answerText,
+        action: source,
+        metadata: { ...metadata, durationMs },
+      });
+
+      return {
+        accepted: true,
+        answer: {
+          text: answerText,
+          source,
+        },
+        conversationId,
+      };
+    }
+
+    const requiredCapability = !requestIsMaterialCommand
+      ? detectRequiredCapability(request.text)
+      : null;
+    const locallyHandledCapabilities = new Set([
+      "weather_forecast",
+      "web_fetch_url",
+      "time_location_context",
+      "travel_local",
+    ]);
     if (
-      isCurrentDataRequest(request.text) &&
-      !requestIsMaterialCommand &&
-      !capabilityRegistry?.has?.("web_current_data")
+      requiredCapability &&
+      !locallyHandledCapabilities.has(requiredCapability) &&
+      !capabilityRegistry?.has?.(requiredCapability)
     ) {
-      const answerText = buildMissingCurrentDataCapabilityAnswer(request.text);
+      const answerText = buildMissingCapabilityAnswer(requiredCapability, request.text);
       const durationMs = Date.now() - requestStartedMs;
       await appendAssistantMessage({
         answerText,
         action: "capability_missing",
-        metadata: { capability: "web_current_data", durationMs },
+        metadata: { capability: requiredCapability, durationMs },
       });
 
       return {

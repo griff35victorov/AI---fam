@@ -168,15 +168,21 @@ export function createProductionDependencies({
   prisma,
   fetchImpl = fetch,
 } = {}) {
+  const resolvedRepositories =
+    repositories ?? (prisma ? createPrismaRepositories(prisma) : undefined);
   const voiceTranscribers = createVoiceTranscribers(env, fetchImpl);
   const capabilityRegistry = createCapabilityRegistry({
     fetchImpl,
     weatherTimeoutMs: parseNumber(env.WEATHER_TIMEOUT_MS, 6000),
     voiceTranscriber: Object.values(voiceTranscribers)[0],
+    materialsRepositoryAvailable: Boolean(resolvedRepositories?.materials?.search),
+    telegramConfigured: Boolean(resolveTelegramBotToken(env)),
+    defaultLocation: envValue(env.APP_DEFAULT_LOCATION) ?? "Москва",
+    defaultTimeZone: envValue(env.APP_DEFAULT_TIME_ZONE) ?? "Europe/Moscow",
   });
 
   return {
-    repositories: repositories ?? (prisma ? createPrismaRepositories(prisma) : undefined),
+    repositories: resolvedRepositories,
     workspaceId: envValue(env.APP_DEFAULT_WORKSPACE_ID) ?? defaultWorkspaceId,
     capabilityRegistry,
     telegramWebhookSecret: envValue(env.TELEGRAM_WEBHOOK_SECRET),

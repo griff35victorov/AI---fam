@@ -3,6 +3,7 @@ import test from "node:test";
 
 import { createInMemoryRepositories } from "../../../packages/db/src/index.js";
 import { createAppServer } from "../src/server.js";
+import { createCapabilityRegistry } from "../src/capabilities.js";
 import { createRepositoryBackedOrchestrator } from "../src/runtime.js";
 
 async function withServer(options, run) {
@@ -568,4 +569,337 @@ test("repository backed orchestrator returns missing capability instead of dead 
 
   assert.equal(response.answer.source, "capability_missing");
   assert.match(response.answer.text, /web_current_data/);
+});
+
+test("repository backed orchestrator lists expanded capability registry", async () => {
+  const repositories = createInMemoryRepositories();
+  const orchestrator = createRepositoryBackedOrchestrator({
+    repositories,
+    capabilityRegistry: createCapabilityRegistry({
+      fetchImpl: async () => {
+        throw new Error("fetch should not be called when listing capabilities");
+      },
+      materialsRepositoryAvailable: true,
+      telegramConfigured: true,
+    }),
+    aiProvider: {
+      async complete() {
+        throw new Error("AI should not be called for capabilities list");
+      },
+    },
+  });
+
+  const response = await orchestrator({
+    chatId: 777,
+    actor: { id: "owner-1", role: "owner" },
+    intent: "household",
+    text: "/tools",
+    telegramUpdateId: 800,
+  });
+
+  assert.equal(response.answer.source, "capability_list");
+  assert.match(response.answer.text, /weather_forecast/);
+  assert.match(response.answer.text, /web_fetch_url/);
+  assert.match(response.answer.text, /time_location_context/);
+  assert.match(response.answer.text, /calendar_scheduling/);
+  assert.match(response.answer.text, /подключен/);
+  assert.match(response.answer.text, /нужен доступ/);
+});
+
+test("repository backed orchestrator falls back to wttr weather when Open-Meteo fails", async () => {
+  const repositories = createInMemoryRepositories();
+  const calls = [];
+  const capabilityRegistry = createCapabilityRegistry({
+    fetchImpl: async (url) => {
+      calls.push(url);
+
+      if (url.includes("open-meteo")) {
+        return {
+          ok: false,
+          status: 503,
+          json: async () => ({}),
+        };
+      }
+
+      if (url.includes("wttr.in")) {
+        return {
+          ok: true,
+          json: async () => ({
+            current_condition: [{ weatherCode: "0" }],
+            weather: [
+              {
+                date: "2026-07-25",
+                maxtempC: "25",
+                mintempC: "16",
+                totalSnow_cm: "0",
+                hourly: [{}, {}, {}, {}, {
+                  weatherCode: "0",
+                  chanceofrain: "10",
+                  windspeedKmph: "11",
+                }],
+              },
+              {
+                date: "2026-07-26",
+                maxtempC: "26",
+                mintempC: "17",
+                totalSnow_cm: "0",
+                hourly: [{}, {}, {}, {}, {
+                  weatherCode: "1",
+                  chanceofrain: "20",
+                  windspeedKmph: "12",
+                }],
+              },
+            ],
+          }),
+        };
+      }
+
+      throw new Error(`unexpected url ${url}`);
+    },
+  });
+  const orchestrator = createRepositoryBackedOrchestrator({
+    repositories,
+    capabilityRegistry,
+    aiProvider: {
+      async complete() {
+        throw new Error("AI should not be called when weather fallback works");
+      },
+    },
+  });
+
+  const response = await orchestrator({
+    chatId: 777,
+    actor: { id: "owner-1", role: "owner" },
+    intent: "household",
+    text: "Какая погода в Москве на выходных?",
+    telegramUpdateId: 801,
+  });
+
+  assert.equal(response.answer.source, "weather_forecast");
+  assert.match(response.answer.text, /wttr\.in/);
+  assert.equal(calls.some((url) => url.includes("open-meteo")), true);
+  assert.equal(calls.some((url) => url.includes("wttr.in")), true);
+});
+
+test("repository backed orchestrator uses web_fetch_url for explicit links", async () => {
+  const repositories = createInMemoryRepositories();
+  const capabilityRegistry = createCapabilityRegistry({
+    dnsLookup: async () => [{ address: "93.184.216.34" }],
+    fetchImpl: async (url) => {
+      assert.equal(url, "https://example.com/page");
+      return {
+        ok: true,
+        headers: {
+          get(name) {
+            return name === "content-type" ? "text/html; charset=utf-8" : null;
+          },
+        },
+        text: async () => "<html><title>Example page</title><body><h1>Hello family AI</h1></body></html>",
+      };
+    },
+  });
+  const orchestrator = createRepositoryBackedOrchestrator({
+    repositories,
+    capabilityRegistry,
+    aiProvider: {
+      async complete() {
+        throw new Error("AI should not be called for explicit URL fetch");
+      },
+    },
+  });
+
+  const response = await orchestrator({
+    chatId: 777,
+    actor: { id: "owner-1", role: "owner" },
+    intent: "household",
+    text: "Прочитай ссылку https://example.com/page",
+    telegramUpdateId: 802,
+  });
+
+  assert.equal(response.answer.source, "web_fetch_url");
+  assert.match(response.answer.text, /Example page/);
+  assert.match(response.answer.text, /Hello family AI/);
+});
+
+test("repository backed orchestrator blocks local URL fetches", async () => {
+  const repositories = createInMemoryRepositories();
+  const capabilityRegistry = createCapabilityRegistry({
+    fetchImpl: async () => {
+      throw new Error("fetch should not be called for blocked local URLs");
+    },
+  });
+  const orchestrator = createRepositoryBackedOrchestrator({
+    repositories,
+    capabilityRegistry,
+    aiProvider: {
+      async complete() {
+        throw new Error("AI should not be called for blocked URL fetch");
+      },
+    },
+  });
+
+  const response = await orchestrator({
+    chatId: 777,
+    actor: { id: "owner-1", role: "owner" },
+    intent: "household",
+    text: "Прочитай ссылку http://127.0.0.1:8080/admin",
+    telegramUpdateId: 805,
+  });
+
+  assert.equal(response.answer.source, "web_fetch_url");
+  assert.match(response.answer.text, /не читаю локальные/i);
+});
+
+test("repository backed orchestrator blocks URL fetch redirects to local addresses", async () => {
+  const repositories = createInMemoryRepositories();
+  const capabilityRegistry = createCapabilityRegistry({
+    dnsLookup: async (hostname) => {
+      assert.equal(hostname, "example.com");
+      return [{ address: "93.184.216.34" }];
+    },
+    fetchImpl: async (url) => {
+      assert.equal(url, "https://example.com/redirect");
+      return {
+        ok: false,
+        status: 302,
+        headers: {
+          get(name) {
+            return name === "location" ? "http://127.0.0.1:8080/admin" : null;
+          },
+        },
+      };
+    },
+  });
+  const orchestrator = createRepositoryBackedOrchestrator({
+    repositories,
+    capabilityRegistry,
+    aiProvider: {
+      async complete() {
+        throw new Error("AI should not be called for blocked redirect");
+      },
+    },
+  });
+
+  const response = await orchestrator({
+    chatId: 777,
+    actor: { id: "owner-1", role: "owner" },
+    intent: "household",
+    text: "Прочитай ссылку https://example.com/redirect",
+    telegramUpdateId: 806,
+  });
+
+  assert.equal(response.answer.source, "web_fetch_url");
+  assert.match(response.answer.text, /не читаю локальные/i);
+});
+
+test("repository backed orchestrator blocks IPv6 mapped local URL fetches", async () => {
+  const repositories = createInMemoryRepositories();
+  const capabilityRegistry = createCapabilityRegistry({
+    fetchImpl: async () => {
+      throw new Error("fetch should not be called for blocked IPv6 local URLs");
+    },
+  });
+  const orchestrator = createRepositoryBackedOrchestrator({
+    repositories,
+    capabilityRegistry,
+    aiProvider: {
+      async complete() {
+        throw new Error("AI should not be called for blocked IPv6 URL fetch");
+      },
+    },
+  });
+
+  const response = await orchestrator({
+    chatId: 777,
+    actor: { id: "owner-1", role: "owner" },
+    intent: "household",
+    text: "Прочитай ссылку http://[::ffff:127.0.0.1]/admin",
+    telegramUpdateId: 807,
+  });
+
+  assert.equal(response.answer.source, "web_fetch_url");
+  assert.match(response.answer.text, /не читаю локальные/i);
+});
+
+test("repository backed orchestrator blocks public hostnames that resolve to private IPv6", async () => {
+  const repositories = createInMemoryRepositories();
+  const capabilityRegistry = createCapabilityRegistry({
+    dnsLookup: async () => [{ address: "fe80::1" }],
+    fetchImpl: async () => {
+      throw new Error("fetch should not be called for hostnames resolving to private IPv6");
+    },
+  });
+  const orchestrator = createRepositoryBackedOrchestrator({
+    repositories,
+    capabilityRegistry,
+    aiProvider: {
+      async complete() {
+        throw new Error("AI should not be called for blocked DNS resolution");
+      },
+    },
+  });
+
+  const response = await orchestrator({
+    chatId: 777,
+    actor: { id: "owner-1", role: "owner" },
+    intent: "household",
+    text: "Прочитай ссылку https://example.com/private",
+    telegramUpdateId: 808,
+  });
+
+  assert.equal(response.answer.source, "web_fetch_url");
+  assert.match(response.answer.text, /не читаю локальные/i);
+});
+
+test("repository backed orchestrator uses time_location_context before AI", async () => {
+  const repositories = createInMemoryRepositories();
+  const capabilityRegistry = createCapabilityRegistry({
+    clock: () => new Date("2026-07-21T14:00:00.000Z"),
+  });
+  const orchestrator = createRepositoryBackedOrchestrator({
+    repositories,
+    capabilityRegistry,
+    aiProvider: {
+      async complete() {
+        throw new Error("AI should not be called for time context");
+      },
+    },
+  });
+
+  const response = await orchestrator({
+    chatId: 777,
+    actor: { id: "owner-1", role: "owner" },
+    intent: "household",
+    text: "Который час в Москве и когда ближайшие выходные?",
+    telegramUpdateId: 803,
+  });
+
+  assert.equal(response.answer.source, "time_location_context");
+  assert.match(response.answer.text, /Europe\/Moscow/);
+  assert.match(response.answer.text, /выходные/i);
+});
+
+test("repository backed orchestrator returns missing calendar capability without OAuth", async () => {
+  const repositories = createInMemoryRepositories();
+  const capabilityRegistry = createCapabilityRegistry();
+  const orchestrator = createRepositoryBackedOrchestrator({
+    repositories,
+    capabilityRegistry,
+    aiProvider: {
+      async complete() {
+        throw new Error("AI should not be called for calendar requests without OAuth");
+      },
+    },
+  });
+
+  const response = await orchestrator({
+    chatId: 777,
+    actor: { id: "owner-1", role: "owner" },
+    intent: "household",
+    text: "Что у меня в календаре завтра?",
+    telegramUpdateId: 804,
+  });
+
+  assert.equal(response.answer.source, "capability_missing");
+  assert.match(response.answer.text, /calendar_scheduling/);
 });
