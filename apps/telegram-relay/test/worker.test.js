@@ -216,6 +216,42 @@ test("protected send endpoint sends through Telegram Bot API", async () => {
   });
 });
 
+test("protected send endpoint retries transient Telegram network errors", async () => {
+  const calls = [];
+  const response = await handleRelayRequest(
+    new Request("https://relay.example/telegram/owner/send", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-family-ai-relay-secret": "relay-secret",
+      },
+      body: JSON.stringify({ chat_id: 777, text: "Final answer" }),
+    }),
+    env({
+      TELEGRAM_RELAY_SECRET: "relay-secret",
+      TELEGRAM_OWNER_BOT_TOKEN: "owner-token",
+      TELEGRAM_API_BASE_URL: "https://telegram.example",
+      TELEGRAM_SEND_MAX_ATTEMPTS: "2",
+      TELEGRAM_SEND_RETRY_DELAY_MS: "0",
+    }),
+    {},
+    {
+      fetchImpl: async (url, options) => {
+        calls.push({ url, options });
+        if (calls.length === 1) {
+          throw new Error("connect timeout");
+        }
+
+        return Response.json({ ok: true, result: { message_id: 42 } });
+      },
+    },
+  );
+
+  assert.equal(response.status, 200);
+  assert.deepEqual(await json(response), { ok: true, result: { message_id: 42 } });
+  assert.equal(calls.length, 2);
+});
+
 test("protected send endpoint rejects invalid relay secret without sending", async () => {
   let sent = false;
   const response = await handleRelayRequest(

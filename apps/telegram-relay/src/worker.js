@@ -108,18 +108,40 @@ async function sendTelegramMessage({ env, botKey, body, fetchImpl }) {
   }
 
   const baseUrl = (envValue(env.TELEGRAM_API_BASE_URL) ?? defaultTelegramBaseUrl).replace(/\/+$/, "");
-  const response = await fetchImpl(`${baseUrl}/bot${botToken}/sendMessage`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ chat_id: chatId, text }),
-  });
-  const responseBody = await responseJson(response);
+  const maxAttempts = Math.max(1, parseInteger(env.TELEGRAM_SEND_MAX_ATTEMPTS, 3));
+  const retryDelayMs = parseInteger(env.TELEGRAM_SEND_RETRY_DELAY_MS, 500);
+  let responseBody = {};
 
-  if (!response.ok || responseBody.ok === false) {
-    return json({ error: "telegram_send_failed" }, 502);
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      const response = await fetchImpl(`${baseUrl}/bot${botToken}/sendMessage`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ chat_id: chatId, text }),
+      });
+      responseBody = await responseJson(response);
+
+      if (response.ok && responseBody.ok !== false) {
+        return json(responseBody);
+      }
+
+      if (!telegramStatusIsRetryable(response.status) || attempt === maxAttempts) {
+        return json({ error: "telegram_send_failed" }, 502);
+      }
+    } catch {
+      if (attempt === maxAttempts) {
+        return json({ error: "telegram_send_failed" }, 502);
+      }
+    }
+
+    await sleep(retryDelayMs);
   }
 
-  return json(responseBody);
+  return json({ error: "telegram_send_failed" }, 502);
+}
+
+function telegramStatusIsRetryable(status) {
+  return status === 429 || status >= 500;
 }
 
 async function forwardToTimeweb({
