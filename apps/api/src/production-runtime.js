@@ -114,6 +114,8 @@ export function createTelegramBackgroundSenders(env = {}, fetchImpl = fetch) {
 export function createVoiceTranscribers(env = {}, fetchImpl = fetch) {
   const transcriptionUrl = envValue(env.VOICE_TRANSCRIPTION_URL);
   const transcriptionApiKey = envValue(env.VOICE_TRANSCRIPTION_API_KEY);
+  const transcriptionModel = envValue(env.VOICE_TRANSCRIPTION_MODEL);
+  const transcriptionLanguage = envValue(env.VOICE_TRANSCRIPTION_LANGUAGE) ?? "ru";
   if (!transcriptionUrl) {
     return {};
   }
@@ -129,6 +131,8 @@ export function createVoiceTranscribers(env = {}, fetchImpl = fetch) {
       botToken,
       transcriptionUrl,
       transcriptionApiKey,
+      transcriptionModel,
+      transcriptionLanguage,
       fetchImpl,
     });
   }

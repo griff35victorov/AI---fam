@@ -6,12 +6,16 @@ export class TelegramVoiceTranscriber {
     botToken,
     transcriptionUrl,
     transcriptionApiKey,
+    transcriptionModel,
+    transcriptionLanguage = "ru",
     fetchImpl = fetch,
     telegramBaseUrl = "https://api.telegram.org",
   } = {}) {
     this.botToken = botToken;
     this.transcriptionUrl = transcriptionUrl;
     this.transcriptionApiKey = transcriptionApiKey;
+    this.transcriptionModel = transcriptionModel;
+    this.transcriptionLanguage = transcriptionLanguage;
     this.fetchImpl = fetchImpl;
     this.telegramBaseUrl = telegramBaseUrl;
   }
@@ -40,7 +44,10 @@ export class TelegramVoiceTranscriber {
     const audioBuffer = await fileResponse.arrayBuffer();
     const formData = new FormData();
     formData.append("file", new Blob([audioBuffer], { type: "audio/ogg" }), "voice.ogg");
-    formData.append("language", "ru");
+    formData.append("language", this.transcriptionLanguage);
+    if (this.transcriptionModel) {
+      formData.append("model", this.transcriptionModel);
+    }
 
     const headers = {};
     if (this.transcriptionApiKey) {
