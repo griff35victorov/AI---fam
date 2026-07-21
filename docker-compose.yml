@@ -7,6 +7,7 @@ services:
       - "${PORT:-8080}:8080"
     environment:
       NODE_ENV: ${NODE_ENV:-production}
+      NODE_OPTIONS: ${NODE_OPTIONS:-}
       APP_PUBLIC_URL: ${APP_PUBLIC_URL:-}
       PORT: 8080
       DATABASE_URL: ${DATABASE_URL}
@@ -49,6 +50,7 @@ services:
     command: ["node", "apps/worker/src/main.js"]
     environment:
       NODE_ENV: ${NODE_ENV:-production}
+      NODE_OPTIONS: ${NODE_OPTIONS:-}
       APP_PUBLIC_URL: ${APP_PUBLIC_URL:-}
       DATABASE_URL: ${DATABASE_URL}
       TIMEWEB_AI_BASE_URL: ${TIMEWEB_AI_BASE_URL:-https://agent.timeweb.cloud}
@@ -83,5 +85,6 @@ services:
     command: ["node", "apps/worker/src/scheduler.js"]
     environment:
       NODE_ENV: ${NODE_ENV:-production}
+      NODE_OPTIONS: ${NODE_OPTIONS:-}
       DATABASE_URL: ${DATABASE_URL}
       SCHEDULER_INTERVAL_SECONDS: ${SCHEDULER_INTERVAL_SECONDS:-30}
