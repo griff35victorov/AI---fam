@@ -55,15 +55,14 @@ Date: 2026-07-21
 - App Platform: `225845`, status `active`, preset `2731`, Moscow `ru-3`.
 - Technical domain: `https://griff35victorov-ai-fam-8853.twc1.net`.
 - Git source: `griff35victorov/AI---fam`, branch `main`.
-- Deployed app commit: `7b69252777a6b1293336c9e4bb1bcf582c540b23`.
+- Deployed app commit: `94d9c4073d19808fcba027de1ebe4a13c25240c5`.
 - Current monthly infrastructure estimate: PostgreSQL 970 RUB/month + App Platform 510 RUB/month + S3 Hot 10 GB 79 RUB/month + Timeweb AI agents/token package usage. Practical MVP estimate after agent creation is about 2060-2065 RUB/month before variable overage.
 - Timeweb AI agents: 5 private active agents created on GPT 4.1 mini.
 - Timeweb S3: private bucket `family-ai-prod-dq508761`, Hot 10 GB.
 
 ## Next Engineering Slice
 
-1. Push and deploy the Timeweb Agent API endpoint fix.
-2. Add real family Telegram user IDs and run guarded user bootstrap.
-3. Create/configure Telegram bot token and webhook secret, then register webhook.
-4. Connect material/file upload to the private S3 bucket.
-5. Add teacher workspace API for students, materials, lessons, and lesson notes.
+1. Add real family Telegram user IDs and run guarded user bootstrap.
+2. Create/configure Telegram bot token and webhook secret, then register webhook.
+3. Connect material/file upload to the private S3 bucket.
+4. Add teacher workspace API for students, materials, lessons, and lesson notes.
