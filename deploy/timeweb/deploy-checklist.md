@@ -13,6 +13,8 @@
 - [x] Daughter Telegram bot webhook is configured.
 - [x] Teacher Telegram bot webhook is configured.
 - [x] Protected daughter webhook endpoint returns Telegram webhook-response after the `7f06488` deploy.
+- [x] Owner stuck pending update was replayed through production and cleared after the `afc94e55` deploy.
+- [x] Protected owner webhook endpoint fast-acks normal messages after the `afc94e55` deploy.
 - [ ] Allowed Telegram user can send `/start`.
 - [ ] Test owner request is routed.
 - [ ] Test teacher request is routed.
