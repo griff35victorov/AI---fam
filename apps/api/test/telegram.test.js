@@ -94,6 +94,24 @@ test("handleTelegramUpdate rejects unknown telegram users", async () => {
   });
 });
 
+test("handleTelegramUpdate answers /start without calling orchestrator", async () => {
+  let orchestratorCalled = false;
+  const response = await handleTelegramUpdate(
+    { message: { chat: { id: 777 }, from: { id: 100 }, text: "/start" } },
+    {
+      users,
+      orchestrator: async () => {
+        orchestratorCalled = true;
+        return { answer: { text: "should not happen" } };
+      },
+    },
+  );
+
+  assert.equal(orchestratorCalled, false);
+  assert.equal(response.chatId, 777);
+  assert.match(response.text, /Бот подключен/);
+});
+
 test("handleTelegramUpdate sends known user request to orchestrator", async () => {
   const calls = [];
   const response = await handleTelegramUpdate(

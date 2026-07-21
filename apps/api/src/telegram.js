@@ -1,6 +1,7 @@
 const accessNotConfiguredText =
   "Доступ не настроен. Обратитесь к владельцу семейного оркестратора.";
 const defaultProcessedText = "Принял. Задача обработана.";
+const startCommandText = "Бот подключен. Напишите задачу одним сообщением.";
 
 const expectedRoleByBotKey = {
   owner: "owner",
@@ -92,6 +93,7 @@ export function buildTelegramRequest(update, { users, botKey } = {}) {
     chatId: message.chat.id,
     actor,
     intent: inferIntentFromText(actor, text),
+    isStartCommand: text.trim().toLowerCase() === "/start",
     text,
     telegramUpdateId: update.update_id,
     telegramBotKey: botKey,
@@ -123,6 +125,7 @@ export async function buildTelegramRequestFromRepositories(update, { repositorie
     chatId: message.chat.id,
     actor,
     intent: inferIntentFromText(actor, text),
+    isStartCommand: text.trim().toLowerCase() === "/start",
     text,
     telegramUpdateId: update.update_id,
     telegramBotKey: botKey,
@@ -147,6 +150,16 @@ export async function handleTelegramUpdate(
 
   if (request.rejected) {
     const text = accessNotConfiguredText;
+    await sendTelegramReply(telegramSender, { chatId: request.chatId, text });
+
+    return {
+      chatId: request.chatId,
+      text,
+    };
+  }
+
+  if (request.isStartCommand) {
+    const text = startCommandText;
     await sendTelegramReply(telegramSender, { chatId: request.chatId, text });
 
     return {
