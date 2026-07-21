@@ -17,10 +17,13 @@
 - [x] Protected owner webhook endpoint fast-acks normal messages after the `afc94e55` deploy.
 - [x] Telegram webhook-response authorization is preserved for `/start`, unknown users, and wrong-role routes after the `bf04422` deploy.
 - [x] Owner, daughter, and teacher Telegram pending queues are all `0` after the `bf04422` deploy.
+- [x] Telegram webhook responses include explicit `Content-Length` and close the connection after the `5ad8ca8` deploy.
+- [x] Background webhook-response processing no longer calls Telegram `sendMessage` from Timeweb after the `5ad8ca8` deploy.
+- [x] Owner, daughter, and teacher Telegram webhooks use `max_connections=1`.
 - [ ] Allowed Telegram user can send `/start`.
-- [ ] Fresh real Telegram message from owner account is confirmed visible in Telegram after the `bf04422` deploy.
-- [ ] Fresh real Telegram message from daughter account is confirmed visible in Telegram after the `bf04422` deploy.
-- [ ] Fresh real Telegram message from teacher account is confirmed visible in Telegram after the `bf04422` deploy.
+- [ ] Fresh real Telegram message from owner account is confirmed visible in Telegram after the `5ad8ca8` deploy.
+- [ ] Fresh real Telegram message from daughter account is confirmed visible in Telegram after the `5ad8ca8` deploy.
+- [ ] Fresh real Telegram message from teacher account is confirmed visible in Telegram after the `5ad8ca8` deploy.
 - [ ] Test owner request is routed.
 - [ ] Test teacher request is routed.
 - [ ] Test child request is routed.

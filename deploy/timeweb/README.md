@@ -13,7 +13,7 @@ Deploy the family AI orchestrator as a Timeweb App Platform Docker Compose appli
 - PostgreSQL DBaaS ID: `4190345`.
 - S3 bucket: `family-ai-prod-dq508761`, private Hot 10 GB.
 - Timeweb AI: five private GPT 4.1 mini agents mapped to family roles through Agent API Access IDs.
-- Last verified deploy: commit `bf044226476d518c5588a77b80355e491b5be310`, `/health` returned 200 OK.
+- Last verified deploy: commit `5ad8ca8be505ceb6ebbdc036faed8f93eab6c347`, `/health` returned 200 OK.
 
 ## Services
 
@@ -43,13 +43,14 @@ Completed:
 - Owner, daughter, and teacher Telegram webhooks are registered.
 - Telegram replies use webhook-response mode for the first visible answer because direct outbound `sendMessage` from Timeweb is not reliable in this runtime.
 - Telegram `/start` uses a fast local webhook-response after user and bot-role authorization, which avoids Telegram webhook timeout on first bot start without bypassing access control.
-- Normal Telegram messages use a fast visible webhook acknowledgement before AI routing, then attempt the final AI answer asynchronously through the dedicated bot sender.
+- Normal Telegram messages use a fast visible webhook acknowledgement before AI routing. Background AI processing can run, but it does not call Telegram `sendMessage` from Timeweb until a reliable Telegram relay is added.
 - Owner, daughter, and teacher webhooks are registered with the App Platform IP address and protected by dedicated Telegram webhook secrets.
+- Owner, daughter, and teacher webhooks use `max_connections=1`.
 - `/health` returns 200 OK.
 
 Remaining:
 
-1. Send a fresh test message from each allowed Telegram account in their dedicated bot after the `bf04422` deploy.
+1. Send a fresh test message from each allowed Telegram account in their dedicated bot after the `5ad8ca8` deploy.
 2. Connect material/file upload to the private S3 bucket.
 3. Add teacher workspace APIs and web cabinet.
 
