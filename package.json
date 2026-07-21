@@ -17,7 +17,9 @@
     "telegram:webhook:info": "node scripts/telegram-webhook.js info",
     "telegram:webhooks:info": "node scripts/telegram-webhook.js info all",
     "production:health": "node scripts/production-health.js",
+    "relay:start": "node apps/telegram-relay/src/node-server.js",
     "test": "node --test",
+    "test:relay": "node --test apps/telegram-relay/test/*.test.js",
     "test:domain": "node --test packages/domain/test/*.test.js"
   },
   "workspaces": [

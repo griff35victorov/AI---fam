@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { TelegramBotSender } from "../src/telegram-sender.js";
+import { TelegramBotSender, TelegramRelaySender } from "../src/telegram-sender.js";
 
 test("TelegramBotSender sends a Telegram message through Bot API", async () => {
   const calls = [];
@@ -131,5 +131,50 @@ test("TelegramBotSender reports failed Bot API response status", async () => {
   await assert.rejects(
     () => sender.sendMessage({ chatId: 777, text: "hello" }),
     /Telegram sendMessage failed with 429/,
+  );
+});
+
+test("TelegramRelaySender sends a message through protected relay endpoint", async () => {
+  const calls = [];
+  const sender = new TelegramRelaySender({
+    relayUrl: "https://relay.example/",
+    relaySecret: "relay-secret",
+    botKey: "owner",
+    fetchImpl: async (url, options) => {
+      calls.push({ url, options });
+      return {
+        ok: true,
+        status: 200,
+        async json() {
+          return { ok: true, result: { message_id: 45 } };
+        },
+      };
+    },
+  });
+
+  const result = await sender.sendMessage({ chatId: 777, text: "hello relay" });
+
+  assert.deepEqual(result, { ok: true, result: { message_id: 45 } });
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].url, "https://relay.example/telegram/owner/send");
+  assert.deepEqual(calls[0].options.headers, {
+    "content-type": "application/json",
+    "x-family-ai-relay-secret": "relay-secret",
+  });
+  assert.deepEqual(JSON.parse(calls[0].options.body), {
+    chat_id: 777,
+    text: "hello relay",
+  });
+});
+
+test("TelegramRelaySender requires relay configuration", async () => {
+  const sender = new TelegramRelaySender({
+    relayUrl: "https://relay.example",
+    botKey: "owner",
+  });
+
+  await assert.rejects(
+    () => sender.sendMessage({ chatId: 777, text: "hello" }),
+    /TELEGRAM_RELAY_SECRET is required/,
   );
 });

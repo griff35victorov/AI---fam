@@ -57,6 +57,78 @@ export class TelegramBotSender {
   }
 }
 
+export class TelegramRelaySender {
+  constructor({
+    relayUrl,
+    relaySecret,
+    botKey,
+    fetchImpl = fetch,
+    maxAttempts = 3,
+    retryDelayMs = 500,
+  } = {}) {
+    this.relayUrl = relayUrl?.replace(/\/+$/, "");
+    this.relaySecret = relaySecret;
+    this.botKey = botKey;
+    this.fetchImpl = fetchImpl;
+    this.maxAttempts = maxAttempts;
+    this.retryDelayMs = retryDelayMs;
+  }
+
+  async sendMessage({ chatId, text }) {
+    if (!this.relayUrl) {
+      throw new Error("TELEGRAM_RELAY_URL is required");
+    }
+
+    if (!this.relaySecret) {
+      throw new Error("TELEGRAM_RELAY_SECRET is required");
+    }
+
+    if (!this.botKey) {
+      throw new Error("TELEGRAM_RELAY_BOT_KEY is required");
+    }
+
+    const attempts = Math.max(1, Number(this.maxAttempts) || 1);
+    let lastError;
+
+    for (let attempt = 1; attempt <= attempts; attempt += 1) {
+      try {
+        const response = await this.fetchImpl(`${this.relayUrl}/telegram/${this.botKey}/send`, {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "x-family-ai-relay-secret": this.relaySecret,
+          },
+          body: JSON.stringify({ chat_id: chatId, text }),
+        });
+
+        if (response.ok) {
+          return response.json();
+        }
+
+        lastError = new Error(`Telegram relay send failed with ${response.status}`);
+        if (!telegramStatusIsRetryable(response.status) || attempt === attempts) {
+          throw lastError;
+        }
+      } catch (error) {
+        lastError =
+          error === lastError
+            ? error
+            : new Error(`Telegram relay send network failed: ${error.message}`, {
+                cause: error,
+              });
+
+        if (attempt === attempts || error === lastError) {
+          throw lastError;
+        }
+      }
+
+      await delay(this.retryDelayMs);
+    }
+
+    throw lastError;
+  }
+}
+
 function telegramStatusIsRetryable(status) {
   return status === 429 || status >= 500;
 }

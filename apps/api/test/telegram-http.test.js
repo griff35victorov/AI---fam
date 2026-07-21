@@ -405,6 +405,87 @@ test("POST /telegram/teacher/webhook closes immediate response and runs AI witho
   assert.deepEqual(sentMessages, []);
 });
 
+test("POST /telegram/teacher/webhook sends background AI answer through relay sender when configured", async () => {
+  const sentMessages = [];
+  const calls = [];
+
+  await withServer(
+    {
+      users,
+      orchestrator: async (request) => {
+        calls.push(request);
+        return { answer: { text: "Teacher async answer" } };
+      },
+      dependencies: {
+        telegramReplyMode: "webhook_response",
+        telegramBackgroundDelayMs: 0,
+        telegramBackgroundSenders: {
+          teacher: {
+            async sendMessage(message) {
+              sentMessages.push(message);
+              return { ok: true };
+            },
+          },
+        },
+      },
+    },
+    async (baseUrl) => {
+      const response = await postJson(`${baseUrl}/telegram/teacher/webhook`, {
+        update_id: 124,
+        message: {
+          chat: { id: 777 },
+          from: { id: 200 },
+          text: "lesson for B1",
+        },
+      });
+
+      assert.equal(response.status, 200);
+      const body = await response.json();
+      assert.equal(body.method, "sendMessage");
+      assert.equal(body.chat_id, 777);
+      assert.notEqual(body.text, "Teacher async answer");
+
+      await waitFor(
+        () => sentMessages.length === 1,
+        1000,
+        "background relay sender was not called",
+      );
+    },
+  );
+
+  assert.equal(calls.length, 1);
+  assert.deepEqual(sentMessages, [{ chatId: 777, text: "Teacher async answer" }]);
+});
+
+test("POST /telegram/owner/webhook fails closed when production secret is required but missing", async () => {
+  await withServer(
+    {
+      dependencies: {
+        telegramRequireWebhookSecret: true,
+      },
+      users,
+      orchestrator: async () => {
+        throw new Error("orchestrator should not be called");
+      },
+    },
+    async (baseUrl) => {
+      const response = await postJson(`${baseUrl}/telegram/owner/webhook`, {
+        update_id: 125,
+        message: {
+          chat: { id: 777 },
+          from: { id: 100 },
+          text: "hello",
+        },
+      });
+
+      assert.equal(response.status, 503);
+      assert.deepEqual(await response.json(), {
+        error: "telegram_webhook_secret_not_configured",
+      });
+    },
+  );
+});
+
 test("POST /telegram/webhook rejects missing webhook secret when configured", async () => {
   await withServer(
     {
