@@ -3,7 +3,11 @@ import test from "node:test";
 
 import { createInMemoryRepositories } from "../../../packages/db/src/index.js";
 import { createAppServerFromEnv, createAppServerFromEnvAsync } from "../src/server.js";
-import { createProductionDependencies } from "../src/production-runtime.js";
+import {
+  createProductionDependencies,
+  createTelegramSenders,
+  parseTelegramWebhookSecrets,
+} from "../src/production-runtime.js";
 
 function jsonResponse(body) {
   return {
@@ -114,6 +118,44 @@ test("production dependencies also read individual Timeweb agent id env vars", a
     calls[0][0],
     "https://agent.timeweb.cloud/api/v1/cloud-ai/agents/agent-design/v1/chat/completions",
   );
+});
+
+test("production dependencies create dedicated Telegram bot senders and secrets", async () => {
+  const dependencies = createProductionDependencies({
+    env: {
+      TELEGRAM_OWNER_BOT_TOKEN: "owner-token",
+      TELEGRAM_DAUGHTER_BOT_TOKEN: "daughter-token",
+      TELEGRAM_TEACHER_BOT_TOKEN: "teacher-token",
+      TELEGRAM_OWNER_WEBHOOK_SECRET: "owner-secret",
+      TELEGRAM_DAUGHTER_WEBHOOK_SECRET: "daughter-secret",
+      TELEGRAM_TEACHER_WEBHOOK_SECRET: "teacher-secret",
+    },
+    repositories: createInMemoryRepositories(),
+    fetchImpl: async () => jsonResponse({ ok: true, result: true }),
+  });
+
+  assert.deepEqual(Object.keys(dependencies.telegramSenders).sort(), [
+    "daughter",
+    "owner",
+    "teacher",
+  ]);
+  assert.deepEqual(dependencies.telegramWebhookSecrets, {
+    owner: "owner-secret",
+    daughter: "daughter-secret",
+    teacher: "teacher-secret",
+  });
+});
+
+test("createTelegramSenders and parseTelegramWebhookSecrets ignore missing bot env", () => {
+  const senders = createTelegramSenders({
+    TELEGRAM_OWNER_BOT_TOKEN: "owner-token",
+  });
+  const secrets = parseTelegramWebhookSecrets({
+    TELEGRAM_TEACHER_WEBHOOK_SECRET: "teacher-secret",
+  });
+
+  assert.deepEqual(Object.keys(senders), ["owner"]);
+  assert.deepEqual(secrets, { teacher: "teacher-secret" });
 });
 
 test("production dependencies ignore empty env overrides", async () => {

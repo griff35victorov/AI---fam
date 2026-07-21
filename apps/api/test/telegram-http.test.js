@@ -134,6 +134,47 @@ test("POST /telegram/webhook sends Telegram message when sender is configured", 
   assert.deepEqual(sentMessages, [{ chatId: 777, text: "Lesson sent" }]);
 });
 
+test("POST /telegram/teacher/webhook uses the dedicated teacher bot sender", async () => {
+  const sentMessages = [];
+  const calls = [];
+
+  await withServer(
+    {
+      users,
+      orchestrator: async (request) => {
+        calls.push(request);
+        return { answer: { text: "Teacher bot answer" } };
+      },
+      dependencies: {
+        telegramSenders: {
+          teacher: {
+            async sendMessage(message) {
+              sentMessages.push(message);
+              return { ok: true };
+            },
+          },
+        },
+      },
+    },
+    async (baseUrl) => {
+      const response = await postJson(`${baseUrl}/telegram/teacher/webhook`, {
+        update_id: 22,
+        message: {
+          chat: { id: 777 },
+          from: { id: 200 },
+          text: "lesson for B1",
+        },
+      });
+
+      assert.equal(response.status, 200);
+      assert.equal((await response.json()).text, "Teacher bot answer");
+    },
+  );
+
+  assert.equal(calls[0].telegramBotKey, "teacher");
+  assert.deepEqual(sentMessages, [{ chatId: 777, text: "Teacher bot answer" }]);
+});
+
 test("POST /telegram/webhook rejects missing webhook secret when configured", async () => {
   await withServer(
     {
@@ -193,6 +234,72 @@ test("POST /telegram/webhook accepts matching webhook secret", async () => {
       assert.equal((await response.json()).text, "Secret ok");
     },
   );
+});
+
+test("POST /telegram/teacher/webhook uses dedicated webhook secret", async () => {
+  await withServer(
+    {
+      dependencies: {
+        telegramWebhookSecret: "default-secret",
+        telegramWebhookSecrets: {
+          teacher: "teacher-secret",
+        },
+      },
+      users,
+      orchestrator: async () => ({ answer: { text: "Teacher secret ok" } }),
+    },
+    async (baseUrl) => {
+      const response = await fetch(`${baseUrl}/telegram/teacher/webhook`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-telegram-bot-api-secret-token": "teacher-secret",
+        },
+        body: JSON.stringify({
+          update_id: 44,
+          message: {
+            chat: { id: 777 },
+            from: { id: 200 },
+            text: "lesson for B1",
+          },
+        }),
+      });
+
+      assert.equal(response.status, 200);
+      assert.equal((await response.json()).text, "Teacher secret ok");
+    },
+  );
+});
+
+test("POST /telegram/daughter/webhook rejects teacher account", async () => {
+  let orchestratorCalled = false;
+
+  await withServer(
+    {
+      users,
+      orchestrator: async () => {
+        orchestratorCalled = true;
+        return { answer: { text: "should not happen" } };
+      },
+    },
+    async (baseUrl) => {
+      const response = await postJson(`${baseUrl}/telegram/daughter/webhook`, {
+        update_id: 45,
+        message: {
+          chat: { id: 777 },
+          from: { id: 200 },
+          text: "lesson for B1",
+        },
+      });
+
+      const body = await response.json();
+      assert.equal(response.status, 200);
+      assert.equal(body.ok, true);
+      assert.equal(body.chatId, 777);
+    },
+  );
+
+  assert.equal(orchestratorCalled, false);
 });
 
 test("POST /telegram/webhook returns refusal text for unknown Telegram user", async () => {

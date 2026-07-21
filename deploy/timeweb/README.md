@@ -43,9 +43,9 @@ Remaining:
 
 1. Add real `FAMILY_AI_BOOTSTRAP_USERS` records and set `FAMILY_AI_BOOTSTRAP_USERS_ALLOW_WRITE=1` for exactly one deploy.
 2. Return `FAMILY_AI_BOOTSTRAP_USERS_ALLOW_WRITE=0` after users are created.
-3. Add `TELEGRAM_BOT_TOKEN`, `TELEGRAM_WEBHOOK_SECRET`, and `APP_PUBLIC_URL`.
-4. Run `npm run telegram:webhook:set`.
-5. Send a test message from each allowed Telegram account.
+3. Add `TELEGRAM_OWNER_BOT_TOKEN`, `TELEGRAM_DAUGHTER_BOT_TOKEN`, `TELEGRAM_TEACHER_BOT_TOKEN`, webhook secrets, and `APP_PUBLIC_URL`.
+4. Run `npm run telegram:webhooks:set`.
+5. Send a test message from each allowed Telegram account in their dedicated bot.
 
 Telegram access is controlled by `User.telegramUserId` records in PostgreSQL.
 `TELEGRAM_ALLOWED_USER_IDS` is not used by the runtime.
@@ -60,8 +60,11 @@ Read-only inventory on 2026-07-21:
 
 - `npm run users:bootstrap` - upserts family Telegram users into PostgreSQL. Requires `FAMILY_AI_BOOTSTRAP_USERS_ALLOW_WRITE=1`.
 - `npm run telegram:webhook:set` - registers `APP_PUBLIC_URL/telegram/webhook` in Telegram after validating the bot token.
+- `npm run telegram:webhooks:set` - registers `owner`, `daughter`, and `teacher` dedicated bot webhooks.
 - `npm run telegram:webhook:info` - reads Telegram webhook status.
+- `npm run telegram:webhooks:info` - reads dedicated bot webhook statuses.
 - `npm run telegram:webhook:delete` - removes Telegram webhook.
+- `npm run telegram:webhooks:delete` - removes dedicated bot webhooks.
 - `npm run production:health` - checks `APP_PUBLIC_URL/health`.
 
 ## Docker Compose Notes

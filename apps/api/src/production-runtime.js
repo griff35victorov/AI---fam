@@ -4,6 +4,11 @@ import { TelegramBotSender } from "./telegram-sender.js";
 
 const defaultTimewebBaseUrl = "https://agent.timeweb.cloud";
 const defaultWorkspaceId = "workspace-family";
+const telegramBotEnv = {
+  owner: "TELEGRAM_OWNER_BOT_TOKEN",
+  daughter: "TELEGRAM_DAUGHTER_BOT_TOKEN",
+  teacher: "TELEGRAM_TEACHER_BOT_TOKEN",
+};
 
 function agentProfileFromEnvName(name) {
   return name.toLowerCase();
@@ -40,8 +45,50 @@ function resolveTelegramBotToken(env) {
     envValue(env.TELEGRAM_BOT_TOKEN) ??
     envValue(env.TELEGRAM_FAMILY_BOT_TOKEN) ??
     envValue(env.TELEGRAM_OWNER_BOT_TOKEN) ??
+    envValue(env.TELEGRAM_DAUGHTER_BOT_TOKEN) ??
     envValue(env.TELEGRAM_TEACHER_BOT_TOKEN)
   );
+}
+
+function resolveTelegramBotTokenForKey(env, botKey) {
+  const envName = telegramBotEnv[botKey];
+  return envName ? envValue(env[envName]) : undefined;
+}
+
+function resolveTelegramWebhookSecretForKey(env, botKey) {
+  const envName = `TELEGRAM_${botKey.toUpperCase()}_WEBHOOK_SECRET`;
+  return envValue(env[envName]);
+}
+
+export function createTelegramSenders(env = {}, fetchImpl = fetch) {
+  const senders = {};
+
+  for (const botKey of Object.keys(telegramBotEnv)) {
+    const botToken = resolveTelegramBotTokenForKey(env, botKey);
+    if (!botToken) {
+      continue;
+    }
+
+    senders[botKey] = new TelegramBotSender({
+      botToken,
+      fetchImpl,
+    });
+  }
+
+  return senders;
+}
+
+export function parseTelegramWebhookSecrets(env = {}) {
+  const secrets = {};
+
+  for (const botKey of Object.keys(telegramBotEnv)) {
+    const secret = resolveTelegramWebhookSecretForKey(env, botKey);
+    if (secret) {
+      secrets[botKey] = secret;
+    }
+  }
+
+  return secrets;
 }
 
 export function createProductionDependencies({
@@ -54,6 +101,7 @@ export function createProductionDependencies({
     repositories: repositories ?? (prisma ? createPrismaRepositories(prisma) : undefined),
     workspaceId: envValue(env.APP_DEFAULT_WORKSPACE_ID) ?? defaultWorkspaceId,
     telegramWebhookSecret: envValue(env.TELEGRAM_WEBHOOK_SECRET),
+    telegramWebhookSecrets: parseTelegramWebhookSecrets(env),
     aiProvider: new TimewebAiProvider({
       baseUrl: envValue(env.TIMEWEB_AI_BASE_URL) ?? defaultTimewebBaseUrl,
       apiKey: envValue(env.TIMEWEB_AI_API_KEY),
@@ -64,5 +112,6 @@ export function createProductionDependencies({
       botToken: resolveTelegramBotToken(env),
       fetchImpl,
     }),
+    telegramSenders: createTelegramSenders(env, fetchImpl),
   };
 }

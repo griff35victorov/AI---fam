@@ -16,6 +16,8 @@ Date: 2026-07-21
 - Telegram update idempotency for repeated webhook deliveries.
 - Telegram Bot API outbound sender for `sendMessage`.
 - Telegram webhook secret header validation.
+- Dedicated owner, daughter, and teacher Telegram webhook routes with role-bound access checks.
+- Telegram webhook CLI support for registering one bot or all three dedicated family bots.
 - In-memory repositories for users, memories, conversations, reminders, and jobs.
 - Prisma/PostgreSQL repository adapter for users, memories, conversations, reminders, and jobs.
 - Async production startup hook that can create Prisma repositories when `DATABASE_URL` is set.
@@ -37,12 +39,12 @@ Date: 2026-07-21
 - Timeweb Agent API adapter verified against `agent.timeweb.cloud` OpenAI-compatible endpoint.
 - App Platform env updated with S3 credentials, Agent API base URL, AI token, and agent Access ID mappings.
 - Prisma schema and initial migration artifact for users, conversations, memory, students, lessons, materials, reminders, jobs, usage, and audit logs.
-- Local automated test suite: 104 passing tests.
+- Local automated test suite: 114 passing tests.
 
 ## Not Implemented Yet
 
 - Live PostgreSQL smoke write test from inside Timeweb runtime.
-- Telegram bot token and webhook registration in App Platform.
+- Real Telegram bot tokens and webhook registration in App Platform.
 - Application-level S3 object upload workflow and teacher material ingestion.
 - Web cabinet for owner and teacher.
 - Authentication UI.
@@ -63,6 +65,7 @@ Date: 2026-07-21
 ## Next Engineering Slice
 
 1. Add real family Telegram user IDs and run guarded user bootstrap.
-2. Create/configure Telegram bot token and webhook secret, then register webhook.
-3. Connect material/file upload to the private S3 bucket.
-4. Add teacher workspace API for students, materials, lessons, and lesson notes.
+2. Add owner, daughter, and teacher bot tokens and webhook secrets to App Platform.
+3. Register all three Telegram webhooks.
+4. Connect material/file upload to the private S3 bucket.
+5. Add teacher workspace API for students, materials, lessons, and lesson notes.

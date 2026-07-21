@@ -6,6 +6,7 @@ import {
   handleTelegramUpdate,
   inferIntentFromText,
   resolveTelegramActor,
+  telegramBotAcceptsActor,
 } from "../src/telegram.js";
 
 const users = [
@@ -26,6 +27,14 @@ test("resolveTelegramActor returns null for unknown telegram user", () => {
   assert.equal(actor, null);
 });
 
+test("telegramBotAcceptsActor enforces dedicated family bot roles", () => {
+  assert.equal(telegramBotAcceptsActor("owner", { role: "owner" }), true);
+  assert.equal(telegramBotAcceptsActor("daughter", { role: "family_child" }), true);
+  assert.equal(telegramBotAcceptsActor("teacher", { role: "teacher" }), true);
+  assert.equal(telegramBotAcceptsActor("daughter", { role: "teacher" }), false);
+  assert.equal(telegramBotAcceptsActor(undefined, { role: "teacher" }), true);
+});
+
 test("inferIntentFromText uses role and text to choose first route", () => {
   assert.equal(inferIntentFromText({ role: "owner" }, "Сделай дизайн беседки 3 на 4"), "gazebo_design");
   assert.equal(inferIntentFromText({ role: "teacher" }, "Подготовь урок для B1"), "lesson_preparation");
@@ -42,13 +51,30 @@ test("buildTelegramRequest creates orchestrator request from message update", ()
         text: "Посчитай материалы для беседки",
       },
     },
-    { users },
+    { users, botKey: "owner" },
   );
 
   assert.equal(request.chatId, 777);
   assert.equal(request.actor.id, "owner-1");
   assert.equal(request.intent, "gazebo_design");
+  assert.equal(request.telegramBotKey, "owner");
   assert.equal(request.text, "Посчитай материалы для беседки");
+});
+
+test("buildTelegramRequest rejects users in the wrong dedicated bot", () => {
+  const request = buildTelegramRequest(
+    {
+      message: {
+        chat: { id: 777 },
+        from: { id: 200 },
+        text: "lesson",
+      },
+    },
+    { users, botKey: "daughter" },
+  );
+
+  assert.equal(request.rejected, true);
+  assert.equal(request.reason, "telegram_bot_role_mismatch");
 });
 
 test("handleTelegramUpdate rejects unknown telegram users", async () => {

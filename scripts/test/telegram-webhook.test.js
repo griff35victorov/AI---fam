@@ -26,6 +26,18 @@ test("buildTelegramWebhookUrl uses the public app URL", () => {
   );
 });
 
+test("buildTelegramWebhookUrl uses a dedicated bot path", () => {
+  assert.equal(
+    buildTelegramWebhookUrl(
+      {
+        APP_PUBLIC_URL: "https://family.example.ru/",
+      },
+      { botKey: "teacher" },
+    ),
+    "https://family.example.ru/telegram/teacher/webhook",
+  );
+});
+
 test("setTelegramWebhook validates bot and registers secret webhook", async () => {
   const calls = [];
   const result = await setTelegramWebhook({
@@ -51,6 +63,61 @@ test("setTelegramWebhook validates bot and registers secret webhook", async () =
     allowed_updates: ["message"],
     secret_token: "secret-token",
     drop_pending_updates: true,
+  });
+});
+
+test("setTelegramWebhook can register a dedicated daughter bot webhook", async () => {
+  const calls = [];
+  await setTelegramWebhook({
+    botKey: "daughter",
+    env: {
+      TELEGRAM_DAUGHTER_BOT_TOKEN: "daughter-token",
+      APP_PUBLIC_URL: "https://family.example.ru",
+      TELEGRAM_DAUGHTER_WEBHOOK_SECRET: "daughter-secret",
+      TELEGRAM_API_BASE_URL: "https://telegram.example",
+    },
+    fetchImpl: async (url, options) => {
+      calls.push({ url, options });
+      return jsonResponse({ ok: true, result: true });
+    },
+  });
+
+  assert.equal(calls[0].url, "https://telegram.example/botdaughter-token/getMe");
+  assert.equal(calls[1].url, "https://telegram.example/botdaughter-token/setWebhook");
+  assert.deepEqual(JSON.parse(calls[1].options.body), {
+    url: "https://family.example.ru/telegram/daughter/webhook",
+    allowed_updates: ["message"],
+    secret_token: "daughter-secret",
+  });
+});
+
+test("runTelegramWebhookCli can register all dedicated bot webhooks", async () => {
+  const calls = [];
+
+  const exitCode = await runTelegramWebhookCli({
+    argv: ["set", "all"],
+    env: {
+      TELEGRAM_OWNER_BOT_TOKEN: "owner-token",
+      TELEGRAM_DAUGHTER_BOT_TOKEN: "daughter-token",
+      TELEGRAM_TEACHER_BOT_TOKEN: "teacher-token",
+      APP_PUBLIC_URL: "https://family.example.ru",
+      TELEGRAM_API_BASE_URL: "https://telegram.example",
+    },
+    stdout: { write() {} },
+    fetchImpl: async (url, options) => {
+      calls.push({ url, options });
+      return jsonResponse({ ok: true, result: true });
+    },
+  });
+
+  assert.equal(exitCode, 0);
+  assert.equal(calls.length, 6);
+  assert.equal(calls[1].url, "https://telegram.example/botowner-token/setWebhook");
+  assert.equal(calls[3].url, "https://telegram.example/botdaughter-token/setWebhook");
+  assert.equal(calls[5].url, "https://telegram.example/botteacher-token/setWebhook");
+  assert.deepEqual(JSON.parse(calls[5].options.body), {
+    url: "https://family.example.ru/telegram/teacher/webhook",
+    allowed_updates: ["message"],
   });
 });
 

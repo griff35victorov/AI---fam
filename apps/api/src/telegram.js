@@ -2,6 +2,12 @@ const accessNotConfiguredText =
   "Доступ не настроен. Обратитесь к владельцу семейного оркестратора.";
 const defaultProcessedText = "Принял. Задача обработана.";
 
+const expectedRoleByBotKey = {
+  owner: "owner",
+  daughter: "family_child",
+  teacher: "teacher",
+};
+
 function actorFromUser(user) {
   const actor = {
     id: user.id,
@@ -33,6 +39,11 @@ export async function resolveTelegramActorFromRepositories(message, repositories
   return actorFromUser(user);
 }
 
+export function telegramBotAcceptsActor(botKey, actor) {
+  const expectedRole = expectedRoleByBotKey[botKey];
+  return !expectedRole || actor?.role === expectedRole;
+}
+
 export function inferIntentFromText(actor, text) {
   const normalized = text.toLowerCase();
 
@@ -56,7 +67,7 @@ export function inferIntentFromText(actor, text) {
   return "household";
 }
 
-export function buildTelegramRequest(update, { users }) {
+export function buildTelegramRequest(update, { users, botKey } = {}) {
   const message = update.message;
   const actor = resolveTelegramActor(message, users);
   if (!actor) {
@@ -67,25 +78,11 @@ export function buildTelegramRequest(update, { users }) {
     };
   }
 
-  const text = message.text ?? "";
-
-  return {
-    chatId: message.chat.id,
-    actor,
-    intent: inferIntentFromText(actor, text),
-    text,
-    telegramUpdateId: update.update_id,
-  };
-}
-
-export async function buildTelegramRequestFromRepositories(update, { repositories }) {
-  const message = update.message;
-  const actor = await resolveTelegramActorFromRepositories(message, repositories);
-  if (!actor) {
+  if (!telegramBotAcceptsActor(botKey, actor)) {
     return {
       chatId: message?.chat?.id,
       rejected: true,
-      reason: "unknown_telegram_user",
+      reason: "telegram_bot_role_mismatch",
     };
   }
 
@@ -97,6 +94,38 @@ export async function buildTelegramRequestFromRepositories(update, { repositorie
     intent: inferIntentFromText(actor, text),
     text,
     telegramUpdateId: update.update_id,
+    telegramBotKey: botKey,
+  };
+}
+
+export async function buildTelegramRequestFromRepositories(update, { repositories, botKey } = {}) {
+  const message = update.message;
+  const actor = await resolveTelegramActorFromRepositories(message, repositories);
+  if (!actor) {
+    return {
+      chatId: message?.chat?.id,
+      rejected: true,
+      reason: "unknown_telegram_user",
+    };
+  }
+
+  if (!telegramBotAcceptsActor(botKey, actor)) {
+    return {
+      chatId: message?.chat?.id,
+      rejected: true,
+      reason: "telegram_bot_role_mismatch",
+    };
+  }
+
+  const text = message.text ?? "";
+
+  return {
+    chatId: message.chat.id,
+    actor,
+    intent: inferIntentFromText(actor, text),
+    text,
+    telegramUpdateId: update.update_id,
+    telegramBotKey: botKey,
   };
 }
 
@@ -110,11 +139,11 @@ async function sendTelegramReply(telegramSender, { chatId, text }) {
 
 export async function handleTelegramUpdate(
   update,
-  { users = [], repositories, orchestrator, telegramSender },
+  { users = [], repositories, orchestrator, telegramSender, botKey },
 ) {
   const request = repositories?.users
-    ? await buildTelegramRequestFromRepositories(update, { repositories })
-    : buildTelegramRequest(update, { users });
+    ? await buildTelegramRequestFromRepositories(update, { repositories, botKey })
+    : buildTelegramRequest(update, { users, botKey });
 
   if (request.rejected) {
     const text = accessNotConfiguredText;

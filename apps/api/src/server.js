@@ -30,6 +30,35 @@ function telegramWebhookSecretIsValid(request, secret) {
   return request.headers["x-telegram-bot-api-secret-token"] === secret;
 }
 
+function parseTelegramWebhookRoute(url) {
+  if (url === "/telegram/webhook") {
+    return { botKey: undefined };
+  }
+
+  const match = url?.match(/^\/telegram\/(owner|daughter|teacher)\/webhook$/);
+  if (!match) {
+    return null;
+  }
+
+  return { botKey: match[1] };
+}
+
+function resolveTelegramSender({ botKey, telegramSender, telegramSenders }) {
+  if (!botKey) {
+    return telegramSender;
+  }
+
+  return telegramSenders?.[botKey];
+}
+
+function resolveTelegramWebhookSecret({ botKey, telegramWebhookSecret, telegramWebhookSecrets }) {
+  if (!botKey) {
+    return telegramWebhookSecret;
+  }
+
+  return telegramWebhookSecrets?.[botKey] ?? telegramWebhookSecret;
+}
+
 function envValue(value) {
   return typeof value === "string" && value.trim() === "" ? undefined : value;
 }
@@ -38,8 +67,11 @@ export function createAppServer(options = {}) {
   const dependencies = options.dependencies ?? {};
   const repositories = options.repositories ?? dependencies.repositories;
   const telegramSender = options.telegramSender ?? dependencies.telegramSender;
+  const telegramSenders = options.telegramSenders ?? dependencies.telegramSenders ?? {};
   const telegramWebhookSecret =
     options.telegramWebhookSecret ?? dependencies.telegramWebhookSecret;
+  const telegramWebhookSecrets =
+    options.telegramWebhookSecrets ?? dependencies.telegramWebhookSecrets ?? {};
   const users = options.users ?? dependencies.users ?? [];
   const orchestrator =
     options.orchestrator ??
@@ -65,8 +97,17 @@ export function createAppServer(options = {}) {
         return;
       }
 
-      if (request.method === "POST" && request.url === "/telegram/webhook") {
-        if (!telegramWebhookSecretIsValid(request, telegramWebhookSecret)) {
+      const telegramWebhookRoute =
+        request.method === "POST" ? parseTelegramWebhookRoute(request.url) : null;
+
+      if (telegramWebhookRoute) {
+        const botKey = telegramWebhookRoute.botKey;
+        const routeSecret = resolveTelegramWebhookSecret({
+          botKey,
+          telegramWebhookSecret,
+          telegramWebhookSecrets,
+        });
+        if (!telegramWebhookSecretIsValid(request, routeSecret)) {
           sendJson(response, 401, { error: "telegram_webhook_secret_invalid" });
           return;
         }
@@ -76,7 +117,8 @@ export function createAppServer(options = {}) {
           users,
           repositories,
           orchestrator,
-          telegramSender,
+          telegramSender: resolveTelegramSender({ botKey, telegramSender, telegramSenders }),
+          botKey,
         });
         sendJson(response, 200, { ok: true, ...result });
         return;

@@ -1,6 +1,12 @@
 import { fileURLToPath } from "node:url";
 
 const defaultTelegramBaseUrl = "https://api.telegram.org";
+const telegramBotKeys = ["owner", "daughter", "teacher"];
+const telegramBotTokenEnv = {
+  owner: "TELEGRAM_OWNER_BOT_TOKEN",
+  daughter: "TELEGRAM_DAUGHTER_BOT_TOKEN",
+  teacher: "TELEGRAM_TEACHER_BOT_TOKEN",
+};
 
 function envValue(value) {
   return typeof value === "string" && value.trim() === "" ? undefined : value;
@@ -19,11 +25,21 @@ function publicBaseUrlFromEnv(env) {
   return value.replace(/\/+$/, "");
 }
 
-function botTokenFromEnv(env) {
+function botTokenFromEnv(env, botKey) {
+  if (botKey) {
+    const token = envValue(env[telegramBotTokenEnv[botKey]]);
+    if (!token) {
+      throw new Error(`TELEGRAM_${botKey.toUpperCase()}_BOT_TOKEN is required`);
+    }
+
+    return token;
+  }
+
   const token =
     envValue(env.TELEGRAM_BOT_TOKEN) ??
     envValue(env.TELEGRAM_FAMILY_BOT_TOKEN) ??
     envValue(env.TELEGRAM_OWNER_BOT_TOKEN) ??
+    envValue(env.TELEGRAM_DAUGHTER_BOT_TOKEN) ??
     envValue(env.TELEGRAM_TEACHER_BOT_TOKEN);
 
   if (!token) {
@@ -31,6 +47,15 @@ function botTokenFromEnv(env) {
   }
 
   return token;
+}
+
+function telegramWebhookSecretFromEnv(env, botKey) {
+  if (!botKey) {
+    return envValue(env.TELEGRAM_WEBHOOK_SECRET);
+  }
+
+  return envValue(env[`TELEGRAM_${botKey.toUpperCase()}_WEBHOOK_SECRET`]) ??
+    envValue(env.TELEGRAM_WEBHOOK_SECRET);
 }
 
 async function parseTelegramResponse(response, methodName) {
@@ -49,13 +74,17 @@ async function parseTelegramResponse(response, methodName) {
   return body;
 }
 
-export function buildTelegramWebhookUrl(env = process.env) {
-  return `${publicBaseUrlFromEnv(env)}/telegram/webhook`;
+export function buildTelegramWebhookUrl(env = process.env, { botKey } = {}) {
+  const baseUrl = publicBaseUrlFromEnv(env);
+  return botKey
+    ? `${baseUrl}/telegram/${botKey}/webhook`
+    : `${baseUrl}/telegram/webhook`;
 }
 
 export async function callTelegramMethod({
   methodName,
   payload = {},
+  botKey,
   env = process.env,
   fetchImpl = fetch,
 } = {}) {
@@ -63,7 +92,7 @@ export async function callTelegramMethod({
     throw new Error("Telegram method name is required");
   }
 
-  const token = botTokenFromEnv(env);
+  const token = botTokenFromEnv(env, botKey);
   const baseUrl = envValue(env.TELEGRAM_API_BASE_URL) ?? defaultTelegramBaseUrl;
   const response = await fetchImpl(`${baseUrl}/bot${token}/${methodName}`, {
     method: "POST",
@@ -75,21 +104,23 @@ export async function callTelegramMethod({
 }
 
 export async function setTelegramWebhook({
+  botKey,
   env = process.env,
   fetchImpl = fetch,
 } = {}) {
   await callTelegramMethod({
     methodName: "getMe",
+    botKey,
     env,
     fetchImpl,
   });
 
   const payload = {
-    url: buildTelegramWebhookUrl(env),
+    url: buildTelegramWebhookUrl(env, { botKey }),
     allowed_updates: ["message"],
   };
 
-  const secretToken = envValue(env.TELEGRAM_WEBHOOK_SECRET);
+  const secretToken = telegramWebhookSecretFromEnv(env, botKey);
   if (secretToken) {
     payload.secret_token = secretToken;
   }
@@ -101,12 +132,14 @@ export async function setTelegramWebhook({
   return callTelegramMethod({
     methodName: "setWebhook",
     payload,
+    botKey,
     env,
     fetchImpl,
   });
 }
 
 export async function deleteTelegramWebhook({
+  botKey,
   env = process.env,
   fetchImpl = fetch,
 } = {}) {
@@ -115,20 +148,63 @@ export async function deleteTelegramWebhook({
     payload: {
       drop_pending_updates: parseBoolean(env.TELEGRAM_DROP_PENDING_UPDATES),
     },
+    botKey,
     env,
     fetchImpl,
   });
 }
 
 export async function getTelegramWebhookInfo({
+  botKey,
   env = process.env,
   fetchImpl = fetch,
 } = {}) {
   return callTelegramMethod({
     methodName: "getWebhookInfo",
+    botKey,
     env,
     fetchImpl,
   });
+}
+
+function parseBotTarget(argv) {
+  const explicitBot = argv.find((item) => item?.startsWith("--bot="))?.slice("--bot=".length);
+  const positionalBot = argv.find((item, index) => index > 0 && !item?.startsWith("--"));
+  const botTarget = explicitBot ?? positionalBot;
+
+  if (!botTarget) {
+    return { botKeys: [undefined] };
+  }
+
+  if (botTarget === "all") {
+    return { botKeys: telegramBotKeys };
+  }
+
+  if (!telegramBotKeys.includes(botTarget)) {
+    throw new Error(`Unknown Telegram bot target "${botTarget}"`);
+  }
+
+  return { botKeys: [botTarget] };
+}
+
+async function runWebhookActionForBot({ action, botKey, env, fetchImpl }) {
+  const result =
+    action === "set"
+      ? await setTelegramWebhook({ botKey, env, fetchImpl })
+      : action === "delete"
+        ? await deleteTelegramWebhook({ botKey, env, fetchImpl })
+        : action === "info"
+          ? await getTelegramWebhookInfo({ botKey, env, fetchImpl })
+          : null;
+
+  if (!result) {
+    throw new Error("Usage: node scripts/telegram-webhook.js set|delete|info [owner|daughter|teacher|all]");
+  }
+
+  return {
+    botKey: botKey ?? "default",
+    result,
+  };
 }
 
 export async function runTelegramWebhookCli({
@@ -141,17 +217,10 @@ export async function runTelegramWebhookCli({
   const action = argv[0] ?? "set";
 
   try {
-    const result =
-      action === "set"
-        ? await setTelegramWebhook({ env, fetchImpl })
-        : action === "delete"
-          ? await deleteTelegramWebhook({ env, fetchImpl })
-          : action === "info"
-            ? await getTelegramWebhookInfo({ env, fetchImpl })
-            : null;
-
-    if (!result) {
-      throw new Error("Usage: node scripts/telegram-webhook.js set|delete|info");
+    const { botKeys } = parseBotTarget(argv);
+    const result = [];
+    for (const botKey of botKeys) {
+      result.push(await runWebhookActionForBot({ action, botKey, env, fetchImpl }));
     }
 
     stdout.write(`${JSON.stringify(result, null, 2)}\n`);

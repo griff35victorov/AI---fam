@@ -129,12 +129,28 @@ Production uses `TIMEWEB_AI_API_KEY`, `TIMEWEB_AI_BASE_URL`, and a profile-to-ag
 
 ## Telegram Integration
 
-The public webhook endpoint is `POST /telegram/webhook`. In production the API runtime creates a Telegram sender from `TELEGRAM_BOT_TOKEN` and sends the final assistant text back through Bot API `sendMessage` after the local orchestrator finishes.
+The production backend supports one legacy Telegram webhook and three dedicated
+family bot webhooks:
 
-Telegram webhook registration is handled by `npm run telegram:webhook:set`.
-It uses `APP_PUBLIC_URL`, `TELEGRAM_BOT_TOKEN`, and optional
-`TELEGRAM_WEBHOOK_SECRET`. The script validates the bot with `getMe`, then calls
-Telegram `setWebhook` with `allowed_updates: ["message"]`.
+- `POST /telegram/webhook` - legacy/default bot.
+- `POST /telegram/owner/webhook` - owner's assistant bot.
+- `POST /telegram/daughter/webhook` - daughter's learning bot.
+- `POST /telegram/teacher/webhook` - teacher/tutor assistant bot.
+
+In production the API runtime creates Telegram senders from
+`TELEGRAM_OWNER_BOT_TOKEN`, `TELEGRAM_DAUGHTER_BOT_TOKEN`, and
+`TELEGRAM_TEACHER_BOT_TOKEN`. Each dedicated bot route is role-bound: owner bot
+accepts only `owner`, daughter bot accepts only `family_child`, and teacher bot
+accepts only `teacher`.
+
+Telegram webhook registration is handled by `npm run telegram:webhooks:set` for
+all three dedicated bots, or by `node scripts/telegram-webhook.js set owner`,
+`set daughter`, and `set teacher` for one bot at a time. The script uses
+`APP_PUBLIC_URL`, the selected bot token, and optional
+`TELEGRAM_OWNER_WEBHOOK_SECRET`, `TELEGRAM_DAUGHTER_WEBHOOK_SECRET`,
+`TELEGRAM_TEACHER_WEBHOOK_SECRET` or fallback `TELEGRAM_WEBHOOK_SECRET`. It
+validates the bot with `getMe`, then calls Telegram `setWebhook` with
+`allowed_updates: ["message"]`.
 
 Telegram access is granted by rows in `User.telegramUserId`. Bootstrap initial
 family users with `FAMILY_AI_BOOTSTRAP_USERS` and
@@ -146,8 +162,11 @@ used by the runtime.
 
 - `users:bootstrap` - writes initial family users from `FAMILY_AI_BOOTSTRAP_USERS`.
 - `telegram:webhook:set` - registers the production webhook.
+- `telegram:webhooks:set` - registers owner, daughter, and teacher webhooks.
 - `telegram:webhook:info` - reads Telegram webhook status.
+- `telegram:webhooks:info` - reads owner, daughter, and teacher webhook status.
 - `telegram:webhook:delete` - removes the webhook.
+- `telegram:webhooks:delete` - removes owner, daughter, and teacher webhooks.
 - `production:health` - checks `APP_PUBLIC_URL/health`.
 
 ## S3 Integration
