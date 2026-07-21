@@ -58,8 +58,9 @@ function createDelegate(rows, idPrefix) {
       return clone(sortRows(matches, orderBy)[0] ?? null);
     },
 
-    async findMany({ where, orderBy } = {}) {
-      return sortRows(rows.filter((row) => matchesWhere(row, where)), orderBy).map(clone);
+    async findMany({ where, orderBy, take } = {}) {
+      const sortedRows = sortRows(rows.filter((row) => matchesWhere(row, where)), orderBy);
+      return (take == null ? sortedRows : sortedRows.slice(0, take)).map(clone);
     },
 
     async create({ data }) {
@@ -206,6 +207,51 @@ describe("Prisma repositories", () => {
     );
   });
 
+  it("limits visible memories to the latest records in creation order", async () => {
+    const repositories = createPrismaRepositories(
+      createFakePrisma({
+        memoryItems: [
+          {
+            id: "memory-1",
+            workspaceId: "workspace-family",
+            ownerUserId: "owner-1",
+            scope: "family",
+            sensitivity: "normal",
+            content: "First",
+            createdAt: new Date("2026-07-20T09:00:00.000Z"),
+          },
+          {
+            id: "memory-2",
+            workspaceId: "workspace-family",
+            ownerUserId: "owner-1",
+            scope: "family",
+            sensitivity: "normal",
+            content: "Second",
+            createdAt: new Date("2026-07-20T10:00:00.000Z"),
+          },
+          {
+            id: "memory-3",
+            workspaceId: "workspace-family",
+            ownerUserId: "owner-1",
+            scope: "family",
+            sensitivity: "normal",
+            content: "Third",
+            createdAt: new Date("2026-07-20T11:00:00.000Z"),
+          },
+        ],
+      }),
+    );
+
+    assert.deepEqual(
+      (await repositories.memories.listForActor({
+        actorUserId: "owner-1",
+        workspaceId: "workspace-family",
+        limit: 2,
+      })).map((memory) => memory.id),
+      ["memory-2", "memory-3"],
+    );
+  });
+
   it("appends and lists conversation messages", async () => {
     const repositories = createPrismaRepositories(
       createFakePrisma({
@@ -239,6 +285,43 @@ describe("Prisma repositories", () => {
         ["user", "Plan today"],
         ["assistant", "Done"],
       ],
+    );
+  });
+
+  it("limits conversation messages to the latest records in creation order", async () => {
+    const repositories = createPrismaRepositories(
+      createFakePrisma({
+        conversations: [
+          {
+            id: "conversation-1",
+            userId: "owner-1",
+            workspaceId: "workspace-family",
+          },
+        ],
+      }),
+    );
+
+    await repositories.conversations.appendMessage("conversation-1", {
+      role: "user",
+      content: "First",
+      createdAt: new Date("2026-07-20T09:00:00.000Z"),
+    });
+    await repositories.conversations.appendMessage("conversation-1", {
+      role: "assistant",
+      content: "Second",
+      createdAt: new Date("2026-07-20T09:01:00.000Z"),
+    });
+    await repositories.conversations.appendMessage("conversation-1", {
+      role: "user",
+      content: "Third",
+      createdAt: new Date("2026-07-20T09:02:00.000Z"),
+    });
+
+    assert.deepEqual(
+      (await repositories.conversations.listMessages("conversation-1", {
+        limit: 2,
+      })).map((message) => message.content),
+      ["Second", "Third"],
     );
   });
 

@@ -54,6 +54,52 @@ describe("in-memory repositories", () => {
     );
   });
 
+  it("limits visible memories to the latest records in creation order", async () => {
+    const repositories = createInMemoryRepositories({
+      memories: [
+        {
+          id: "memory-1",
+          workspaceId: "workspace-family",
+          ownerUserId: "user-owner",
+          scope: "family",
+          sensitivity: "normal",
+          subjectType: "preference",
+          content: "First",
+          createdAt: new Date("2026-07-20T09:00:00.000Z"),
+        },
+        {
+          id: "memory-2",
+          workspaceId: "workspace-family",
+          ownerUserId: "user-owner",
+          scope: "family",
+          sensitivity: "normal",
+          subjectType: "preference",
+          content: "Second",
+          createdAt: new Date("2026-07-20T10:00:00.000Z"),
+        },
+        {
+          id: "memory-3",
+          workspaceId: "workspace-family",
+          ownerUserId: "user-owner",
+          scope: "family",
+          sensitivity: "normal",
+          subjectType: "preference",
+          content: "Third",
+          createdAt: new Date("2026-07-20T11:00:00.000Z"),
+        },
+      ],
+    });
+
+    assert.deepEqual(
+      (await repositories.memories.listForActor({
+        actorUserId: "user-owner",
+        workspaceId: "workspace-family",
+        limit: 2,
+      })).map((memory) => memory.id),
+      ["memory-2", "memory-3"],
+    );
+  });
+
   it("appends and lists conversation messages in creation order", async () => {
     const repositories = createInMemoryRepositories();
 
@@ -81,6 +127,33 @@ describe("in-memory repositories", () => {
         ["user", "Plan today"],
         ["assistant", "Done"],
       ],
+    );
+  });
+
+  it("limits conversation messages to the latest records in creation order", async () => {
+    const repositories = createInMemoryRepositories();
+
+    await repositories.conversations.appendMessage("conversation-1", {
+      role: "user",
+      content: "First",
+      createdAt: new Date("2026-07-20T09:00:00.000Z"),
+    });
+    await repositories.conversations.appendMessage("conversation-1", {
+      role: "assistant",
+      content: "Second",
+      createdAt: new Date("2026-07-20T09:01:00.000Z"),
+    });
+    await repositories.conversations.appendMessage("conversation-1", {
+      role: "user",
+      content: "Third",
+      createdAt: new Date("2026-07-20T09:02:00.000Z"),
+    });
+
+    assert.deepEqual(
+      (await repositories.conversations.listMessages("conversation-1", {
+        limit: 2,
+      })).map((message) => message.content),
+      ["Second", "Third"],
     );
   });
 

@@ -25,6 +25,11 @@ const createId = (prefix) => `${prefix}_${nextId++}`;
 const byCreatedAtAsc = (left, right) =>
   new Date(left.createdAt).getTime() - new Date(right.createdAt).getTime();
 
+const applyRecentLimit = (records, limit) => {
+  if (limit == null) return records;
+  return records.slice(-Math.max(0, limit));
+};
+
 const normalizeMessage = (conversationId, message) => ({
   id: message.id ?? createId("message"),
   conversationId,
@@ -32,6 +37,23 @@ const normalizeMessage = (conversationId, message) => ({
   content: message.content,
   metadata: message.metadata ?? null,
   createdAt: cloneDate(message.createdAt) ?? new Date(),
+});
+
+const normalizeMemory = (memory) => ({
+  id: memory.id ?? createId("memory"),
+  workspaceId: memory.workspaceId,
+  ownerUserId: memory.ownerUserId,
+  scope: memory.scope,
+  sensitivity: memory.sensitivity ?? "normal",
+  subjectType: memory.subjectType,
+  subjectId: memory.subjectId ?? null,
+  content: memory.content,
+  summary: memory.summary ?? null,
+  sourceMessageIds: memory.sourceMessageIds ?? [],
+  confidence: memory.confidence ?? 1,
+  expiresAt: cloneDate(memory.expiresAt) ?? null,
+  createdAt: cloneDate(memory.createdAt) ?? new Date(),
+  updatedAt: cloneDate(memory.updatedAt) ?? new Date(),
 });
 
 const normalizeJob = (job) => ({
@@ -55,7 +77,7 @@ export const databasePackage = {
 
 export function createInMemoryRepositories(seed = {}) {
   const users = [...(seed.users ?? [])].map(cloneRecord);
-  const memories = [...(seed.memories ?? [])].map(cloneRecord);
+  const memories = [...(seed.memories ?? [])].map(normalizeMemory);
   const messages = [...(seed.messages ?? [])].map((message) => ({
     ...cloneRecord(message),
     createdAt: cloneDate(message.createdAt) ?? new Date(),
@@ -123,8 +145,14 @@ export function createInMemoryRepositories(seed = {}) {
     },
 
     memories: {
-      async listForActor({ actorUserId, workspaceId, includePrivate = false }) {
-        return memories
+      async create(memory) {
+        const stored = normalizeMemory(memory);
+        memories.push(stored);
+        return cloneRecord(stored);
+      },
+
+      async listForActor({ actorUserId, workspaceId, includePrivate = false, limit = null }) {
+        const visibleMemories = memories
           .filter((memory) => {
             if (workspaceId != null && memory.workspaceId !== workspaceId) {
               return false;
@@ -136,7 +164,9 @@ export function createInMemoryRepositories(seed = {}) {
 
             return includePrivate ? true : memory.sensitivity !== "private";
           })
-          .sort(byCreatedAtAsc)
+          .sort(byCreatedAtAsc);
+
+        return applyRecentLimit(visibleMemories, limit)
           .map(cloneRecord);
       },
     },
@@ -148,10 +178,12 @@ export function createInMemoryRepositories(seed = {}) {
         return cloneRecord(stored);
       },
 
-      async listMessages(conversationId) {
-        return messages
+      async listMessages(conversationId, { limit = null } = {}) {
+        const conversationMessages = messages
           .filter((message) => message.conversationId === conversationId)
-          .sort(byCreatedAtAsc)
+          .sort(byCreatedAtAsc);
+
+        return applyRecentLimit(conversationMessages, limit)
           .map(cloneRecord);
       },
     },

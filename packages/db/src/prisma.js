@@ -129,7 +129,25 @@ export function createPrismaRepositories(prisma) {
     },
 
     memories: {
-      async listForActor({ actorUserId, workspaceId, includePrivate = false }) {
+      async create(memory) {
+        return prisma.memoryItem.create({
+          data: {
+            workspaceId: memory.workspaceId,
+            ownerUserId: memory.ownerUserId,
+            scope: memory.scope,
+            sensitivity: memory.sensitivity ?? "normal",
+            subjectType: memory.subjectType,
+            subjectId: memory.subjectId ?? null,
+            content: memory.content,
+            summary: memory.summary ?? null,
+            sourceMessageIds: memory.sourceMessageIds ?? [],
+            confidence: memory.confidence ?? 1,
+            expiresAt: memory.expiresAt ?? null,
+          },
+        });
+      },
+
+      async listForActor({ actorUserId, workspaceId, includePrivate = false, limit = null }) {
         const where = {};
 
         if (workspaceId != null) {
@@ -143,10 +161,13 @@ export function createPrismaRepositories(prisma) {
           ];
         }
 
-        return prisma.memoryItem.findMany({
+        const memories = await prisma.memoryItem.findMany({
           where,
-          orderBy: { createdAt: "asc" },
+          orderBy: { createdAt: limit == null ? "asc" : "desc" },
+          take: limit ?? undefined,
         });
+
+        return limit == null ? memories : memories.reverse();
       },
     },
 
@@ -159,11 +180,14 @@ export function createPrismaRepositories(prisma) {
         });
       },
 
-      async listMessages(conversationId) {
-        return prisma.message.findMany({
+      async listMessages(conversationId, { limit = null } = {}) {
+        const messages = await prisma.message.findMany({
           where: { conversationId },
-          orderBy: { createdAt: "asc" },
+          orderBy: { createdAt: limit == null ? "asc" : "desc" },
+          take: limit ?? undefined,
         });
+
+        return limit == null ? messages : messages.reverse();
       },
     },
 

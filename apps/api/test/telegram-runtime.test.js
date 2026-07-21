@@ -3,6 +3,7 @@ import test from "node:test";
 
 import { createInMemoryRepositories } from "../../../packages/db/src/index.js";
 import { createAppServer } from "../src/server.js";
+import { createRepositoryBackedOrchestrator } from "../src/runtime.js";
 
 async function withServer(options, run) {
   const server = createAppServer(options);
@@ -163,6 +164,192 @@ test("Telegram webhook reuses stored answer for repeated update id", async () =>
     [
       ["user", "Повторяемая задача"],
       ["assistant", "Ответ 1"],
+    ],
+  );
+});
+
+test("repository backed orchestrator stores explicit memory without calling AI", async () => {
+  const repositories = createInMemoryRepositories({
+    users: [
+      {
+        id: "owner-1",
+        role: "owner",
+        telegramUserId: "100",
+        workspaceId: "workspace-family",
+      },
+    ],
+  });
+  const orchestrator = createRepositoryBackedOrchestrator({
+    repositories,
+    aiProvider: {
+      async complete() {
+        throw new Error("AI should not be called when storing explicit memory");
+      },
+    },
+  });
+
+  const response = await orchestrator({
+    chatId: 777,
+    actor: { id: "owner-1", role: "owner" },
+    intent: "household",
+    text: "Запомни, что я люблю короткие ответы",
+    telegramUpdateId: 789,
+  });
+
+  assert.equal(response.answer.source, "memory_write");
+  assert.match(response.answer.text, /Запомнил/);
+
+  const memories = await repositories.memories.listForActor({
+    actorUserId: "owner-1",
+    workspaceId: "workspace-family",
+  });
+  assert.equal(memories.length, 1);
+  assert.equal(memories[0].scope, "family");
+  assert.equal(memories[0].subjectType, "user_stated_fact");
+  assert.equal(memories[0].content, "я люблю короткие ответы");
+});
+
+test("repository backed orchestrator refuses to store explicit secret memory", async () => {
+  const repositories = createInMemoryRepositories({
+    users: [
+      {
+        id: "owner-1",
+        role: "owner",
+        telegramUserId: "100",
+        workspaceId: "workspace-family",
+      },
+    ],
+  });
+  const orchestrator = createRepositoryBackedOrchestrator({
+    repositories,
+    aiProvider: {
+      async complete() {
+        throw new Error("AI should not be called when refusing unsafe memory");
+      },
+    },
+  });
+
+  const response = await orchestrator({
+    chatId: 777,
+    actor: { id: "owner-1", role: "owner" },
+    intent: "household",
+    text: "Запомни, что пароль от почты qwerty123",
+    telegramUpdateId: 790,
+  });
+
+  assert.equal(response.answer.source, "memory_rejected");
+  assert.match(response.answer.text, /не буду сохранять/i);
+
+  const memories = await repositories.memories.listForActor({
+    actorUserId: "owner-1",
+    workspaceId: "workspace-family",
+  });
+  assert.equal(memories.length, 0);
+});
+
+test("repository backed orchestrator answers memory recall without calling AI", async () => {
+  const repositories = createInMemoryRepositories({
+    users: [
+      {
+        id: "owner-1",
+        role: "owner",
+        telegramUserId: "100",
+        workspaceId: "workspace-family",
+      },
+    ],
+    memories: [
+      {
+        id: "memory-1",
+        workspaceId: "workspace-family",
+        ownerUserId: "owner-1",
+        scope: "family",
+        sensitivity: "normal",
+        subjectType: "user_stated_fact",
+        content: "я люблю короткие ответы",
+        createdAt: new Date("2026-07-21T09:00:00.000Z"),
+      },
+    ],
+  });
+  const orchestrator = createRepositoryBackedOrchestrator({
+    repositories,
+    aiProvider: {
+      async complete() {
+        throw new Error("AI should not be called for memory recall");
+      },
+    },
+  });
+
+  const response = await orchestrator({
+    chatId: 777,
+    actor: { id: "owner-1", role: "owner" },
+    intent: "household",
+    text: "Что ты помнишь обо мне?",
+    telegramUpdateId: 791,
+  });
+
+  assert.equal(response.answer.source, "memory_recall");
+  assert.match(response.answer.text, /я люблю короткие ответы/);
+});
+
+test("repository backed orchestrator sends memory and recent history to AI", async () => {
+  const repositories = createInMemoryRepositories({
+    users: [
+      {
+        id: "owner-1",
+        role: "owner",
+        telegramUserId: "100",
+        workspaceId: "workspace-family",
+      },
+    ],
+    memories: [
+      {
+        id: "memory-1",
+        workspaceId: "workspace-family",
+        ownerUserId: "owner-1",
+        scope: "family",
+        sensitivity: "normal",
+        subjectType: "user_stated_fact",
+        content: "я люблю короткие ответы",
+        createdAt: new Date("2026-07-21T09:00:00.000Z"),
+      },
+    ],
+  });
+  const aiCalls = [];
+  const orchestrator = createRepositoryBackedOrchestrator({
+    repositories,
+    aiProvider: {
+      async complete(payload) {
+        aiCalls.push(payload);
+        return { text: "Коротко: связь работает." };
+      },
+    },
+  });
+
+  await orchestrator({
+    chatId: 777,
+    actor: { id: "owner-1", role: "owner" },
+    intent: "household",
+    text: "Что ты умеешь сложного?",
+    telegramUpdateId: 790,
+  });
+
+  await orchestrator({
+    chatId: 777,
+    actor: { id: "owner-1", role: "owner" },
+    intent: "technical_question",
+    text: "А теперь ответь с учетом прошлого",
+    telegramUpdateId: 791,
+  });
+
+  assert.equal(aiCalls.length, 2);
+  const secondCall = aiCalls[1];
+  assert.match(secondCall.messages[0].content, /я люблю короткие ответы/);
+  assert.deepEqual(
+    secondCall.messages.slice(1).map((message) => [message.role, message.content]),
+    [
+      ["user", "Что ты умеешь сложного?"],
+      ["assistant", "Коротко: связь работает."],
+      ["user", "А теперь ответь с учетом прошлого"],
     ],
   );
 });
