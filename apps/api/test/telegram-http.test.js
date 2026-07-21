@@ -199,7 +199,7 @@ test("POST /telegram/teacher/webhook uses the dedicated teacher bot sender", asy
   assert.deepEqual(sentMessages, [{ chatId: 777, text: "Teacher bot answer" }]);
 });
 
-test("POST /telegram/teacher/webhook fast-acks /start and sends start text async", async () => {
+test("POST /telegram/teacher/webhook answers /start through webhook response", async () => {
   let orchestratorCalled = false;
   const sentMessages = [];
 
@@ -232,22 +232,19 @@ test("POST /telegram/teacher/webhook fast-acks /start and sends start text async
       });
 
       assert.equal(response.status, 200);
-      assert.deepEqual(await response.json(), { ok: true });
-
-      await waitFor(
-        () => sentMessages.length === 1,
-        1000,
-        "start Telegram answer was not sent asynchronously",
-      );
+      const body = await response.json();
+      assert.equal(body.method, "sendMessage");
+      assert.equal(body.chat_id, 777);
+      assert.equal(typeof body.text, "string");
+      assert.ok(body.text.length > 0);
     },
   );
 
   assert.equal(orchestratorCalled, false);
-  assert.equal(sentMessages[0].chatId, 777);
-  assert.match(sentMessages[0].text, /Бот подключен/);
+  assert.deepEqual(sentMessages, []);
 });
 
-test("POST /telegram/teacher/webhook fast-acks webhook response and sends final reply async", async () => {
+test("POST /telegram/teacher/webhook sends immediate webhook response and final reply async", async () => {
   let releaseOrchestrator;
   const orchestratorCanFinish = new Promise((resolve) => {
     releaseOrchestrator = resolve;
@@ -297,7 +294,11 @@ test("POST /telegram/teacher/webhook fast-acks webhook response and sends final 
       }
 
       assert.equal(response.status, 200);
-      assert.deepEqual(await response.json(), { ok: true });
+      const body = await response.json();
+      assert.equal(body.method, "sendMessage");
+      assert.equal(body.chat_id, 777);
+      assert.equal(typeof body.text, "string");
+      assert.notEqual(body.text, "Teacher async answer");
 
       await waitFor(
         () => sentMessages.length === 1,
@@ -502,7 +503,10 @@ test("POST /telegram/webhook refuses unknown user through webhook response witho
 
       const body = await response.json();
       assert.equal(response.status, 200);
-      assert.deepEqual(body, { ok: true });
+      assert.equal(body.method, "sendMessage");
+      assert.equal(body.chat_id, 888);
+      assert.equal(typeof body.text, "string");
+      assert.ok(body.text.length > 0);
 
       await waitFor(
         () => sentMessages.length === 1,

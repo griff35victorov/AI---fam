@@ -10,6 +10,10 @@ import { createProductionDependencies } from "./production-runtime.js";
 import { createRepositoryBackedOrchestrator } from "./runtime.js";
 import { handleTelegramUpdate } from "./telegram.js";
 
+const telegramAcceptedText = "Принял. Готовлю ответ отдельным сообщением.";
+const telegramStartCommandText =
+  "Бот подключен. Напишите задачу одним сообщением.";
+
 function sendJson(response, statusCode, body) {
   response.writeHead(statusCode, { "content-type": "application/json; charset=utf-8" });
   response.end(JSON.stringify(body));
@@ -73,6 +77,31 @@ function buildTelegramWebhookResponse(result, replyMode) {
     chat_id: result.chatId,
     text: result.text,
   };
+}
+
+function telegramUpdateText(update) {
+  return String(update?.message?.text ?? "");
+}
+
+function telegramUpdateIsStartCommand(update) {
+  return telegramUpdateText(update).trim().toLowerCase() === "/start";
+}
+
+function buildImmediateTelegramWebhookResponse(update) {
+  const chatId = update?.message?.chat?.id;
+  if (!chatId) {
+    return { ok: true };
+  }
+
+  return buildTelegramWebhookResponse(
+    {
+      chatId,
+      text: telegramUpdateIsStartCommand(update)
+        ? telegramStartCommandText
+        : telegramAcceptedText,
+    },
+    "webhook_response",
+  );
 }
 
 function telegramBackgroundUpdateKey(update, botKey) {
@@ -172,6 +201,12 @@ export function createAppServer(options = {}) {
         const routeReplyMode = telegramReplyMode;
 
         if (routeReplyMode === "webhook_response") {
+          sendJson(response, 200, buildImmediateTelegramWebhookResponse(body));
+
+          if (telegramUpdateIsStartCommand(body)) {
+            return;
+          }
+
           const backgroundKey = telegramBackgroundUpdateKey(body, botKey);
           const routeSender = resolveTelegramSender({
             botKey,
@@ -184,19 +219,20 @@ export function createAppServer(options = {}) {
               telegramBackgroundUpdates.add(backgroundKey);
             }
 
-            runTelegramBackgroundUpdate({
-              body,
-              users,
-              repositories,
-              orchestrator,
-              telegramSender: routeSender,
-              botKey,
-              backgroundKey,
-              telegramBackgroundUpdates,
+            setImmediate(() => {
+              runTelegramBackgroundUpdate({
+                body,
+                users,
+                repositories,
+                orchestrator,
+                telegramSender: routeSender,
+                botKey,
+                backgroundKey,
+                telegramBackgroundUpdates,
+              });
             });
           }
 
-          sendJson(response, 200, { ok: true });
           return;
         }
 
