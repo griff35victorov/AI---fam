@@ -2,7 +2,7 @@ import { TimewebAiProvider } from "../../../packages/ai/src/index.js";
 import { createPrismaRepositories } from "../../../packages/db/src/index.js";
 import { createCapabilityRegistry } from "./capabilities.js";
 import { TelegramBotSender, TelegramRelaySender } from "./telegram-sender.js";
-import { TelegramVoiceTranscriber } from "./voice.js";
+import { LocalVoskTelegramVoiceTranscriber, TelegramVoiceTranscriber } from "./voice.js";
 
 const defaultTimewebBaseUrl = "https://agent.timeweb.cloud";
 const defaultWorkspaceId = "workspace-family";
@@ -116,9 +116,9 @@ export function createVoiceTranscribers(env = {}, fetchImpl = fetch) {
   const transcriptionApiKey = envValue(env.VOICE_TRANSCRIPTION_API_KEY);
   const transcriptionModel = envValue(env.VOICE_TRANSCRIPTION_MODEL);
   const transcriptionLanguage = envValue(env.VOICE_TRANSCRIPTION_LANGUAGE) ?? "ru";
-  if (!transcriptionUrl) {
-    return {};
-  }
+  const provider =
+    envValue(env.VOICE_TRANSCRIPTION_PROVIDER) ??
+    (transcriptionUrl ? "http" : "local_vosk");
 
   const transcribers = {};
   for (const botKey of Object.keys(telegramBotEnv)) {
@@ -127,14 +127,23 @@ export function createVoiceTranscribers(env = {}, fetchImpl = fetch) {
       continue;
     }
 
-    transcribers[botKey] = new TelegramVoiceTranscriber({
-      botToken,
-      transcriptionUrl,
-      transcriptionApiKey,
-      transcriptionModel,
-      transcriptionLanguage,
-      fetchImpl,
-    });
+    transcribers[botKey] =
+      provider === "local_vosk"
+        ? new LocalVoskTelegramVoiceTranscriber({
+            botToken,
+            fetchImpl,
+            pythonPath: envValue(env.VOSK_PYTHON_PATH) ?? "python3",
+            modelPath: envValue(env.VOSK_MODEL_PATH) ?? "/opt/vosk/model",
+            timeoutMs: parseNumber(env.VOSK_TRANSCRIPTION_TIMEOUT_MS, 25_000),
+          })
+        : new TelegramVoiceTranscriber({
+            botToken,
+            transcriptionUrl,
+            transcriptionApiKey,
+            transcriptionModel,
+            transcriptionLanguage,
+            fetchImpl,
+          });
   }
 
   return transcribers;

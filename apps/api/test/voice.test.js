@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { TelegramVoiceTranscriber } from "../src/voice.js";
+import {
+  LocalVoskTelegramVoiceTranscriber,
+  TelegramVoiceTranscriber,
+} from "../src/voice.js";
 
 test("TelegramVoiceTranscriber sends model and language to STT endpoint", async () => {
   const calls = [];
@@ -45,4 +48,40 @@ test("TelegramVoiceTranscriber sends model and language to STT endpoint", async 
   assert.equal(calls[2].options.headers.authorization, "Bearer stt-key");
   assert.equal(await calls[2].options.body.get("model"), "whisper-1");
   assert.equal(await calls[2].options.body.get("language"), "ru");
+});
+
+test("LocalVoskTelegramVoiceTranscriber downloads Telegram voice and transcribes file locally", async () => {
+  const calls = [];
+  const transcribedFiles = [];
+  const transcriber = new LocalVoskTelegramVoiceTranscriber({
+    botToken: "telegram-token",
+    fetchImpl: async (url, options = {}) => {
+      calls.push({ url, options });
+
+      if (url.endsWith("/getFile")) {
+        return {
+          ok: true,
+          json: async () => ({ result: { file_path: "voice/file.ogg" } }),
+        };
+      }
+
+      return {
+        ok: true,
+        arrayBuffer: async () => new Uint8Array([1, 2, 3]).buffer,
+      };
+    },
+    transcribeFile: async (audioPath) => {
+      transcribedFiles.push(audioPath);
+      return "локальная расшифровка";
+    },
+  });
+
+  const result = await transcriber.transcribeTelegramVoice({
+    fileId: "voice-file",
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.text, "локальная расшифровка");
+  assert.equal(calls.length, 2);
+  assert.match(transcribedFiles[0], /\.ogg$/);
 });
