@@ -10,6 +10,7 @@ import { createProductionDependencies } from "./production-runtime.js";
 import { createRepositoryBackedOrchestrator } from "./runtime.js";
 import {
   accessNotConfiguredText,
+  accessNotConfiguredTextForRequest,
   buildTelegramRequest,
   buildTelegramRequestFromRepositories,
   handleTelegramUpdate,
@@ -122,7 +123,7 @@ function buildImmediateTelegramWebhookResponse(telegramRequest) {
     {
       chatId,
       text: telegramRequest.rejected
-        ? accessNotConfiguredText
+        ? accessNotConfiguredTextForRequest(telegramRequest)
         : telegramRequest.isStartCommand
           ? startCommandText
           : telegramAcceptedText,

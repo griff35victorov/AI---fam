@@ -22,8 +22,18 @@ function actorFromUser(user) {
   return actor;
 }
 
+function telegramUserIdFromMessage(message) {
+  return String(message?.from?.id ?? "");
+}
+
+export function accessNotConfiguredTextForRequest(request) {
+  return request.telegramUserId
+    ? `${accessNotConfiguredText}\n\nTelegram ID: ${request.telegramUserId}`
+    : accessNotConfiguredText;
+}
+
 export function resolveTelegramActor(message, users) {
-  const telegramUserId = String(message?.from?.id ?? "");
+  const telegramUserId = telegramUserIdFromMessage(message);
   const user = users.find((candidate) => candidate.telegramUserId === telegramUserId);
   if (!user) return null;
 
@@ -31,7 +41,7 @@ export function resolveTelegramActor(message, users) {
 }
 
 export async function resolveTelegramActorFromRepositories(message, repositories) {
-  const telegramUserId = String(message?.from?.id ?? "");
+  const telegramUserId = telegramUserIdFromMessage(message);
   if (!telegramUserId) return null;
 
   const user = await repositories.users.findByTelegramUserId(telegramUserId);
@@ -70,12 +80,14 @@ export function inferIntentFromText(actor, text) {
 
 export function buildTelegramRequest(update, { users, botKey } = {}) {
   const message = update.message;
+  const telegramUserId = telegramUserIdFromMessage(message);
   const actor = resolveTelegramActor(message, users);
   if (!actor) {
     return {
       chatId: message?.chat?.id,
       rejected: true,
       reason: "unknown_telegram_user",
+      telegramUserId,
     };
   }
 
@@ -84,6 +96,7 @@ export function buildTelegramRequest(update, { users, botKey } = {}) {
       chatId: message?.chat?.id,
       rejected: true,
       reason: "telegram_bot_role_mismatch",
+      telegramUserId,
     };
   }
 
@@ -102,12 +115,14 @@ export function buildTelegramRequest(update, { users, botKey } = {}) {
 
 export async function buildTelegramRequestFromRepositories(update, { repositories, botKey } = {}) {
   const message = update.message;
+  const telegramUserId = telegramUserIdFromMessage(message);
   const actor = await resolveTelegramActorFromRepositories(message, repositories);
   if (!actor) {
     return {
       chatId: message?.chat?.id,
       rejected: true,
       reason: "unknown_telegram_user",
+      telegramUserId,
     };
   }
 
@@ -116,6 +131,7 @@ export async function buildTelegramRequestFromRepositories(update, { repositorie
       chatId: message?.chat?.id,
       rejected: true,
       reason: "telegram_bot_role_mismatch",
+      telegramUserId,
     };
   }
 

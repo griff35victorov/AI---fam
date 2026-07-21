@@ -280,6 +280,7 @@ test("POST /telegram/teacher/webhook refuses unknown /start through webhook resp
       const body = await response.json();
       assert.equal(body.method, "sendMessage");
       assert.equal(body.chat_id, 888);
+      assert.match(body.text, /Telegram ID: 999$/);
       assert.match(body.text, /Доступ не настроен/);
       assert.doesNotMatch(body.text, /Бот подключен/);
     },
