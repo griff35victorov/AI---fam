@@ -13,7 +13,7 @@ Deploy the family AI orchestrator as a Timeweb App Platform Docker Compose appli
 - PostgreSQL DBaaS ID: `4190345`.
 - S3 bucket: `family-ai-prod-dq508761`, private Hot 10 GB.
 - Timeweb AI: five private GPT 4.1 mini agents mapped to family roles through Agent API Access IDs.
-- Last verified deploy: commit `94d9c4073d19808fcba027de1ebe4a13c25240c5`, `/health` returned 200 OK.
+- Last verified deploy: commit `83a3c7f62b8de895776a798f6b26566ac8be8c52`, `/health` returned 200 OK.
 
 ## Services
 
@@ -37,15 +37,16 @@ Completed:
 - The `web` service applies Prisma migrations before the API starts.
 - Private S3 bucket is created and wired in App Platform env.
 - Timeweb AI agents are created and wired in App Platform env.
+- Owner, daughter, and teacher Telegram bot tokens are stored in App Platform env.
+- Dedicated Telegram webhook endpoints are deployed and protected by webhook secrets.
 - `/health` returns 200 OK.
 
 Remaining:
 
 1. Add real `FAMILY_AI_BOOTSTRAP_USERS` records and set `FAMILY_AI_BOOTSTRAP_USERS_ALLOW_WRITE=1` for exactly one deploy.
 2. Return `FAMILY_AI_BOOTSTRAP_USERS_ALLOW_WRITE=0` after users are created.
-3. Add `TELEGRAM_OWNER_BOT_TOKEN`, `TELEGRAM_DAUGHTER_BOT_TOKEN`, `TELEGRAM_TEACHER_BOT_TOKEN`, webhook secrets, and `APP_PUBLIC_URL`.
-4. Run `npm run telegram:webhooks:set`.
-5. Send a test message from each allowed Telegram account in their dedicated bot.
+3. Run `npm run telegram:webhooks:set`.
+4. Send a test message from each allowed Telegram account in their dedicated bot.
 
 Telegram access is controlled by `User.telegramUserId` records in PostgreSQL.
 `TELEGRAM_ALLOWED_USER_IDS` is not used by the runtime.
