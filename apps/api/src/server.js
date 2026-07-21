@@ -19,8 +19,13 @@ import {
 const telegramAcceptedText = "Принял. Готовлю ответ отдельным сообщением.";
 
 function sendJson(response, statusCode, body) {
-  response.writeHead(statusCode, { "content-type": "application/json; charset=utf-8" });
-  response.end(JSON.stringify(body));
+  const payload = JSON.stringify(body);
+  response.writeHead(statusCode, {
+    "content-type": "application/json; charset=utf-8",
+    "content-length": Buffer.byteLength(payload),
+    "connection": "close",
+  });
+  response.end(payload);
 }
 
 async function readJson(request) {
@@ -160,6 +165,8 @@ export function createAppServer(options = {}) {
     options.telegramWebhookSecrets ?? dependencies.telegramWebhookSecrets ?? {};
   const telegramReplyMode =
     options.telegramReplyMode ?? dependencies.telegramReplyMode ?? "send_message";
+  const telegramBackgroundDelayMs =
+    options.telegramBackgroundDelayMs ?? dependencies.telegramBackgroundDelayMs ?? 1500;
   const users = options.users ?? dependencies.users ?? [];
   const orchestrator =
     options.orchestrator ??
@@ -217,29 +224,23 @@ export function createAppServer(options = {}) {
           }
 
           const backgroundKey = telegramBackgroundUpdateKey(body, botKey);
-          const routeSender = resolveTelegramSender({
-            botKey,
-            telegramSender,
-            telegramSenders,
-          });
-
           if (!backgroundKey || !telegramBackgroundUpdates.has(backgroundKey)) {
             if (backgroundKey) {
               telegramBackgroundUpdates.add(backgroundKey);
             }
 
-            setImmediate(() => {
+            setTimeout(() => {
               runTelegramBackgroundUpdate({
                 body,
                 users,
                 repositories,
                 orchestrator,
-                telegramSender: routeSender,
+                telegramSender: undefined,
                 botKey,
                 backgroundKey,
                 telegramBackgroundUpdates,
               });
-            });
+            }, telegramBackgroundDelayMs);
           }
 
           return;

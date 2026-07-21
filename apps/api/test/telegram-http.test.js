@@ -334,7 +334,7 @@ test("POST /telegram/daughter/webhook refuses wrong-role /start through webhook 
   assert.deepEqual(sentMessages, []);
 });
 
-test("POST /telegram/teacher/webhook sends immediate webhook response and final reply async", async () => {
+test("POST /telegram/teacher/webhook closes immediate response and runs AI without outbound sender", async () => {
   let releaseOrchestrator;
   const orchestratorCanFinish = new Promise((resolve) => {
     releaseOrchestrator = resolve;
@@ -352,6 +352,7 @@ test("POST /telegram/teacher/webhook sends immediate webhook response and final 
       },
       dependencies: {
         telegramReplyMode: "webhook_response",
+        telegramBackgroundDelayMs: 0,
         telegramSenders: {
           teacher: {
             async sendMessage(message) {
@@ -384,6 +385,8 @@ test("POST /telegram/teacher/webhook sends immediate webhook response and final 
       }
 
       assert.equal(response.status, 200);
+      assert.equal(response.headers.get("connection"), "close");
+      assert.ok(Number(response.headers.get("content-length")) > 0);
       const body = await response.json();
       assert.equal(body.method, "sendMessage");
       assert.equal(body.chat_id, 777);
@@ -391,17 +394,15 @@ test("POST /telegram/teacher/webhook sends immediate webhook response and final 
       assert.notEqual(body.text, "Teacher async answer");
 
       await waitFor(
-        () => sentMessages.length === 1,
+        () => calls.length === 1,
         1000,
-        "final Telegram answer was not sent asynchronously",
+        "background AI handler was not called",
       );
     },
   );
 
   assert.equal(calls.length, 1);
-  assert.deepEqual(sentMessages, [
-    { chatId: 777, text: "Teacher async answer" },
-  ]);
+  assert.deepEqual(sentMessages, []);
 });
 
 test("POST /telegram/webhook rejects missing webhook secret when configured", async () => {
