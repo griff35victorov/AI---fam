@@ -1,7 +1,7 @@
-const accessNotConfiguredText =
+export const accessNotConfiguredText =
   "Доступ не настроен. Обратитесь к владельцу семейного оркестратора.";
-const defaultProcessedText = "Принял. Задача обработана.";
-const startCommandText = "Бот подключен. Напишите задачу одним сообщением.";
+export const defaultProcessedText = "Принял. Задача обработана.";
+export const startCommandText = "Бот подключен. Напишите задачу одним сообщением.";
 
 const expectedRoleByBotKey = {
   owner: "owner",
