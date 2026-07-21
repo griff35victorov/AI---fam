@@ -8,12 +8,18 @@ import { createHealthResponse } from "./health.js";
 import { handleOrchestratorRequest } from "./orchestrator.js";
 import { createProductionDependencies } from "./production-runtime.js";
 import { createRepositoryBackedOrchestrator } from "./runtime.js";
-import { handleTelegramUpdate } from "./telegram.js";
+import {
+  buildTelegramRequest,
+  buildTelegramRequestFromRepositories,
+  handleTelegramUpdate,
+} from "./telegram.js";
 
 function sendJson(response, statusCode, body) {
   response.writeHead(statusCode, { "content-type": "application/json; charset=utf-8" });
   response.end(JSON.stringify(body));
 }
+
+const telegramAcceptedText = "Принял. Готовлю ответ отдельным сообщением.";
 
 async function readJson(request) {
   const chunks = [];
@@ -75,6 +81,24 @@ function buildTelegramWebhookResponse(result, replyMode) {
   };
 }
 
+async function buildTelegramWebhookRequest(body, { users, repositories, botKey }) {
+  return repositories?.users
+    ? buildTelegramRequestFromRepositories(body, { repositories, botKey })
+    : buildTelegramRequest(body, { users, botKey });
+}
+
+function telegramBackgroundUpdateKey(update, botKey) {
+  if (update?.update_id == null) {
+    return null;
+  }
+
+  return `${botKey ?? "default"}:${update.update_id}`;
+}
+
+function logTelegramBackgroundError(error) {
+  console.error("telegram background handling failed", error);
+}
+
 function envValue(value) {
   return typeof value === "string" && value.trim() === "" ? undefined : value;
 }
@@ -101,6 +125,7 @@ export function createAppServer(options = {}) {
           workspaceId: dependencies.workspaceId,
         })
       : ((request) => handleOrchestratorRequest(request, dependencies)));
+  const telegramBackgroundUpdates = new Set();
 
   return createServer(async (request, response) => {
     try {
@@ -132,6 +157,57 @@ export function createAppServer(options = {}) {
 
         const body = await readJson(request);
         const routeReplyMode = telegramReplyMode;
+
+        if (routeReplyMode === "webhook_response") {
+          const telegramRequest = await buildTelegramWebhookRequest(body, {
+            users,
+            repositories,
+            botKey,
+          });
+
+          if (!telegramRequest.rejected && !telegramRequest.isStartCommand) {
+            const backgroundKey = telegramBackgroundUpdateKey(body, botKey);
+            const routeSender = resolveTelegramSender({
+              botKey,
+              telegramSender,
+              telegramSenders,
+            });
+
+            if (!backgroundKey || !telegramBackgroundUpdates.has(backgroundKey)) {
+              if (backgroundKey) {
+                telegramBackgroundUpdates.add(backgroundKey);
+              }
+
+              handleTelegramUpdate(body, {
+                users,
+                repositories,
+                orchestrator,
+                telegramSender: routeSender,
+                botKey,
+              })
+                .catch(logTelegramBackgroundError)
+                .finally(() => {
+                  if (backgroundKey) {
+                    telegramBackgroundUpdates.delete(backgroundKey);
+                  }
+                });
+            }
+
+            sendJson(
+              response,
+              200,
+              buildTelegramWebhookResponse(
+                {
+                  chatId: telegramRequest.chatId,
+                  text: telegramAcceptedText,
+                },
+                routeReplyMode,
+              ),
+            );
+            return;
+          }
+        }
+
         const result = await handleTelegramUpdate(body, {
           users,
           repositories,

@@ -32,6 +32,30 @@ async function postJson(url, body) {
   });
 }
 
+async function resolveWithin(promise, timeoutMs, message) {
+  const timeout = Symbol("timeout");
+  const result = await Promise.race([
+    promise,
+    new Promise((resolve) => setTimeout(() => resolve(timeout), timeoutMs)),
+  ]);
+
+  if (result === timeout) {
+    throw new Error(message);
+  }
+
+  return result;
+}
+
+async function waitFor(condition, timeoutMs, message) {
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < timeoutMs) {
+    if (condition()) return;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+
+  throw new Error(message);
+}
+
 test("POST /telegram/webhook handles known Telegram update through injected orchestrator", async () => {
   const calls = [];
 
@@ -175,13 +199,17 @@ test("POST /telegram/teacher/webhook uses the dedicated teacher bot sender", asy
   assert.deepEqual(sentMessages, [{ chatId: 777, text: "Teacher bot answer" }]);
 });
 
-test("POST /telegram/teacher/webhook can reply through webhook response", async () => {
+test("POST /telegram/teacher/webhook replies to /start through webhook response", async () => {
   let senderCalled = false;
+  let orchestratorCalled = false;
 
   await withServer(
     {
       users,
-      orchestrator: async () => ({ answer: { text: "Teacher webhook response" } }),
+      orchestrator: async () => {
+        orchestratorCalled = true;
+        return { answer: { text: "should not happen" } };
+      },
       dependencies: {
         telegramReplyMode: "webhook_response",
         telegramSenders: {
@@ -199,20 +227,90 @@ test("POST /telegram/teacher/webhook can reply through webhook response", async 
         message: {
           chat: { id: 777 },
           from: { id: 200 },
+          text: "/start",
+        },
+      });
+
+      assert.equal(response.status, 200);
+      const body = await response.json();
+      assert.equal(body.method, "sendMessage");
+      assert.equal(body.chat_id, 777);
+      assert.match(body.text, /Бот подключен/);
+    },
+  );
+
+  assert.equal(orchestratorCalled, false);
+  assert.equal(senderCalled, false);
+});
+
+test("POST /telegram/teacher/webhook fast-acks webhook response and sends final reply async", async () => {
+  let releaseOrchestrator;
+  const orchestratorCanFinish = new Promise((resolve) => {
+    releaseOrchestrator = resolve;
+  });
+  const sentMessages = [];
+  const calls = [];
+
+  await withServer(
+    {
+      users,
+      orchestrator: async (request) => {
+        calls.push(request);
+        await orchestratorCanFinish;
+        return { answer: { text: "Teacher async answer" } };
+      },
+      dependencies: {
+        telegramReplyMode: "webhook_response",
+        telegramSenders: {
+          teacher: {
+            async sendMessage(message) {
+              sentMessages.push(message);
+              return { ok: true };
+            },
+          },
+        },
+      },
+    },
+    async (baseUrl) => {
+      const responsePromise = postJson(`${baseUrl}/telegram/teacher/webhook`, {
+        update_id: 24,
+        message: {
+          chat: { id: 777 },
+          from: { id: 200 },
           text: "lesson for B1",
         },
       });
+
+      let response;
+      try {
+        response = await resolveWithin(
+          responsePromise,
+          100,
+          "webhook response waited for orchestrator",
+        );
+      } finally {
+        releaseOrchestrator();
+      }
 
       assert.equal(response.status, 200);
       assert.deepEqual(await response.json(), {
         method: "sendMessage",
         chat_id: 777,
-        text: "Teacher webhook response",
+        text: "Принял. Готовлю ответ отдельным сообщением.",
       });
+
+      await waitFor(
+        () => sentMessages.length === 1,
+        1000,
+        "final Telegram answer was not sent asynchronously",
+      );
     },
   );
 
-  assert.equal(senderCalled, false);
+  assert.equal(calls.length, 1);
+  assert.deepEqual(sentMessages, [
+    { chatId: 777, text: "Teacher async answer" },
+  ]);
 });
 
 test("POST /telegram/webhook rejects missing webhook secret when configured", async () => {
@@ -371,6 +469,47 @@ test("POST /telegram/webhook returns refusal text for unknown Telegram user", as
   );
 
   assert.equal(orchestratorCalled, false);
+});
+
+test("POST /telegram/webhook refuses unknown user through webhook response without sender", async () => {
+  let orchestratorCalled = false;
+  let senderCalled = false;
+
+  await withServer(
+    {
+      users,
+      orchestrator: async () => {
+        orchestratorCalled = true;
+        return { answer: { text: "should not happen" } };
+      },
+      dependencies: {
+        telegramReplyMode: "webhook_response",
+        telegramSender: {
+          async sendMessage() {
+            senderCalled = true;
+          },
+        },
+      },
+    },
+    async (baseUrl) => {
+      const response = await postJson(`${baseUrl}/telegram/webhook`, {
+        message: {
+          chat: { id: 888 },
+          from: { id: 999 },
+          text: "hello",
+        },
+      });
+
+      const body = await response.json();
+      assert.equal(response.status, 200);
+      assert.equal(body.method, "sendMessage");
+      assert.equal(body.chat_id, 888);
+      assert.match(body.text, /Доступ не настроен/);
+    },
+  );
+
+  assert.equal(orchestratorCalled, false);
+  assert.equal(senderCalled, false);
 });
 
 test("GET /health still works on app server", async () => {
