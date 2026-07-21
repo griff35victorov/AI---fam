@@ -195,7 +195,7 @@ export function createAppServer(options = {}) {
   const telegramReplyMode =
     options.telegramReplyMode ?? dependencies.telegramReplyMode ?? "send_message";
   const telegramBackgroundDelayMs =
-    options.telegramBackgroundDelayMs ?? dependencies.telegramBackgroundDelayMs ?? 1500;
+    options.telegramBackgroundDelayMs ?? dependencies.telegramBackgroundDelayMs ?? 0;
   const users = options.users ?? dependencies.users ?? [];
   const orchestrator =
     options.orchestrator ??

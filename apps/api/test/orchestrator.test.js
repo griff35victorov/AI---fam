@@ -66,3 +66,44 @@ test("orchestrator calls AI provider with allowed memory context and model profi
   assert.match(calls[0].messages[0].content, /Use short warmups/);
   assert.doesNotMatch(calls[0].messages[0].content, /token/);
 });
+
+test("orchestrator answers common status questions without calling AI", async () => {
+  const response = await handleOrchestratorRequest(
+    {
+      actor: { id: "owner-1", role: "owner" },
+      intent: "household",
+      text: "Что ты умеешь?",
+    },
+    {
+      aiProvider: {
+        async complete() {
+          throw new Error("AI should not be called for a fast answer");
+        },
+      },
+    },
+  );
+
+  assert.equal(response.accepted, true);
+  assert.equal(response.answer.source, "local_fast_reply");
+  assert.match(response.answer.text, /могу/i);
+});
+
+test("orchestrator answers voice input questions without calling AI", async () => {
+  const response = await handleOrchestratorRequest(
+    {
+      actor: { id: "owner-1", role: "owner" },
+      intent: "household",
+      text: "ты воспринимаешь голосовой ввод?",
+    },
+    {
+      aiProvider: {
+        async complete() {
+          throw new Error("AI should not be called for a fast answer");
+        },
+      },
+    },
+  );
+
+  assert.equal(response.answer.source, "local_fast_reply");
+  assert.match(response.answer.text, /голос/i);
+});
