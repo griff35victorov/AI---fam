@@ -59,6 +59,22 @@ function resolveTelegramWebhookSecret({ botKey, telegramWebhookSecret, telegramW
   return telegramWebhookSecrets?.[botKey] ?? telegramWebhookSecret;
 }
 
+function buildTelegramWebhookResponse(result, replyMode) {
+  if (replyMode !== "webhook_response") {
+    return { ok: true, ...result };
+  }
+
+  if (!result?.chatId || !result?.text) {
+    return { ok: true };
+  }
+
+  return {
+    method: "sendMessage",
+    chat_id: result.chatId,
+    text: result.text,
+  };
+}
+
 function envValue(value) {
   return typeof value === "string" && value.trim() === "" ? undefined : value;
 }
@@ -72,6 +88,8 @@ export function createAppServer(options = {}) {
     options.telegramWebhookSecret ?? dependencies.telegramWebhookSecret;
   const telegramWebhookSecrets =
     options.telegramWebhookSecrets ?? dependencies.telegramWebhookSecrets ?? {};
+  const telegramReplyMode =
+    options.telegramReplyMode ?? dependencies.telegramReplyMode ?? "send_message";
   const users = options.users ?? dependencies.users ?? [];
   const orchestrator =
     options.orchestrator ??
@@ -113,14 +131,18 @@ export function createAppServer(options = {}) {
         }
 
         const body = await readJson(request);
+        const routeReplyMode = telegramReplyMode;
         const result = await handleTelegramUpdate(body, {
           users,
           repositories,
           orchestrator,
-          telegramSender: resolveTelegramSender({ botKey, telegramSender, telegramSenders }),
+          telegramSender:
+            routeReplyMode === "webhook_response"
+              ? undefined
+              : resolveTelegramSender({ botKey, telegramSender, telegramSenders }),
           botKey,
         });
-        sendJson(response, 200, { ok: true, ...result });
+        sendJson(response, 200, buildTelegramWebhookResponse(result, routeReplyMode));
         return;
       }
 

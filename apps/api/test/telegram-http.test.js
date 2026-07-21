@@ -175,6 +175,46 @@ test("POST /telegram/teacher/webhook uses the dedicated teacher bot sender", asy
   assert.deepEqual(sentMessages, [{ chatId: 777, text: "Teacher bot answer" }]);
 });
 
+test("POST /telegram/teacher/webhook can reply through webhook response", async () => {
+  let senderCalled = false;
+
+  await withServer(
+    {
+      users,
+      orchestrator: async () => ({ answer: { text: "Teacher webhook response" } }),
+      dependencies: {
+        telegramReplyMode: "webhook_response",
+        telegramSenders: {
+          teacher: {
+            async sendMessage() {
+              senderCalled = true;
+            },
+          },
+        },
+      },
+    },
+    async (baseUrl) => {
+      const response = await postJson(`${baseUrl}/telegram/teacher/webhook`, {
+        update_id: 23,
+        message: {
+          chat: { id: 777 },
+          from: { id: 200 },
+          text: "lesson for B1",
+        },
+      });
+
+      assert.equal(response.status, 200);
+      assert.deepEqual(await response.json(), {
+        method: "sendMessage",
+        chat_id: 777,
+        text: "Teacher webhook response",
+      });
+    },
+  );
+
+  assert.equal(senderCalled, false);
+});
+
 test("POST /telegram/webhook rejects missing webhook secret when configured", async () => {
   await withServer(
     {

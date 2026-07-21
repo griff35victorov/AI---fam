@@ -102,6 +102,7 @@ export function createProductionDependencies({
     workspaceId: envValue(env.APP_DEFAULT_WORKSPACE_ID) ?? defaultWorkspaceId,
     telegramWebhookSecret: envValue(env.TELEGRAM_WEBHOOK_SECRET),
     telegramWebhookSecrets: parseTelegramWebhookSecrets(env),
+    telegramReplyMode: envValue(env.TELEGRAM_REPLY_MODE) ?? "webhook_response",
     aiProvider: new TimewebAiProvider({
       baseUrl: envValue(env.TIMEWEB_AI_BASE_URL) ?? defaultTimewebBaseUrl,
       apiKey: envValue(env.TIMEWEB_AI_API_KEY),

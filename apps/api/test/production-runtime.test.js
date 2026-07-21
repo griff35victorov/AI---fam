@@ -231,6 +231,7 @@ test("server env factory uses production dependencies for Telegram webhook", asy
       TIMEWEB_AI_API_KEY: "timeweb-key",
       TIMEWEB_AGENT_OWNER_ASSISTANT: "agent-owner",
       TELEGRAM_BOT_TOKEN: "telegram-token",
+      TELEGRAM_REPLY_MODE: "send_message",
     },
     repositories,
     fetchImpl: async (...args) => {
@@ -329,6 +330,7 @@ test("async server env factory creates Prisma repositories when DATABASE_URL is 
       TIMEWEB_AI_API_KEY: "timeweb-key",
       TIMEWEB_AGENT_OWNER_ASSISTANT: "agent-owner",
       TELEGRAM_BOT_TOKEN: "telegram-token",
+      TELEGRAM_REPLY_MODE: "send_message",
     },
     importPrismaClient: async () => ({ PrismaClient: FakePrismaClient }),
     fetchImpl: async (...args) => {
