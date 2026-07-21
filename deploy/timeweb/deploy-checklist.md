@@ -5,13 +5,13 @@
 - [x] PostgreSQL DBaaS is created.
 - [x] S3 private bucket is created.
 - [x] Timeweb AI Agent/API key is created.
-- [ ] Production environment variables are fully configured.
+- [x] Production environment variables are fully configured.
 - [x] Database migrations run successfully.
 - [x] `/health` returns `ok`.
-- [ ] Family Telegram users are bootstrapped into PostgreSQL.
-- [ ] Owner Telegram bot webhook is configured.
-- [ ] Daughter Telegram bot webhook is configured.
-- [ ] Teacher Telegram bot webhook is configured.
+- [x] Family Telegram users are bootstrapped into PostgreSQL.
+- [x] Owner Telegram bot webhook is configured.
+- [x] Daughter Telegram bot webhook is configured.
+- [x] Teacher Telegram bot webhook is configured.
 - [ ] Allowed Telegram user can send `/start`.
 - [ ] Test owner request is routed.
 - [ ] Test teacher request is routed.

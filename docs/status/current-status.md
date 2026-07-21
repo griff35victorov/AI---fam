@@ -19,6 +19,9 @@ Date: 2026-07-21
 - Dedicated owner, daughter, and teacher Telegram webhook routes with role-bound access checks.
 - Telegram webhook CLI support for registering one bot or all three dedicated family bots.
 - Owner, daughter, and teacher Telegram bot tokens stored in Timeweb App Platform env.
+- Owner, daughter, and teacher Telegram users bootstrapped into PostgreSQL.
+- Owner, daughter, and teacher Telegram webhooks registered with Telegram.
+- Telegram replies use webhook-response mode to avoid outbound Telegram API calls from Timeweb.
 - In-memory repositories for users, memories, conversations, reminders, and jobs.
 - Prisma/PostgreSQL repository adapter for users, memories, conversations, reminders, and jobs.
 - Async production startup hook that can create Prisma repositories when `DATABASE_URL` is set.
@@ -40,12 +43,11 @@ Date: 2026-07-21
 - Timeweb Agent API adapter verified against `agent.timeweb.cloud` OpenAI-compatible endpoint.
 - App Platform env updated with S3 credentials, Agent API base URL, AI token, and agent Access ID mappings.
 - Prisma schema and initial migration artifact for users, conversations, memory, students, lessons, materials, reminders, jobs, usage, and audit logs.
-- Local automated test suite: 114 passing tests.
+- Local automated test suite: 115 passing tests.
 
 ## Not Implemented Yet
 
 - Live PostgreSQL smoke write test from inside Timeweb runtime.
-- Real family Telegram user IDs and webhook registration.
 - Application-level S3 object upload workflow and teacher material ingestion.
 - Web cabinet for owner and teacher.
 - Authentication UI.
@@ -58,15 +60,14 @@ Date: 2026-07-21
 - App Platform: `225845`, status `active`, preset `2731`, Moscow `ru-3`.
 - Technical domain: `https://griff35victorov-ai-fam-8853.twc1.net`.
 - Git source: `griff35victorov/AI---fam`, branch `main`.
-- Deployed app commit: `83a3c7f62b8de895776a798f6b26566ac8be8c52`.
+- Deployed app commit: `0cb46d51a4314c35fe41558c23584dbbecdd7703`.
 - Current monthly infrastructure estimate: PostgreSQL 970 RUB/month + App Platform 510 RUB/month + S3 Hot 10 GB 79 RUB/month + Timeweb AI agents/token package usage. Practical MVP estimate after agent creation is about 2060-2065 RUB/month before variable overage.
 - Timeweb AI agents: 5 private active agents created on GPT 4.1 mini.
 - Timeweb S3: private bucket `family-ai-prod-dq508761`, Hot 10 GB.
 
 ## Next Engineering Slice
 
-1. Ask each family member to send `/start` to their dedicated bot.
-2. Read real family Telegram user IDs from Telegram `getUpdates` and run guarded user bootstrap.
-3. Register all three Telegram webhooks.
-4. Connect material/file upload to the private S3 bucket.
-5. Add teacher workspace API for students, materials, lessons, and lesson notes.
+1. Send real test messages from all three Telegram accounts.
+2. Connect material/file upload to the private S3 bucket.
+3. Add teacher workspace API for students, materials, lessons, and lesson notes.
+4. Add web cabinet for owner and teacher.
