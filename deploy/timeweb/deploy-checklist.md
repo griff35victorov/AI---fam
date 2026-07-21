@@ -12,6 +12,7 @@
 - [x] Owner Telegram bot webhook is configured.
 - [x] Daughter Telegram bot webhook is configured.
 - [x] Teacher Telegram bot webhook is configured.
+- [x] Protected daughter webhook endpoint returns Telegram webhook-response after the `7f06488` deploy.
 - [ ] Allowed Telegram user can send `/start`.
 - [ ] Test owner request is routed.
 - [ ] Test teacher request is routed.

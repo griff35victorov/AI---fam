@@ -13,7 +13,7 @@ Deploy the family AI orchestrator as a Timeweb App Platform Docker Compose appli
 - PostgreSQL DBaaS ID: `4190345`.
 - S3 bucket: `family-ai-prod-dq508761`, private Hot 10 GB.
 - Timeweb AI: five private GPT 4.1 mini agents mapped to family roles through Agent API Access IDs.
-- Last verified deploy: commit `0cb46d51a4314c35fe41558c23584dbbecdd7703`, `/health` returned 200 OK.
+- Last verified deploy: commit `7f06488fdc2e91682a16241e98cd9e0cb38efd51`, `/health` returned 200 OK.
 
 ## Services
 
@@ -42,6 +42,7 @@ Completed:
 - Owner, daughter, and teacher users are bootstrapped into PostgreSQL.
 - Owner, daughter, and teacher Telegram webhooks are registered.
 - Telegram replies use webhook-response mode because direct outbound `sendMessage` from Timeweb is not reliable in this runtime.
+- Telegram `/start` uses a fast local reply before AI routing, which avoids Telegram webhook timeout on first bot start.
 - `/health` returns 200 OK.
 
 Remaining:
