@@ -521,6 +521,22 @@ async function enqueueTelegramUpdateJob({ repositories, update, botKey, now = ne
   return job;
 }
 
+function enqueueTelegramUpdateJobInBackground({
+  repositories,
+  update,
+  botKey,
+  triggerTelegramUpdateDispatcher,
+}) {
+  Promise.resolve()
+    .then(() => enqueueTelegramUpdateJob({ repositories, update, botKey }))
+    .then((job) => {
+      if (job) {
+        triggerTelegramUpdateDispatcher?.();
+      }
+    })
+    .catch(logTelegramBackgroundError);
+}
+
 async function scheduleTelegramBackgroundUpdate({
   body,
   users,
@@ -933,22 +949,19 @@ export function createAppServer(options = {}) {
               return;
             }
 
-            const queuedJob = await enqueueTelegramUpdateJob({
+            enqueueTelegramUpdateJobInBackground({
               repositories,
               update: body,
               botKey,
+              triggerTelegramUpdateDispatcher,
             });
-            triggerTelegramUpdateDispatcher?.();
 
             sendJson(
               response,
               200,
               buildScheduledTelegramWebhookResponse(
                 rawTelegramRequest,
-                {
-                  queued: Boolean(queuedJob),
-                  duplicate: queuedJob?.status === "completed",
-                },
+                { queued: true },
                 {
                   ackTimestamps: telegramAcceptedAckTimestamps,
                   ackThrottleMs: telegramAcceptedAckThrottleMs,

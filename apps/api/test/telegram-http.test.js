@@ -624,6 +624,85 @@ test("POST /telegram/owner/webhook queues valid updates before slow user lookup"
   assert.deepEqual(sentMessages, [{ chatId: 777, text: "final answer 900" }]);
 });
 
+test("POST /telegram/owner/webhook answers before slow durable enqueue", async () => {
+  const sentMessages = [];
+  const repositories = createInMemoryRepositories({
+    users: [
+      {
+        id: "owner-1",
+        role: "owner",
+        telegramUserId: "100",
+        workspaceId: "workspace-family",
+      },
+    ],
+  });
+  const originalEnqueue = repositories.jobs.enqueue;
+  let releaseEnqueue;
+  const enqueueGate = new Promise((resolve) => {
+    releaseEnqueue = resolve;
+  });
+
+  repositories.jobs.enqueue = async (...args) => {
+    await enqueueGate;
+    return originalEnqueue(...args);
+  };
+
+  await withServer(
+    {
+      repositories,
+      orchestrator: async (request) => ({
+        answer: { text: `final answer ${request.telegramUpdateId}` },
+      }),
+      dependencies: {
+        telegramReplyMode: "webhook_response",
+        telegramUpdateDispatcherIntervalMs: 10,
+        telegramBackgroundSenders: {
+          owner: {
+            async sendChatAction() {
+              return { ok: true };
+            },
+            async sendMessage(message) {
+              sentMessages.push(message);
+              return { ok: true };
+            },
+          },
+        },
+      },
+    },
+    async (baseUrl) => {
+      const responsePromise = postJson(`${baseUrl}/telegram/owner/webhook`, {
+        update_id: 901,
+        message: {
+          message_id: 9301,
+          chat: { id: 777 },
+          from: { id: 100 },
+          text: "weather tonight",
+        },
+      });
+
+      const response = await resolveWithin(
+        responsePromise,
+        100,
+        "webhook response waited for durable enqueue",
+      );
+
+      assert.equal(response.status, 200);
+      await assertAcceptedWebhookMessage(response);
+      assert.equal(sentMessages.length, 0);
+
+      releaseEnqueue();
+
+      await waitFor(
+        () => sentMessages.length === 1,
+        1000,
+        "queued Telegram update was not processed after enqueue resumed",
+      );
+    },
+  );
+
+  assert.deepEqual(sentMessages, [{ chatId: 777, text: "final answer 901" }]);
+});
+
 test("POST /telegram/owner/webhook answers connectivity check immediately without AI", async () => {
   const sentMessages = [];
   let orchestratorCalled = false;
