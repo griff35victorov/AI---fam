@@ -519,6 +519,11 @@ export function isCurrentDataRequest(text) {
   return /(?:актуальн|новост|курс|цена|стоимост|наличии|расписан|рейс|котировк|current|latest|price|schedule|available)/i.test(normalized);
 }
 
+export function isNewsCurrentDataRequest(text) {
+  const normalized = String(text ?? "").toLowerCase();
+  return /(?:новост|news|headlines)/i.test(normalized);
+}
+
 export function detectRequiredCapability(text) {
   const normalized = String(text ?? "").toLowerCase();
 
@@ -526,6 +531,7 @@ export function detectRequiredCapability(text) {
   if (isWebFetchRequest(text)) return "web_fetch_url";
   if (isTimeLocationRequest(text)) return "time_location_context";
   if (isTravelLocalRequest(text)) return "travel_local";
+  if (isNewsCurrentDataRequest(text)) return "web_current_data";
 
   if (/(?:ежедневн.*сводк|утренн.*сводк|дайджест дня|daily briefing|morning briefing)/i.test(normalized)) {
     return "daily_briefing";

@@ -609,6 +609,47 @@ test("repository backed orchestrator uses web_current_data before AI", async () 
   assert.equal(calls[0].capabilityId, "web_current_data");
 });
 
+test("repository backed orchestrator routes news briefing to web_current_data", async () => {
+  const repositories = createInMemoryRepositories();
+  const calls = [];
+  const orchestrator = createRepositoryBackedOrchestrator({
+    repositories,
+    capabilityRegistry: {
+      has(capabilityId) {
+        return capabilityId === "web_current_data" || capabilityId === "daily_briefing";
+      },
+      async run(capabilityId, args) {
+        calls.push({ capabilityId, args });
+        if (capabilityId === "daily_briefing") {
+          throw new Error("News briefing should not use daily briefing");
+        }
+        return {
+          text: "Новости: актуальная подборка",
+          source: "web_current_data",
+          metadata: { provider: "test" },
+        };
+      },
+    },
+    aiProvider: {
+      async complete() {
+        throw new Error("AI should not be called for news briefing");
+      },
+    },
+  });
+
+  const response = await orchestrator({
+    chatId: 777,
+    actor: { id: "owner-1", role: "owner" },
+    intent: "household",
+    text: "Сделай утреннюю сводку по новостям",
+    telegramUpdateId: 812,
+  });
+
+  assert.equal(response.answer.source, "web_current_data");
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].capabilityId, "web_current_data");
+});
+
 test("repository backed orchestrator creates local reminder before AI", async () => {
   const repositories = createInMemoryRepositories();
   const calls = [];
