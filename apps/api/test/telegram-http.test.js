@@ -676,6 +676,39 @@ test("POST /telegram/webhook accepts matching webhook secret", async () => {
   );
 });
 
+test("POST /telegram/webhook accepts direct Telegram secret when relay secret is configured", async () => {
+  await withServer(
+    {
+      dependencies: {
+        telegramWebhookSecret: "secret-token",
+        telegramRelayWebhookSecret: "relay-secret",
+      },
+      users,
+      orchestrator: async () => ({ answer: { text: "Direct Telegram ok" } }),
+    },
+    async (baseUrl) => {
+      const response = await fetch(`${baseUrl}/telegram/webhook`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-telegram-bot-api-secret-token": "secret-token",
+        },
+        body: JSON.stringify({
+          update_id: 46,
+          message: {
+            chat: { id: 777 },
+            from: { id: 200 },
+            text: "lesson for B1",
+          },
+        }),
+      });
+
+      assert.equal(response.status, 200);
+      assert.equal((await response.json()).text, "Direct Telegram ok");
+    },
+  );
+});
+
 test("POST /telegram/teacher/webhook uses dedicated webhook secret", async () => {
   await withServer(
     {

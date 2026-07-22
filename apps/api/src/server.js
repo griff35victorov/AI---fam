@@ -57,10 +57,8 @@ function authorizeTelegramWebhookRequest({
     return { ok: false, statusCode: 401, error: "telegram_webhook_secret_invalid" };
   }
 
-  if (
-    relayWebhookSecret &&
-    request.headers["x-family-ai-relay-secret"] !== relayWebhookSecret
-  ) {
+  const receivedRelaySecret = request.headers["x-family-ai-relay-secret"];
+  if (relayWebhookSecret && receivedRelaySecret && receivedRelaySecret !== relayWebhookSecret) {
     return { ok: false, statusCode: 401, error: "relay_secret_invalid" };
   }
 
