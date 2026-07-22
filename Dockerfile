@@ -9,6 +9,9 @@ RUN apt-get update \
     ffmpeg \
     python3 \
     python3-pip \
+    tesseract-ocr \
+    tesseract-ocr-eng \
+    tesseract-ocr-rus \
   && rm -rf /var/lib/apt/lists/*
 
 RUN python3 -m pip install --break-system-packages --no-cache-dir vosk==0.3.45

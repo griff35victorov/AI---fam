@@ -395,6 +395,19 @@ export function createPrismaRepositories(prisma) {
     },
 
     reminders: {
+      async create(reminder) {
+        return prisma.reminder.create({
+          data: {
+            userId: reminder.userId,
+            workspaceId: reminder.workspaceId,
+            title: reminder.title,
+            runAt: new Date(reminder.runAt),
+            timezone: reminder.timezone ?? "Europe/Moscow",
+            status: reminder.status ?? "scheduled",
+          },
+        });
+      },
+
       async listDue(now = new Date()) {
         return prisma.reminder.findMany({
           where: {
@@ -403,6 +416,38 @@ export function createPrismaRepositories(prisma) {
           },
           orderBy: { runAt: "asc" },
         });
+      },
+
+      async listUpcoming({
+        userId,
+        workspaceId,
+        now = new Date(),
+        limit = 10,
+      } = {}) {
+        const where = {
+          status: "scheduled",
+          runAt: { gte: new Date(now) },
+        };
+
+        if (userId != null) where.userId = userId;
+        if (workspaceId != null) where.workspaceId = workspaceId;
+
+        return prisma.reminder.findMany({
+          where,
+          orderBy: { runAt: "asc" },
+          take: limit,
+        });
+      },
+
+      async updateStatus(id, status) {
+        return prisma.reminder.update({
+          where: { id },
+          data: { status },
+        });
+      },
+
+      async markSent(id) {
+        return this.updateStatus(id, "sent");
       },
     },
 

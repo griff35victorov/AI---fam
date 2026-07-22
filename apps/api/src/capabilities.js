@@ -342,6 +342,40 @@ export function createCapabilityRegistry({
         return browserAutomation.run(args);
       }
 
+      if (capabilityId === "tasks_reminders" && tasksProvider) {
+        return tasksProvider.createReminder(args);
+      }
+
+      if (capabilityId === "daily_briefing") {
+        return buildDailyBriefing({
+          ...args,
+          fetchImpl,
+          weatherTimeoutMs,
+          tasksProvider,
+          calendarProvider,
+          emailProvider,
+          defaultLocation,
+          defaultTimeZone,
+          now: clock(),
+        });
+      }
+
+      if (capabilityId === "ocr" && ocrProvider) {
+        return ocrProvider.recognizeTelegramImage(args);
+      }
+
+      if (capabilityId === "shopping_orders" && shoppingProvider) {
+        return shoppingProvider.search(args);
+      }
+
+      if (capabilityId === "finance_personal" && financeProvider) {
+        return financeProvider.run(args);
+      }
+
+      if (capabilityId === "automation" && automationProvider) {
+        return automationProvider.run(args);
+      }
+
       throw new Error(`Capability is not available: ${capabilityId}`);
     },
   };
@@ -389,7 +423,7 @@ function capabilityAvailable(capabilityId, deps) {
   if (capabilityId === "tasks_reminders") return Boolean(deps.tasksProvider);
   if (capabilityId === "contacts_memory") return Boolean(deps.contactsProvider);
   if (capabilityId === "daily_briefing") {
-    return Boolean(deps.calendarProvider || deps.emailProvider || deps.tasksProvider);
+    return Boolean(deps.fetchImpl || deps.calendarProvider || deps.emailProvider || deps.tasksProvider);
   }
   if (capabilityId === "docs_drive") return Boolean(deps.docsProvider);
   if (capabilityId === "ocr") return Boolean(deps.ocrProvider);
@@ -493,6 +527,10 @@ export function detectRequiredCapability(text) {
   if (isTimeLocationRequest(text)) return "time_location_context";
   if (isTravelLocalRequest(text)) return "travel_local";
 
+  if (/(?:ежедневн.*сводк|утренн.*сводк|дайджест дня|daily briefing|morning briefing)/i.test(normalized)) {
+    return "daily_briefing";
+  }
+
   if (/(?:календар|встреч[ауеи]|событи[ея]|добавь.*календар|calendar|event)/i.test(normalized)) {
     return "calendar_scheduling";
   }
@@ -576,14 +614,55 @@ export function buildCapabilitiesAnswer(registry) {
   ].join("\n");
 }
 
+function capabilityAccessSteps(capabilityId) {
+  const steps = {
+    calendar_scheduling: [
+      "Google Calendar OAuth: чтение событий и создание событий.",
+      "Минимальные scopes: calendar.events и calendar.readonly.",
+    ],
+    email_triage: [
+      "Gmail/Outlook/IMAP OAuth: чтение входящих, поиск писем и черновики.",
+      "Для безопасного старта достаточно Gmail readonly; отправку писем лучше включать отдельным подтверждением.",
+    ],
+    docs_drive: [
+      "Google Drive/Docs/Sheets/Slides OAuth: чтение файлов и загрузка материалов жены в библиотеку.",
+      "Для старта достаточно Drive readonly плюс отдельная папка с учебными материалами.",
+    ],
+    contacts_memory: [
+      "Google Contacts или отдельная семейная база контактов.",
+      "Нужны имена, роли, дни рождения и связи с учениками/семьей.",
+    ],
+    browser_automation: [
+      "Нужен Playwright/browser-use сервис или отдельный браузерный worker.",
+      "Он нужен для сайтов с формами, личными кабинетами, капчей и кнопками.",
+    ],
+    tts: [
+      "Нужен TTS endpoint или локальный движок озвучки.",
+      "После подключения бот сможет отвечать голосом, а не только текстом.",
+    ],
+    finance_personal: [
+      "Нужен источник расходов: таблица, ручной ввод, банковский экспорт или интеграция банка.",
+      "Банковские логины и платежи нельзя хранить в чате.",
+    ],
+    meeting_briefing: [
+      "Нужны календарь, документы и/или почта.",
+      "Без них можно готовить только ручную повестку по тексту пользователя.",
+    ],
+  };
+
+  return steps[capabilityId] ?? [];
+}
+
 export function buildMissingCapabilityAnswer(capabilityId, text) {
   const capability = capabilityById.get(capabilityId) ?? capabilityById.get("web_current_data");
   const reason = capability?.missingAccess ?? "Нужно подключить этот источник к оркестру.";
+  const accessSteps = capabilityAccessSteps(capability?.id ?? capabilityId);
 
   return [
     "Для этого запроса нужен инструмент, а не ответ по памяти.",
     `Нужный инструмент: ${capability?.id ?? capabilityId}.`,
     `Что нужно подключить: ${reason}`,
+    ...accessSteps.map((step) => `- ${step}`),
     "Я не буду отправлять вас проверять сайт или сервис вручную; после подключения доступа оркестр будет вызывать инструмент сам.",
   ].join("\n");
 }
@@ -836,6 +915,222 @@ export async function fetchLocationLookup({
     metadata: {
       query: lookupQuery,
       count: places.length,
+    },
+  };
+}
+
+function normalizeWebSearchQuery({ query, text }) {
+  return String(query ?? text ?? "")
+    .replace(/\bhttps?:\/\/[^\s<>"')]+/gi, " ")
+    .replace(/^(?:найди|поищи|проверь|узнай|подскажи|что известно о|search|find|check)\s+/i, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function duckDuckGoResultUrl(href) {
+  if (!href) return null;
+
+  const decodedHref = decodeHtmlEntities(href);
+  try {
+    const parsed = new URL(decodedHref, "https://duckduckgo.com");
+    const uddg = parsed.searchParams.get("uddg");
+    if (uddg) return decodeURIComponent(uddg);
+    if (parsed.protocol === "http:" || parsed.protocol === "https:") return parsed.toString();
+  } catch {
+    return null;
+  }
+
+  return null;
+}
+
+function parseDuckDuckGoHtml(html) {
+  const blocks = String(html ?? "")
+    .split(/<div[^>]+class="[^"]*result[^"]*"[^>]*>/i)
+    .slice(1);
+
+  return blocks
+    .map((block) => {
+      const titleMatch = block.match(/<a[^>]+class="[^"]*result__a[^"]*"[^>]+href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/i);
+      const snippetMatch = block.match(/<a[^>]+class="[^"]*result__snippet[^"]*"[^>]*>([\s\S]*?)<\/a>/i) ??
+        block.match(/<div[^>]+class="[^"]*result__snippet[^"]*"[^>]*>([\s\S]*?)<\/div>/i);
+      const url = duckDuckGoResultUrl(titleMatch?.[1]);
+      const title = extractReadableText(titleMatch?.[2] ?? "", "text/html");
+      const snippet = extractReadableText(snippetMatch?.[1] ?? "", "text/html");
+
+      return title && url ? { title, url, snippet } : null;
+    })
+    .filter(Boolean);
+}
+
+function formatWebSearchAnswer({ query, results, providerLabel }) {
+  if (results.length === 0) {
+    return [
+      `По запросу «${query}» публичный поиск не вернул читаемых результатов.`,
+      "Это не тупик: нужен другой web-search/browser provider или более конкретный запрос.",
+    ].join("\n");
+  }
+
+  return [
+    `Актуальный поиск: ${query}`,
+    ...results.map((result, index) => [
+      `${index + 1}. ${result.title}`,
+      result.snippet ? `   ${result.snippet}` : null,
+      `   ${result.url}`,
+    ].filter(Boolean).join("\n")),
+    `Источник: ${providerLabel}.`,
+  ].join("\n");
+}
+
+export function createPublicWebSearchProvider({
+  fetchImpl = fetch,
+  timeoutMs = 7000,
+  providerLabel = "DuckDuckGo HTML, best-effort public search",
+} = {}) {
+  return {
+    async search({ query, text, limit = 5 } = {}) {
+      const searchQuery = normalizeWebSearchQuery({ query, text });
+      if (searchQuery.length < 3) {
+        return {
+          text: "Уточните, что нужно найти в актуальных публичных источниках.",
+          source: "web_current_data",
+          metadata: { requiresClarification: true },
+        };
+      }
+
+      const url =
+        "https://duckduckgo.com/html/" +
+        `?q=${encodeURIComponent(searchQuery)}&kl=ru-ru`;
+      const response = await fetchWithTimeout(fetchImpl, url, {
+        timeoutMs,
+        headers: {
+          accept: "text/html,application/xhtml+xml",
+          "user-agent": "family-ai-orchestrator/0.1",
+        },
+      });
+      if (!response.ok) {
+        throw new Error(`Public web search failed with ${response.status}`);
+      }
+
+      const html = await response.text();
+      const results = parseDuckDuckGoHtml(html).slice(0, Math.max(1, limit));
+
+      return {
+        text: formatWebSearchAnswer({
+          query: searchQuery,
+          results,
+          providerLabel,
+        }),
+        source: "web_current_data",
+        metadata: {
+          query: searchQuery,
+          provider: providerLabel,
+          resultCount: results.length,
+        },
+      };
+    },
+  };
+}
+
+export function createWebShoppingProvider({ webSearch } = {}) {
+  return {
+    async search(args = {}) {
+      if (!webSearch?.search) {
+        throw new Error("Public shopping search needs web_current_data provider");
+      }
+
+      const query = normalizeWebSearchQuery(args);
+      const result = await webSearch.search({
+        ...args,
+        query: `${query} купить цена наличие`,
+        limit: args.limit ?? 5,
+      });
+
+      return {
+        ...result,
+        source: "shopping_orders",
+        text: [
+          "Публичный поиск товаров и цен:",
+          result.text,
+          "Личные заказы, корзины и кабинеты маркетплейсов требуют отдельный доступ или browser_automation.",
+        ].join("\n"),
+      };
+    },
+  };
+}
+
+export async function buildDailyBriefing({
+  actor,
+  workspaceId,
+  text,
+  fetchImpl = fetch,
+  weatherTimeoutMs = 6000,
+  tasksProvider,
+  calendarProvider,
+  emailProvider,
+  defaultLocation = "Москва",
+  defaultTimeZone = "Europe/Moscow",
+  now = new Date(),
+} = {}) {
+  const sections = [
+    "Ежедневная сводка:",
+    buildTimeLocationContext({
+      text,
+      now,
+      defaultLocation,
+      defaultTimeZone,
+    }).text,
+  ];
+
+  try {
+    const weather = await fetchWeatherForecast({
+      location: defaultLocation,
+      target: "daily",
+      fetchImpl,
+      timeoutMs: weatherTimeoutMs,
+      forecastDays: 3,
+    });
+    sections.push(weather.text);
+  } catch (error) {
+    sections.push(`Погода: источник не ответил (${String(error.message ?? "").slice(0, 120)}).`);
+  }
+
+  if (tasksProvider?.listUpcoming) {
+    const reminders = await tasksProvider.listUpcoming({
+      actor,
+      workspaceId,
+      limit: 5,
+      timeZone: defaultTimeZone,
+    });
+
+    sections.push(
+      reminders.length > 0
+        ? [
+            "Ближайшие напоминания:",
+            ...reminders.map((reminder) => `- ${reminder.displayTime}: ${reminder.title}`),
+          ].join("\n")
+        : "Ближайшие напоминания: нет запланированных локальных напоминаний.",
+    );
+  } else {
+    sections.push("Ближайшие напоминания: локальный tasks_reminders пока не подключен.");
+  }
+
+  sections.push(
+    calendarProvider?.listEvents
+      ? "Календарь: Google/CalDAV provider подключен, события можно добавить в следующем шаге."
+      : "Календарь: нужен доступ Google Calendar/CalDAV, чтобы включить события в сводку.",
+  );
+  sections.push(
+    emailProvider?.listMessages
+      ? "Почта: email provider подключен, письма можно добавить в следующем шаге."
+      : "Почта: нужен доступ Gmail/Outlook/IMAP, чтобы включить письма в сводку.",
+  );
+
+  return {
+    text: sections.join("\n\n"),
+    source: "daily_briefing",
+    metadata: {
+      workspaceId,
+      actorId: actor?.id,
     },
   };
 }

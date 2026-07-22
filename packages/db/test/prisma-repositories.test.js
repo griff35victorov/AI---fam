@@ -17,6 +17,7 @@ function matchesWhere(record, where = {}) {
       if ("in" in value) return value.in.includes(record[key]);
       if ("not" in value) return record[key] !== value.not;
       if ("lte" in value) return new Date(record[key]) <= new Date(value.lte);
+      if ("gte" in value) return new Date(record[key]) >= new Date(value.gte);
     }
 
     return record[key] === value;

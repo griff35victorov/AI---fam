@@ -99,6 +99,86 @@ test("handleTelegramUpdate rejects voice before orchestrator when STT is not con
   assert.equal(sent.length, 1);
 });
 
+test("buildTelegramRequestFromRepositories recognizes photo text before routing", async () => {
+  const repositories = createInMemoryRepositories({
+    users: [
+      {
+        id: "owner-1",
+        role: "owner",
+        telegramUserId: "100",
+        workspaceId: "workspace-family",
+      },
+    ],
+  });
+
+  const request = await buildTelegramRequestFromRepositories(
+    {
+      update_id: 557,
+      message: {
+        chat: { id: 777 },
+        from: { id: 100 },
+        caption: "Распознай текст",
+        photo: [
+          { file_id: "small-photo", file_size: 10 },
+          { file_id: "large-photo", file_size: 100 },
+        ],
+      },
+    },
+    {
+      repositories,
+      imageOcr: {
+        async recognizeTelegramImage({ fileId }) {
+          assert.equal(fileId, "large-photo");
+          return { ok: true, text: "Домашнее задание: exercise 4" };
+        },
+      },
+    },
+  );
+
+  assert.equal(request.imageRecognized, true);
+  assert.match(request.text, /Распознай текст/);
+  assert.match(request.text, /Домашнее задание/);
+});
+
+test("handleTelegramUpdate rejects photo before orchestrator when OCR is not configured", async () => {
+  const repositories = createInMemoryRepositories({
+    users: [
+      {
+        id: "owner-1",
+        role: "owner",
+        telegramUserId: "100",
+        workspaceId: "workspace-family",
+      },
+    ],
+  });
+  const sent = [];
+
+  const response = await handleTelegramUpdate(
+    {
+      update_id: 558,
+      message: {
+        chat: { id: 777 },
+        from: { id: 100 },
+        photo: [{ file_id: "photo-file", file_size: 100 }],
+      },
+    },
+    {
+      repositories,
+      orchestrator: async () => {
+        throw new Error("orchestrator should not receive unrecognized photo");
+      },
+      telegramSender: {
+        async sendMessage(message) {
+          sent.push(message);
+        },
+      },
+    },
+  );
+
+  assert.match(response.text, /Распознавание фото пока не настроено/);
+  assert.equal(sent.length, 1);
+});
+
 test("resolveTelegramActor returns null for unknown telegram user", () => {
   const actor = resolveTelegramActor({ from: { id: 999 } }, users);
 

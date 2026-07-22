@@ -571,6 +571,118 @@ test("repository backed orchestrator returns missing capability instead of dead 
   assert.match(response.answer.text, /web_current_data/);
 });
 
+test("repository backed orchestrator uses web_current_data before AI", async () => {
+  const repositories = createInMemoryRepositories();
+  const calls = [];
+  const orchestrator = createRepositoryBackedOrchestrator({
+    repositories,
+    capabilityRegistry: {
+      has(capabilityId) {
+        return capabilityId === "web_current_data";
+      },
+      async run(capabilityId, args) {
+        calls.push({ capabilityId, args });
+        return {
+          text: "Актуальный поиск: iPhone цена",
+          source: "web_current_data",
+          metadata: { provider: "test" },
+        };
+      },
+    },
+    aiProvider: {
+      async complete() {
+        throw new Error("AI should not be called for current data");
+      },
+    },
+  });
+
+  const response = await orchestrator({
+    chatId: 777,
+    actor: { id: "owner-1", role: "owner" },
+    intent: "household",
+    text: "Какая актуальная цена iPhone?",
+    telegramUpdateId: 799,
+  });
+
+  assert.equal(response.answer.source, "web_current_data");
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].capabilityId, "web_current_data");
+});
+
+test("repository backed orchestrator creates local reminder before AI", async () => {
+  const repositories = createInMemoryRepositories();
+  const calls = [];
+  const orchestrator = createRepositoryBackedOrchestrator({
+    repositories,
+    capabilityRegistry: {
+      has(capabilityId) {
+        return capabilityId === "tasks_reminders";
+      },
+      async run(capabilityId, args) {
+        calls.push({ capabilityId, args });
+        return {
+          text: "Напоминание создано: купить лампы",
+          source: "tasks_reminders",
+          metadata: { reminderId: "reminder-1" },
+        };
+      },
+    },
+    aiProvider: {
+      async complete() {
+        throw new Error("AI should not be called for reminders");
+      },
+    },
+  });
+
+  const response = await orchestrator({
+    chatId: 777,
+    actor: { id: "owner-1", role: "owner" },
+    intent: "reminder",
+    text: "Напомни завтра в 9 купить лампы",
+    telegramUpdateId: 810,
+  });
+
+  assert.equal(response.answer.source, "tasks_reminders");
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].args.chatId, 777);
+});
+
+test("repository backed orchestrator composes daily briefing before AI", async () => {
+  const repositories = createInMemoryRepositories();
+  const calls = [];
+  const orchestrator = createRepositoryBackedOrchestrator({
+    repositories,
+    capabilityRegistry: {
+      has(capabilityId) {
+        return capabilityId === "daily_briefing";
+      },
+      async run(capabilityId, args) {
+        calls.push({ capabilityId, args });
+        return {
+          text: "Ежедневная сводка: погода, напоминания, доступы",
+          source: "daily_briefing",
+        };
+      },
+    },
+    aiProvider: {
+      async complete() {
+        throw new Error("AI should not be called for daily briefing");
+      },
+    },
+  });
+
+  const response = await orchestrator({
+    chatId: 777,
+    actor: { id: "owner-1", role: "owner" },
+    intent: "household",
+    text: "Утренняя сводка с почтой и задачами",
+    telegramUpdateId: 811,
+  });
+
+  assert.equal(response.answer.source, "daily_briefing");
+  assert.equal(calls.length, 1);
+});
+
 test("repository backed orchestrator lists expanded capability registry", async () => {
   const repositories = createInMemoryRepositories();
   const orchestrator = createRepositoryBackedOrchestrator({

@@ -189,6 +189,18 @@ const normalizeJob = (job) => ({
   updatedAt: cloneDate(job.updatedAt) ?? new Date(),
 });
 
+const normalizeReminder = (reminder) => ({
+  id: reminder.id ?? createId("reminder"),
+  userId: reminder.userId,
+  workspaceId: reminder.workspaceId,
+  title: reminder.title,
+  runAt: cloneDate(reminder.runAt) ?? new Date(),
+  timezone: reminder.timezone ?? "Europe/Moscow",
+  status: reminder.status ?? "scheduled",
+  createdAt: cloneDate(reminder.createdAt) ?? new Date(),
+  updatedAt: cloneDate(reminder.updatedAt) ?? new Date(),
+});
+
 export const databasePackage = {
   name: "@family-ai/db",
   status: "in-memory-repositories",
@@ -203,10 +215,7 @@ export function createInMemoryRepositories(seed = {}) {
     ...cloneRecord(message),
     createdAt: cloneDate(message.createdAt) ?? new Date(),
   }));
-  const reminders = [...(seed.reminders ?? [])].map((reminder) => ({
-    ...cloneRecord(reminder),
-    runAt: cloneDate(reminder.runAt),
-  }));
+  const reminders = [...(seed.reminders ?? [])].map(normalizeReminder);
   const jobs = [...(seed.jobs ?? [])].map(normalizeJob);
   const auditLogs = [...(seed.auditLogs ?? [])].map(normalizeAuditLog);
 
@@ -373,6 +382,12 @@ export function createInMemoryRepositories(seed = {}) {
     },
 
     reminders: {
+      async create(reminder) {
+        const stored = normalizeReminder(reminder);
+        reminders.push(stored);
+        return cloneRecord(stored);
+      },
+
       async listDue(now = new Date()) {
         const nowTime = new Date(now).getTime();
 
@@ -384,6 +399,37 @@ export function createInMemoryRepositories(seed = {}) {
           )
           .sort((left, right) => new Date(left.runAt) - new Date(right.runAt))
           .map(cloneRecord);
+      },
+
+      async listUpcoming({
+        userId,
+        workspaceId,
+        now = new Date(),
+        limit = 10,
+      } = {}) {
+        const nowTime = new Date(now).getTime();
+
+        return reminders
+          .filter((reminder) => reminder.status === "scheduled")
+          .filter((reminder) => userId == null || reminder.userId === userId)
+          .filter((reminder) => workspaceId == null || reminder.workspaceId === workspaceId)
+          .filter((reminder) => new Date(reminder.runAt).getTime() >= nowTime)
+          .sort((left, right) => new Date(left.runAt) - new Date(right.runAt))
+          .slice(0, Math.max(0, limit))
+          .map(cloneRecord);
+      },
+
+      async updateStatus(id, status, now = new Date()) {
+        const stored = reminders.find((reminder) => reminder.id === id);
+        if (!stored) return null;
+
+        stored.status = status;
+        stored.updatedAt = cloneDate(now) ?? new Date();
+        return cloneRecord(stored);
+      },
+
+      async markSent(id, now = new Date()) {
+        return this.updateStatus(id, "sent", now);
       },
     },
 

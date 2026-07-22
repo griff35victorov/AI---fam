@@ -1,6 +1,12 @@
 import { TimewebAiProvider } from "../../../packages/ai/src/index.js";
 import { createPrismaRepositories } from "../../../packages/db/src/index.js";
-import { createCapabilityRegistry } from "./capabilities.js";
+import {
+  createCapabilityRegistry,
+  createPublicWebSearchProvider,
+  createWebShoppingProvider,
+} from "./capabilities.js";
+import { LocalTesseractTelegramImageOcr } from "./ocr.js";
+import { createLocalTasksProvider } from "./tasks.js";
 import { TelegramBotSender, TelegramRelaySender } from "./telegram-sender.js";
 import { LocalVoskTelegramVoiceTranscriber, TelegramVoiceTranscriber } from "./voice.js";
 
@@ -149,6 +155,48 @@ export function createVoiceTranscribers(env = {}, fetchImpl = fetch) {
   return transcribers;
 }
 
+export function createImageOcrs(env = {}, fetchImpl = fetch) {
+  const provider = envValue(env.OCR_PROVIDER) ?? "local_tesseract";
+  if (["none", "off", "disabled"].includes(provider.toLowerCase())) {
+    return {};
+  }
+
+  const imageOcrs = {};
+  for (const botKey of Object.keys(telegramBotEnv)) {
+    const botToken = resolveTelegramBotTokenForKey(env, botKey);
+    if (!botToken) {
+      continue;
+    }
+
+    imageOcrs[botKey] = new LocalTesseractTelegramImageOcr({
+      botToken,
+      fetchImpl,
+      tesseractPath: envValue(env.TESSERACT_PATH) ?? "tesseract",
+      languages: envValue(env.TESSERACT_LANGUAGES) ?? "rus+eng",
+      timeoutMs: parseNumber(env.TESSERACT_TIMEOUT_MS, 20_000),
+    });
+  }
+
+  return imageOcrs;
+}
+
+function createLocalAutomationProvider({ tasksProvider } = {}) {
+  if (!tasksProvider) return undefined;
+
+  return {
+    async run() {
+      return {
+        text: [
+          "Локальная автоматизация подключена.",
+          "Сейчас активный сценарий: отложенные Telegram-напоминания через PostgreSQL job queue.",
+          "Для n8n/Activepieces/Make/webhooks нужен отдельный URL или доступ к выбранному сервису.",
+        ].join("\n"),
+        source: "automation",
+      };
+    },
+  };
+}
+
 export function parseTelegramWebhookSecrets(env = {}) {
   const secrets = {};
 
@@ -171,14 +219,39 @@ export function createProductionDependencies({
   const resolvedRepositories =
     repositories ?? (prisma ? createPrismaRepositories(prisma) : undefined);
   const voiceTranscribers = createVoiceTranscribers(env, fetchImpl);
+  const imageOcrs = createImageOcrs(env, fetchImpl);
+  const defaultLocation = envValue(env.APP_DEFAULT_LOCATION) ?? "Москва";
+  const defaultTimeZone = envValue(env.APP_DEFAULT_TIME_ZONE) ?? "Europe/Moscow";
+  const webSearchProvider = parseBoolean(env.WEB_CURRENT_DATA_ENABLED, true)
+    ? createPublicWebSearchProvider({
+        fetchImpl,
+        timeoutMs: parseNumber(env.WEB_CURRENT_DATA_TIMEOUT_MS, 7000),
+      })
+    : undefined;
+  const tasksProvider = resolvedRepositories?.reminders?.create
+    ? createLocalTasksProvider({
+        remindersRepository: resolvedRepositories.reminders,
+        jobsRepository: resolvedRepositories.jobs,
+        defaultTimezone: defaultTimeZone,
+      })
+    : undefined;
+  const shoppingProvider = webSearchProvider
+    ? createWebShoppingProvider({ webSearch: webSearchProvider })
+    : undefined;
+  const automationProvider = createLocalAutomationProvider({ tasksProvider });
   const capabilityRegistry = createCapabilityRegistry({
     fetchImpl,
     weatherTimeoutMs: parseNumber(env.WEATHER_TIMEOUT_MS, 6000),
     voiceTranscriber: Object.values(voiceTranscribers)[0],
+    webSearch: webSearchProvider,
+    tasksProvider,
+    ocrProvider: Object.values(imageOcrs)[0],
+    shoppingProvider,
+    automationProvider,
     materialsRepositoryAvailable: Boolean(resolvedRepositories?.materials?.search),
     telegramConfigured: Boolean(resolveTelegramBotToken(env)),
-    defaultLocation: envValue(env.APP_DEFAULT_LOCATION) ?? "Москва",
-    defaultTimeZone: envValue(env.APP_DEFAULT_TIME_ZONE) ?? "Europe/Moscow",
+    defaultLocation,
+    defaultTimeZone,
   });
 
   return {
@@ -193,6 +266,11 @@ export function createProductionDependencies({
       env.NODE_ENV === "production",
     ),
     telegramReplyMode: envValue(env.TELEGRAM_REPLY_MODE) ?? "webhook_response",
+    reminderDispatcherEnabled: parseBoolean(
+      env.REMINDER_DISPATCHER_ENABLED,
+      env.NODE_ENV === "production" && Boolean(resolvedRepositories?.jobs?.claim),
+    ),
+    reminderDispatcherIntervalMs: parseNumber(env.REMINDER_DISPATCHER_INTERVAL_MS, 30_000),
     aiProvider: new TimewebAiProvider({
       baseUrl: envValue(env.TIMEWEB_AI_BASE_URL) ?? defaultTimewebBaseUrl,
       apiKey: envValue(env.TIMEWEB_AI_API_KEY),
@@ -206,5 +284,7 @@ export function createProductionDependencies({
     telegramSenders: createTelegramSenders(env, fetchImpl),
     telegramBackgroundSenders: createTelegramBackgroundSenders(env, fetchImpl),
     voiceTranscribers,
+    imageOcrs,
+    tasksProvider,
   };
 }

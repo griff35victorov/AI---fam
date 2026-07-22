@@ -7,6 +7,7 @@ import {
 import { createHealthResponse } from "./health.js";
 import { handleOrchestratorRequest } from "./orchestrator.js";
 import { createProductionDependencies } from "./production-runtime.js";
+import { startReminderDispatcher } from "./reminder-dispatcher.js";
 import { createRepositoryBackedOrchestrator } from "./runtime.js";
 import {
   accessNotConfiguredText,
@@ -91,6 +92,14 @@ function resolveVoiceTranscriber({ botKey, voiceTranscriber, voiceTranscribers }
   return voiceTranscribers?.[botKey] ?? voiceTranscriber;
 }
 
+function resolveImageOcr({ botKey, imageOcr, imageOcrs }) {
+  if (!botKey) {
+    return imageOcr;
+  }
+
+  return imageOcrs?.[botKey] ?? imageOcr;
+}
+
 function resolveTelegramWebhookSecret({ botKey, telegramWebhookSecret, telegramWebhookSecrets }) {
   if (!botKey) {
     return telegramWebhookSecret;
@@ -115,9 +124,25 @@ function buildTelegramWebhookResponse(result, replyMode) {
   };
 }
 
-async function buildTelegramWebhookRequest(body, { users, repositories, botKey }) {
+async function buildTelegramWebhookRequest(
+  body,
+  {
+    users,
+    repositories,
+    botKey,
+    voiceTranscriber,
+    imageOcr,
+    deferMediaProcessing = false,
+  },
+) {
   return repositories?.users
-    ? buildTelegramRequestFromRepositories(body, { repositories, botKey })
+    ? buildTelegramRequestFromRepositories(body, {
+        repositories,
+        botKey,
+        voiceTranscriber,
+        imageOcr,
+        deferMediaProcessing,
+      })
     : buildTelegramRequest(body, { users, botKey });
 }
 
@@ -132,6 +157,10 @@ function buildImmediateTelegramWebhookResponse(telegramRequest) {
       chatId,
       text: telegramRequest.rejected
         ? accessNotConfiguredTextForRequest(telegramRequest)
+        : telegramRequest.voiceRejected
+          ? telegramRequest.voiceReplyText
+        : telegramRequest.imageRejected
+          ? telegramRequest.imageReplyText
         : telegramRequest.isStartCommand
           ? startCommandText
           : telegramAcceptedText,
@@ -159,6 +188,8 @@ function runTelegramBackgroundUpdate({
   orchestrator,
   telegramSender,
   botKey,
+  voiceTranscriber,
+  imageOcr,
   backgroundKey,
   telegramBackgroundUpdates,
 }) {
@@ -167,6 +198,8 @@ function runTelegramBackgroundUpdate({
     repositories,
     orchestrator,
     telegramSender,
+    voiceTranscriber,
+    imageOcr,
     botKey,
   })
     .catch(logTelegramBackgroundError)
@@ -193,6 +226,8 @@ export function createAppServer(options = {}) {
   const voiceTranscriber = options.voiceTranscriber ?? dependencies.voiceTranscriber;
   const voiceTranscribers =
     options.voiceTranscribers ?? dependencies.voiceTranscribers ?? {};
+  const imageOcr = options.imageOcr ?? dependencies.imageOcr;
+  const imageOcrs = options.imageOcrs ?? dependencies.imageOcrs ?? {};
   const telegramWebhookSecret =
     options.telegramWebhookSecret ?? dependencies.telegramWebhookSecret;
   const telegramWebhookSecrets =
@@ -207,6 +242,12 @@ export function createAppServer(options = {}) {
     options.telegramReplyMode ?? dependencies.telegramReplyMode ?? "send_message";
   const telegramBackgroundDelayMs =
     options.telegramBackgroundDelayMs ?? dependencies.telegramBackgroundDelayMs ?? 0;
+  const reminderDispatcherEnabled =
+    options.reminderDispatcherEnabled ?? dependencies.reminderDispatcherEnabled ?? false;
+  const reminderDispatcherIntervalMs =
+    options.reminderDispatcherIntervalMs ??
+    dependencies.reminderDispatcherIntervalMs ??
+    30_000;
   const users = options.users ?? dependencies.users ?? [];
   const orchestrator =
     options.orchestrator ??
@@ -221,7 +262,7 @@ export function createAppServer(options = {}) {
       : ((request) => handleOrchestratorRequest(request, dependencies)));
   const telegramBackgroundUpdates = new Set();
 
-  return createServer(async (request, response) => {
+  const server = createServer(async (request, response) => {
     try {
       if (request.method === "GET" && request.url === "/health") {
         sendJson(response, 200, createHealthResponse());
@@ -263,10 +304,26 @@ export function createAppServer(options = {}) {
             users,
             repositories,
             botKey,
+            voiceTranscriber: resolveVoiceTranscriber({
+              botKey,
+              voiceTranscriber,
+              voiceTranscribers,
+            }),
+            imageOcr: resolveImageOcr({
+              botKey,
+              imageOcr,
+              imageOcrs,
+            }),
+            deferMediaProcessing: true,
           });
           sendJson(response, 200, buildImmediateTelegramWebhookResponse(telegramRequest));
 
-          if (telegramRequest.rejected || telegramRequest.isStartCommand) {
+          if (
+            telegramRequest.rejected ||
+            telegramRequest.voiceRejected ||
+            telegramRequest.imageRejected ||
+            telegramRequest.isStartCommand
+          ) {
             return;
           }
 
@@ -292,6 +349,11 @@ export function createAppServer(options = {}) {
                   voiceTranscriber,
                   voiceTranscribers,
                 }),
+                imageOcr: resolveImageOcr({
+                  botKey,
+                  imageOcr,
+                  imageOcrs,
+                }),
                 botKey,
                 backgroundKey,
                 telegramBackgroundUpdates,
@@ -315,6 +377,11 @@ export function createAppServer(options = {}) {
             voiceTranscriber,
             voiceTranscribers,
           }),
+          imageOcr: resolveImageOcr({
+            botKey,
+            imageOcr,
+            imageOcrs,
+          }),
           botKey,
         });
         sendJson(response, 200, buildTelegramWebhookResponse(result, routeReplyMode));
@@ -326,6 +393,23 @@ export function createAppServer(options = {}) {
       sendJson(response, 500, { error: "internal_error", message: error.message });
     }
   });
+
+  if (reminderDispatcherEnabled) {
+    let stopReminderDispatcher;
+    server.on("listening", () => {
+      stopReminderDispatcher = startReminderDispatcher({
+        repositories,
+        telegramSender,
+        telegramSenders,
+        intervalMs: reminderDispatcherIntervalMs,
+      });
+    });
+    server.on("close", () => {
+      stopReminderDispatcher?.();
+    });
+  }
+
+  return server;
 }
 
 export function createAppServerFromEnv({

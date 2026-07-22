@@ -828,6 +828,63 @@ export function createRepositoryBackedOrchestrator({
     const requiredCapability = !requestIsMaterialCommand
       ? detectRequiredCapability(request.text)
       : null;
+    const directlyRunnableCapabilities = new Set([
+      "web_current_data",
+      "tasks_reminders",
+      "daily_briefing",
+      "shopping_orders",
+      "automation",
+    ]);
+    if (
+      requiredCapability &&
+      directlyRunnableCapabilities.has(requiredCapability) &&
+      capabilityRegistry?.has?.(requiredCapability)
+    ) {
+      let answerText;
+      let source = requiredCapability;
+      let metadata = {};
+
+      try {
+        const result = await capabilityRegistry.run(requiredCapability, {
+          text: request.text,
+          query: request.text,
+          actor: request.actor,
+          workspaceId: requestWorkspaceId,
+          chatId: request.chatId,
+          botKey: request.telegramBotKey,
+        });
+        answerText = result.text;
+        source = result.source ?? source;
+        metadata = result.metadata ?? {};
+      } catch (error) {
+        answerText = [
+          "Я попробовал вызвать нужный инструмент, но источник не ответил.",
+          `Нужный инструмент: ${requiredCapability}.`,
+          "Повторите запрос позже или подключите более надежный provider для этой возможности.",
+        ].join("\n");
+        source = `${requiredCapability}_error`;
+        metadata = {
+          capability: requiredCapability,
+          errorMessage: String(error.message ?? "").slice(0, 240),
+        };
+      }
+
+      const durationMs = Date.now() - requestStartedMs;
+      await appendAssistantMessage({
+        answerText,
+        action: source,
+        metadata: { ...metadata, durationMs },
+      });
+
+      return {
+        accepted: true,
+        answer: {
+          text: answerText,
+          source,
+        },
+        conversationId,
+      };
+    }
     const locallyHandledCapabilities = new Set([
       "weather_forecast",
       "web_fetch_url",
