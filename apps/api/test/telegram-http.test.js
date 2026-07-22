@@ -874,6 +874,50 @@ test("POST /telegram/owner/webhook does not retry after Telegram send was attemp
   assert.deepEqual(sentMessages, [{ chatId: 777, text: "possibly delivered answer" }]);
 });
 
+test("POST /telegram/owner/webhook reports configuration error when background sender is missing", async () => {
+  let orchestratorCalled = false;
+
+  await withServer(
+    {
+      users: [
+        {
+          id: "owner-1",
+          role: "owner",
+          telegramUserId: "100",
+          workspaceId: "workspace-family",
+        },
+      ],
+      orchestrator: async () => {
+        orchestratorCalled = true;
+        return { answer: { text: "Should not run without sender" } };
+      },
+      dependencies: {
+        telegramReplyMode: "webhook_response",
+        telegramUpdateQueueEnabled: false,
+      },
+    },
+    async (baseUrl) => {
+      const response = await postJson(`${baseUrl}/telegram/owner/webhook`, {
+        update_id: 428,
+        message: {
+          message_id: 9103,
+          chat: { id: 777 },
+          from: { id: 100 },
+          text: "normal question",
+        },
+      });
+
+      assert.equal(response.status, 200);
+      const body = await response.json();
+      assert.equal(body.method, "sendMessage");
+      assert.equal(body.chat_id, 777);
+      assert.match(body.text, /Telegram relay/);
+    },
+  );
+
+  assert.equal(orchestratorCalled, false);
+});
+
 test("POST /telegram/owner/webhook stores explicit memory once through background sender", async () => {
   const sentMessages = [];
   const repositories = createInMemoryRepositories({
@@ -1118,6 +1162,77 @@ test("POST /telegram/webhook accepts direct Telegram secret when relay secret is
 
       assert.equal(response.status, 200);
       assert.equal((await response.json()).text, "Direct Telegram ok");
+    },
+  );
+});
+
+test("POST /telegram/webhook rejects direct Telegram requests in relay-only ingress mode", async () => {
+  await withServer(
+    {
+      dependencies: {
+        telegramWebhookSecret: "secret-token",
+        telegramRelayWebhookSecret: "relay-secret",
+        telegramWebhookIngressMode: "relay",
+      },
+      users,
+      orchestrator: async () => ({ answer: { text: "Should not run" } }),
+    },
+    async (baseUrl) => {
+      const response = await fetch(`${baseUrl}/telegram/webhook`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-telegram-bot-api-secret-token": "secret-token",
+        },
+        body: JSON.stringify({
+          update_id: 47,
+          message: {
+            chat: { id: 777 },
+            from: { id: 200 },
+            text: "lesson for B1",
+          },
+        }),
+      });
+
+      assert.equal(response.status, 401);
+      assert.deepEqual(await response.json(), {
+        error: "relay_secret_required",
+      });
+    },
+  );
+});
+
+test("POST /telegram/webhook accepts relay requests in relay-only ingress mode", async () => {
+  await withServer(
+    {
+      dependencies: {
+        telegramWebhookSecret: "secret-token",
+        telegramRelayWebhookSecret: "relay-secret",
+        telegramWebhookIngressMode: "relay",
+      },
+      users,
+      orchestrator: async () => ({ answer: { text: "Relay ok" } }),
+    },
+    async (baseUrl) => {
+      const response = await fetch(`${baseUrl}/telegram/webhook`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-telegram-bot-api-secret-token": "secret-token",
+          "x-family-ai-relay-secret": "relay-secret",
+        },
+        body: JSON.stringify({
+          update_id: 48,
+          message: {
+            chat: { id: 777 },
+            from: { id: 200 },
+            text: "lesson for B1",
+          },
+        }),
+      });
+
+      assert.equal(response.status, 200);
+      assert.equal((await response.json()).text, "Relay ok");
     },
   );
 });

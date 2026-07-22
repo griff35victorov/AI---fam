@@ -40,22 +40,22 @@ Completed:
 - Owner, daughter, and teacher Telegram bot tokens are stored in App Platform env.
 - Dedicated Telegram webhook endpoints are deployed and protected by webhook secrets.
 - Owner, daughter, and teacher users are bootstrapped into PostgreSQL.
-- Owner, daughter, and teacher Telegram webhooks are registered.
+- Owner, daughter, and teacher Telegram webhooks are registered to the Telegram relay, not directly to App Platform.
 - Telegram replies use webhook-response mode for the first visible answer because direct outbound `sendMessage` from Timeweb is not reliable in this runtime.
 - Telegram `/start` uses a fast local webhook-response after user and bot-role authorization, which avoids Telegram webhook timeout on first bot start without bypassing access control.
 - Normal Telegram messages use a fast visible webhook acknowledgement before AI routing. Background AI processing sends the final answer only through the configured Telegram relay, not through direct Timeweb -> Telegram `sendMessage`.
-- Owner, daughter, and teacher webhooks are registered with the App Platform IP address and protected by dedicated Telegram webhook secrets.
+- Owner, daughter, and teacher webhooks are protected by dedicated Telegram webhook secrets.
 - Owner, daughter, and teacher webhooks use `max_connections=1`.
 - `/health` returns 200 OK.
-- Telegram relay code is available in `apps/telegram-relay` for switching Telegram ingress away from the unstable direct Telegram -> Timeweb path while keeping Timeweb as the core runtime. The relay also exposes a protected send API for final AI answers.
+- Telegram relay code is available in `apps/telegram-relay` and is the production Telegram ingress. It keeps Telegram away from the unstable direct Telegram -> Timeweb path while keeping Timeweb as the core runtime. The relay also exposes a protected send API for final AI answers.
+- Production should use `TELEGRAM_WEBHOOK_INGRESS=relay` and `TELEGRAM_ALLOW_DIRECT_BACKGROUND_SEND=false`. Direct Telegram sending is only a deliberate debug override.
 
 Remaining:
 
-1. Send a fresh test message from each allowed Telegram account in their dedicated bot after the `5ad8ca8` deploy.
-2. Deploy `apps/telegram-relay` and register owner, daughter, and teacher Telegram webhooks to the relay URL.
-3. Set `TELEGRAM_RELAY_URL`, `TELEGRAM_RELAY_SECRET`, and optionally `TELEGRAM_RELAY_UPSTREAM_SECRET` in Timeweb App Platform env, then redeploy.
-4. Connect material/file upload to the private S3 bucket.
-5. Add teacher workspace APIs and web cabinet.
+1. Verify that Timeweb App Platform is deployed from the latest GitHub commit.
+2. Verify owner, daughter, and teacher Telegram webhooks point to the relay URL.
+3. Connect material/file upload to the private S3 bucket.
+4. Add teacher workspace APIs and web cabinet.
 
 Telegram access is controlled by `User.telegramUserId` records in PostgreSQL.
 `TELEGRAM_ALLOWED_USER_IDS` is not used by the runtime.

@@ -51,6 +51,7 @@ function authorizeTelegramWebhookRequest({
   routeSecret,
   relayWebhookSecret,
   requireWebhookSecret,
+  webhookIngressMode = "direct_or_relay",
 }) {
   if (!routeSecret) {
     return requireWebhookSecret
@@ -63,6 +64,14 @@ function authorizeTelegramWebhookRequest({
   }
 
   const receivedRelaySecret = request.headers["x-family-ai-relay-secret"];
+  if (
+    webhookIngressMode === "relay" &&
+    relayWebhookSecret &&
+    receivedRelaySecret !== relayWebhookSecret
+  ) {
+    return { ok: false, statusCode: 401, error: "relay_secret_required" };
+  }
+
   if (relayWebhookSecret && receivedRelaySecret && receivedRelaySecret !== relayWebhookSecret) {
     return { ok: false, statusCode: 401, error: "relay_secret_invalid" };
   }
@@ -229,6 +238,17 @@ function buildScheduledTelegramWebhookResponse(telegramRequest, scheduleResult) 
   return scheduleResult?.duplicate
     ? buildSilentTelegramWebhookResponse(telegramRequest)
     : buildAcceptedTelegramWebhookResponse(telegramRequest);
+}
+
+function buildTelegramDeliveryNotConfiguredWebhookResponse(telegramRequest) {
+  return buildTelegramWebhookResponse(
+    {
+      chatId: telegramRequest?.chatId,
+      text:
+        "\u0414\u043e\u0441\u0442\u0430\u0432\u043a\u0430 \u0444\u0438\u043d\u0430\u043b\u044c\u043d\u044b\u0445 Telegram-\u043e\u0442\u0432\u0435\u0442\u043e\u0432 \u043d\u0435 \u043d\u0430\u0441\u0442\u0440\u043e\u0435\u043d\u0430. \u041d\u0443\u0436\u0435\u043d Telegram relay \u0438\u043b\u0438 \u044f\u0432\u043d\u044b\u0439 direct debug-\u0440\u0435\u0436\u0438\u043c.",
+    },
+    "webhook_response",
+  );
 }
 
 async function buildTelegramWebhookRequest(
@@ -696,6 +716,10 @@ export function createAppServer(options = {}) {
     options.telegramWebhookSecrets ?? dependencies.telegramWebhookSecrets ?? {};
   const telegramRelayWebhookSecret =
     options.telegramRelayWebhookSecret ?? dependencies.telegramRelayWebhookSecret;
+  const telegramWebhookIngressMode =
+    options.telegramWebhookIngressMode ??
+    dependencies.telegramWebhookIngressMode ??
+    "direct_or_relay";
   const telegramRequireWebhookSecret =
     options.telegramRequireWebhookSecret ??
     dependencies.telegramRequireWebhookSecret ??
@@ -806,6 +830,7 @@ export function createAppServer(options = {}) {
           routeSecret,
           relayWebhookSecret: telegramRelayWebhookSecret,
           requireWebhookSecret: telegramRequireWebhookSecret,
+          webhookIngressMode: telegramWebhookIngressMode,
         });
         if (!authorization.ok) {
           sendJson(response, authorization.statusCode, { error: authorization.error });
@@ -987,14 +1012,19 @@ export function createAppServer(options = {}) {
               telegramUpdateQueueEnabled,
               triggerTelegramUpdateDispatcher,
             });
+          } else {
+            sendJson(
+              response,
+              200,
+              buildTelegramDeliveryNotConfiguredWebhookResponse(telegramRequest),
+            );
+            return;
           }
 
           sendJson(
             response,
             200,
-            backgroundSender
-              ? buildScheduledTelegramWebhookResponse(telegramRequest, scheduleResult)
-              : buildImmediateTelegramWebhookResponse(telegramRequest),
+            buildScheduledTelegramWebhookResponse(telegramRequest, scheduleResult),
           );
 
           return;

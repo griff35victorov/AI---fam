@@ -139,6 +139,11 @@ function createTelegramRelaySenders(env = {}, fetchImpl = fetch, senderOptions =
 
 export function createTelegramBackgroundSenders(env = {}, fetchImpl = fetch) {
   const mode = String(envValue(env.TELEGRAM_BACKGROUND_SEND_MODE) ?? "").toLowerCase();
+  const isProduction = envValue(env.NODE_ENV) === "production";
+  const allowDirectProductionSend = parseBoolean(
+    env.TELEGRAM_ALLOW_DIRECT_BACKGROUND_SEND,
+    false,
+  );
   const directSenders = createTelegramSenders(env, fetchImpl, {
     maxAttempts: parseNumber(env.TELEGRAM_BACKGROUND_DIRECT_SEND_MAX_ATTEMPTS, 1),
     retryDelayMs: parseNumber(env.TELEGRAM_BACKGROUND_DIRECT_SEND_RETRY_DELAY_MS, 100),
@@ -149,9 +154,14 @@ export function createTelegramBackgroundSenders(env = {}, fetchImpl = fetch) {
     retryDelayMs: parseNumber(env.TELEGRAM_BACKGROUND_RELAY_SEND_RETRY_DELAY_MS, 250),
     timeoutMs: parseNumber(env.TELEGRAM_BACKGROUND_RELAY_SEND_TIMEOUT_MS, 5000),
   });
+  const relayConfigured = Object.keys(relaySenders).length > 0;
+
+  if (isProduction && !relayConfigured && !allowDirectProductionSend) {
+    return {};
+  }
 
   if (mode === "direct") {
-    return directSenders;
+    return !isProduction || allowDirectProductionSend ? directSenders : {};
   }
 
   if (mode === "relay") {
@@ -159,10 +169,14 @@ export function createTelegramBackgroundSenders(env = {}, fetchImpl = fetch) {
   }
 
   if (mode && mode !== "failover") {
-    return Object.keys(relaySenders).length > 0 ? relaySenders : directSenders;
+    return relayConfigured ? relaySenders : {};
   }
 
-  if (mode !== "failover" && Object.keys(relaySenders).length > 0) {
+  if (mode !== "failover" && relayConfigured) {
+    return relaySenders;
+  }
+
+  if (isProduction && !allowDirectProductionSend) {
     return relaySenders;
   }
 
@@ -352,6 +366,11 @@ export function createProductionDependencies({
     telegramWebhookSecret: envValue(env.TELEGRAM_WEBHOOK_SECRET),
     telegramWebhookSecrets: parseTelegramWebhookSecrets(env),
     telegramRelayWebhookSecret: envValue(env.TELEGRAM_RELAY_UPSTREAM_SECRET),
+    telegramWebhookIngressMode:
+      envValue(env.TELEGRAM_WEBHOOK_INGRESS) ??
+      (env.NODE_ENV === "production" && envValue(env.TELEGRAM_RELAY_UPSTREAM_SECRET)
+        ? "relay"
+        : "direct_or_relay"),
     telegramRequireWebhookSecret: parseBoolean(
       env.TELEGRAM_REQUIRE_WEBHOOK_SECRET,
       env.NODE_ENV === "production",

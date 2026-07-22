@@ -236,6 +236,44 @@ test("production dependencies create background relay senders when relay is conf
   assert.equal(calls[0][1].headers["x-family-ai-relay-secret"], "relay-secret");
 });
 
+test("production dependencies fail closed without relay background senders", () => {
+  const dependencies = createProductionDependencies({
+    env: {
+      NODE_ENV: "production",
+      TELEGRAM_TEACHER_BOT_TOKEN: "teacher-token",
+    },
+    repositories: createInMemoryRepositories(),
+  });
+
+  assert.deepEqual(dependencies.telegramBackgroundSenders, {});
+});
+
+test("production dependencies allow direct background senders only with explicit override", async () => {
+  const calls = [];
+  const dependencies = createProductionDependencies({
+    env: {
+      NODE_ENV: "production",
+      TELEGRAM_TEACHER_BOT_TOKEN: "teacher-token",
+      TELEGRAM_BACKGROUND_SEND_MODE: "direct",
+      TELEGRAM_ALLOW_DIRECT_BACKGROUND_SEND: "true",
+    },
+    repositories: createInMemoryRepositories(),
+    fetchImpl: async (...args) => {
+      calls.push(args);
+      return jsonResponse({ ok: true, result: { message_id: 49 } });
+    },
+  });
+
+  assert.deepEqual(Object.keys(dependencies.telegramBackgroundSenders), ["teacher"]);
+
+  await dependencies.telegramBackgroundSenders.teacher.sendMessage({
+    chatId: 777,
+    text: "Direct debug answer",
+  });
+
+  assert.equal(calls[0][0], "https://api.telegram.org/botteacher-token/sendMessage");
+});
+
 test("production dependencies prefer relay background senders when relay is configured", async () => {
   const calls = [];
   const dependencies = createProductionDependencies({
