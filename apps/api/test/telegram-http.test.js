@@ -457,8 +457,9 @@ test("POST /telegram/teacher/webhook sends only background AI answer through rel
   assert.deepEqual(sentMessages, [{ chatId: 777, text: "Teacher async answer" }]);
 });
 
-test("POST /telegram/owner/webhook answers /learn immediately without duplicate background reply", async () => {
+test("POST /telegram/owner/webhook answers /learn once through background sender", async () => {
   const sentMessages = [];
+  const chatActions = [];
   const repositories = createInMemoryRepositories({
     users: [
       {
@@ -478,6 +479,10 @@ test("POST /telegram/owner/webhook answers /learn immediately without duplicate 
         telegramBackgroundDelayMs: 0,
         telegramBackgroundSenders: {
           owner: {
+            async sendChatAction(action) {
+              chatActions.push(action);
+              return { ok: true };
+            },
             async sendMessage(message) {
               sentMessages.push(message);
               return { ok: true };
@@ -503,19 +508,23 @@ test("POST /telegram/owner/webhook answers /learn immediately without duplicate 
 
       assert.equal(response.status, 200);
       const body = await response.json();
-      assert.equal(body.method, "sendMessage");
-      assert.equal(body.chat_id, 777);
-      assert.match(body.text, /\/learn fact/);
-      assert.equal(body.link_preview_options, undefined);
+      assert.deepEqual(body, { ok: true });
 
-      await new Promise((resolve) => setTimeout(resolve, 50));
+      await waitFor(
+        () => sentMessages.length === 1,
+        1000,
+        "background /learn sender was not called",
+      );
     },
   );
 
-  assert.deepEqual(sentMessages, []);
+  assert.deepEqual(chatActions, [{ chatId: 777, action: "typing" }]);
+  assert.equal(sentMessages.length, 1);
+  assert.equal(sentMessages[0].chatId, 777);
+  assert.match(sentMessages[0].text, /\/learn fact/);
 });
 
-test("POST /telegram/owner/webhook stores explicit memory immediately and disables link preview", async () => {
+test("POST /telegram/owner/webhook stores explicit memory once through background sender", async () => {
   const sentMessages = [];
   const repositories = createInMemoryRepositories({
     users: [
@@ -561,17 +570,20 @@ test("POST /telegram/owner/webhook stores explicit memory immediately and disabl
 
       assert.equal(response.status, 200);
       const body = await response.json();
-      assert.equal(body.method, "sendMessage");
-      assert.equal(body.chat_id, 777);
-      assert.match(body.text, /Запомнил/);
-      assert.match(body.text, /rksurfmag\.club/);
-      assert.deepEqual(body.link_preview_options, { is_disabled: true });
+      assert.deepEqual(body, { ok: true });
 
-      await new Promise((resolve) => setTimeout(resolve, 50));
+      await waitFor(
+        () => sentMessages.length === 1,
+        1000,
+        "background explicit-memory sender was not called",
+      );
     },
   );
 
-  assert.deepEqual(sentMessages, []);
+  assert.equal(sentMessages.length, 1);
+  assert.equal(sentMessages[0].chatId, 777);
+  assert.match(sentMessages[0].text, /Запомнил/);
+  assert.match(sentMessages[0].text, /rksurfmag\.club/);
 });
 
 test("POST /telegram/owner/webhook fails closed when production secret is required but missing", async () => {

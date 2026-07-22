@@ -5,12 +5,14 @@ export class TelegramBotSender {
     fetchImpl = fetch,
     maxAttempts = 3,
     retryDelayMs = 500,
+    timeoutMs = 5000,
   } = {}) {
     this.botToken = botToken;
     this.baseUrl = baseUrl;
     this.fetchImpl = fetchImpl;
     this.maxAttempts = maxAttempts;
     this.retryDelayMs = retryDelayMs;
+    this.timeoutMs = timeoutMs;
   }
 
   async sendMessage({ chatId, text }) {
@@ -23,11 +25,16 @@ export class TelegramBotSender {
 
     for (let attempt = 1; attempt <= attempts; attempt += 1) {
       try {
-        const response = await this.fetchImpl(`${this.baseUrl}/bot${this.botToken}/sendMessage`, {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify(buildTelegramSendMessageBody({ chatId, text })),
-        });
+        const response = await fetchWithTimeout(
+          this.fetchImpl,
+          `${this.baseUrl}/bot${this.botToken}/sendMessage`,
+          {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify(buildTelegramSendMessageBody({ chatId, text })),
+          },
+          this.timeoutMs,
+        );
 
         if (response.ok) {
           return response.json();
@@ -55,6 +62,29 @@ export class TelegramBotSender {
 
     throw lastError;
   }
+
+  async sendChatAction({ chatId, action = "typing" }) {
+    if (!this.botToken) {
+      throw new Error("TELEGRAM_BOT_TOKEN is required");
+    }
+
+    const response = await fetchWithTimeout(
+      this.fetchImpl,
+      `${this.baseUrl}/bot${this.botToken}/sendChatAction`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ chat_id: chatId, action }),
+      },
+      this.timeoutMs,
+    );
+
+    if (!response.ok) {
+      throw new Error(`Telegram sendChatAction failed with ${response.status}`);
+    }
+
+    return response.json();
+  }
 }
 
 export class TelegramRelaySender {
@@ -65,6 +95,7 @@ export class TelegramRelaySender {
     fetchImpl = fetch,
     maxAttempts = 3,
     retryDelayMs = 500,
+    timeoutMs = 5000,
   } = {}) {
     this.relayUrl = relayUrl?.replace(/\/+$/, "");
     this.relaySecret = relaySecret;
@@ -72,6 +103,7 @@ export class TelegramRelaySender {
     this.fetchImpl = fetchImpl;
     this.maxAttempts = maxAttempts;
     this.retryDelayMs = retryDelayMs;
+    this.timeoutMs = timeoutMs;
   }
 
   async sendMessage({ chatId, text }) {
@@ -92,14 +124,19 @@ export class TelegramRelaySender {
 
     for (let attempt = 1; attempt <= attempts; attempt += 1) {
       try {
-        const response = await this.fetchImpl(`${this.relayUrl}/telegram/${this.botKey}/send`, {
-          method: "POST",
-          headers: {
-            "content-type": "application/json",
-            "x-family-ai-relay-secret": this.relaySecret,
+        const response = await fetchWithTimeout(
+          this.fetchImpl,
+          `${this.relayUrl}/telegram/${this.botKey}/send`,
+          {
+            method: "POST",
+            headers: {
+              "content-type": "application/json",
+              "x-family-ai-relay-secret": this.relaySecret,
+            },
+            body: JSON.stringify(buildTelegramSendMessageBody({ chatId, text })),
           },
-          body: JSON.stringify(buildTelegramSendMessageBody({ chatId, text })),
-        });
+          this.timeoutMs,
+        );
 
         if (response.ok) {
           return response.json();
@@ -129,6 +166,41 @@ export class TelegramRelaySender {
   }
 }
 
+export class TelegramFailoverSender {
+  constructor({ primary, fallback } = {}) {
+    this.primary = primary;
+    this.fallback = fallback;
+  }
+
+  async sendMessage(message) {
+    if (!this.primary) {
+      return this.fallback.sendMessage(message);
+    }
+
+    try {
+      return await this.primary.sendMessage(message);
+    } catch (primaryError) {
+      if (!this.fallback) {
+        throw primaryError;
+      }
+
+      return this.fallback.sendMessage(message);
+    }
+  }
+
+  async sendChatAction(action) {
+    if (typeof this.primary?.sendChatAction !== "function") {
+      return undefined;
+    }
+
+    try {
+      return await this.primary.sendChatAction(action);
+    } catch {
+      return undefined;
+    }
+  }
+}
+
 function telegramStatusIsRetryable(status) {
   return status === 429 || status >= 500;
 }
@@ -151,4 +223,25 @@ function delay(ms) {
   }
 
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function fetchWithTimeout(fetchImpl, url, options, timeoutMs) {
+  const timeout = Number(timeoutMs);
+  if (!Number.isFinite(timeout) || timeout <= 0) {
+    return fetchImpl(url, options);
+  }
+
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => {
+    controller.abort();
+  }, timeout);
+
+  try {
+    return await fetchImpl(url, {
+      ...options,
+      signal: controller.signal,
+    });
+  } finally {
+    clearTimeout(timeoutId);
+  }
 }

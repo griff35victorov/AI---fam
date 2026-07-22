@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { TelegramBotSender, TelegramRelaySender } from "../src/telegram-sender.js";
+import {
+  TelegramBotSender,
+  TelegramFailoverSender,
+  TelegramRelaySender,
+} from "../src/telegram-sender.js";
 
 test("TelegramBotSender sends a Telegram message through Bot API", async () => {
   const calls = [];
@@ -50,6 +54,50 @@ test("TelegramBotSender disables Telegram link previews by default", async () =>
   assert.deepEqual(JSON.parse(calls[0].options.body).link_preview_options, {
     is_disabled: true,
   });
+});
+
+test("TelegramBotSender sends typing chat action", async () => {
+  const calls = [];
+  const sender = new TelegramBotSender({
+    botToken: "token-123",
+    baseUrl: "https://telegram.example",
+    fetchImpl: async (url, options) => {
+      calls.push({ url, options });
+      return {
+        ok: true,
+        async json() {
+          return { ok: true };
+        },
+      };
+    },
+  });
+
+  await sender.sendChatAction({ chatId: 777, action: "typing" });
+
+  assert.equal(calls[0].url, "https://telegram.example/bottoken-123/sendChatAction");
+  assert.deepEqual(JSON.parse(calls[0].options.body), {
+    chat_id: 777,
+    action: "typing",
+  });
+});
+
+test("TelegramBotSender aborts slow sends by timeout", async () => {
+  const sender = new TelegramBotSender({
+    botToken: "token-123",
+    timeoutMs: 1,
+    maxAttempts: 1,
+    fetchImpl: async (_url, options) =>
+      new Promise((_resolve, reject) => {
+        options.signal.addEventListener("abort", () => {
+          reject(new Error("aborted"));
+        });
+      }),
+  });
+
+  await assert.rejects(
+    () => sender.sendMessage({ chatId: 777, text: "hello" }),
+    /Telegram sendMessage network failed: aborted/,
+  );
 });
 
 test("TelegramBotSender retries transient network failures", async () => {
@@ -200,4 +248,26 @@ test("TelegramRelaySender requires relay configuration", async () => {
     () => sender.sendMessage({ chatId: 777, text: "hello" }),
     /TELEGRAM_RELAY_SECRET is required/,
   );
+});
+
+test("TelegramFailoverSender uses fallback sender after primary failure", async () => {
+  const fallbackMessages = [];
+  const sender = new TelegramFailoverSender({
+    primary: {
+      async sendMessage() {
+        throw new Error("primary failed");
+      },
+    },
+    fallback: {
+      async sendMessage(message) {
+        fallbackMessages.push(message);
+        return { ok: true, result: { message_id: 50 } };
+      },
+    },
+  });
+
+  const result = await sender.sendMessage({ chatId: 777, text: "hello" });
+
+  assert.deepEqual(result, { ok: true, result: { message_id: 50 } });
+  assert.deepEqual(fallbackMessages, [{ chatId: 777, text: "hello" }]);
 });

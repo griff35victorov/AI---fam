@@ -204,8 +204,28 @@ function telegramBackgroundUpdateKey(update, botKey) {
   return `${botKey ?? "default"}:${update.update_id}`;
 }
 
+function telegramChatIdFromUpdate(update) {
+  const chatId = update?.message?.chat?.id;
+  return chatId === undefined || chatId === null ? null : chatId;
+}
+
 function logTelegramBackgroundError(error) {
   console.error("telegram background handling failed", error);
+}
+
+function sendBackgroundChatAction({ telegramSender, body }) {
+  if (typeof telegramSender?.sendChatAction !== "function") {
+    return;
+  }
+
+  const chatId = telegramChatIdFromUpdate(body);
+  if (!chatId) {
+    return;
+  }
+
+  Promise.resolve(telegramSender.sendChatAction({ chatId, action: "typing" })).catch(
+    logTelegramBackgroundError,
+  );
 }
 
 function runTelegramBackgroundUpdate({
@@ -221,6 +241,8 @@ function runTelegramBackgroundUpdate({
   backgroundKey,
   telegramBackgroundUpdates,
 }) {
+  sendBackgroundChatAction({ telegramSender, body });
+
   handleTelegramUpdate(body, {
     users,
     repositories,
@@ -370,6 +392,53 @@ export function createAppServer(options = {}) {
             !telegramRequest.mediaDeferred &&
             isImmediateRepositoryBackedRequest(telegramRequest.text)
           ) {
+            const backgroundSender = resolveTelegramSender({
+              botKey,
+              telegramSender: telegramBackgroundSender,
+              telegramSenders: telegramBackgroundSenders,
+            });
+
+            if (backgroundSender) {
+              sendJson(response, 200, buildWebhookOkResponse());
+
+              const backgroundKey = telegramBackgroundUpdateKey(body, botKey);
+              if (!backgroundKey || !telegramBackgroundUpdates.has(backgroundKey)) {
+                if (backgroundKey) {
+                  telegramBackgroundUpdates.add(backgroundKey);
+                }
+
+                setTimeout(() => {
+                  runTelegramBackgroundUpdate({
+                    body,
+                    users,
+                    repositories,
+                    orchestrator,
+                    telegramSender: backgroundSender,
+                    voiceTranscriber: resolveVoiceTranscriber({
+                      botKey,
+                      voiceTranscriber,
+                      voiceTranscribers,
+                    }),
+                    imageOcr: resolveImageOcr({
+                      botKey,
+                      imageOcr,
+                      imageOcrs,
+                    }),
+                    documentTextExtractor: resolveDocumentTextExtractor({
+                      botKey,
+                      documentTextExtractor,
+                      documentTextExtractors,
+                    }),
+                    botKey,
+                    backgroundKey,
+                    telegramBackgroundUpdates,
+                  });
+                }, telegramBackgroundDelayMs);
+              }
+
+              return;
+            }
+
             const result = await orchestrator(telegramRequest);
             sendJson(
               response,

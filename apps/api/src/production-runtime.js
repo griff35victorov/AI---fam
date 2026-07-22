@@ -8,7 +8,11 @@ import {
 import { LocalTesseractTelegramImageOcr } from "./ocr.js";
 import { createLocalTasksProvider } from "./tasks.js";
 import { TelegramTextDocumentExtractor } from "./telegram-documents.js";
-import { TelegramBotSender, TelegramRelaySender } from "./telegram-sender.js";
+import {
+  TelegramBotSender,
+  TelegramFailoverSender,
+  TelegramRelaySender,
+} from "./telegram-sender.js";
 import { LocalVoskTelegramVoiceTranscriber, TelegramVoiceTranscriber } from "./voice.js";
 
 const defaultTimewebBaseUrl = "https://agent.timeweb.cloud";
@@ -80,7 +84,7 @@ function resolveTelegramWebhookSecretForKey(env, botKey) {
   return envValue(env[envName]);
 }
 
-export function createTelegramSenders(env = {}, fetchImpl = fetch) {
+export function createTelegramSenders(env = {}, fetchImpl = fetch, senderOptions = {}) {
   const senders = {};
 
   for (const botKey of Object.keys(telegramBotEnv)) {
@@ -92,19 +96,14 @@ export function createTelegramSenders(env = {}, fetchImpl = fetch) {
     senders[botKey] = new TelegramBotSender({
       botToken,
       fetchImpl,
+      ...senderOptions,
     });
   }
 
   return senders;
 }
 
-export function createTelegramBackgroundSenders(env = {}, fetchImpl = fetch) {
-  const directSenders = createTelegramSenders(env, fetchImpl);
-  const mode = String(envValue(env.TELEGRAM_BACKGROUND_SEND_MODE) ?? "").toLowerCase();
-  if (mode !== "relay" && Object.keys(directSenders).length > 0) {
-    return directSenders;
-  }
-
+function createTelegramRelaySenders(env = {}, fetchImpl = fetch, senderOptions = {}) {
   const relayUrl = envValue(env.TELEGRAM_RELAY_URL) ?? envValue(env.TELEGRAM_RELAY_BASE_URL);
   const relaySecret = envValue(env.TELEGRAM_RELAY_SECRET);
   if (!relayUrl || !relaySecret) {
@@ -118,7 +117,46 @@ export function createTelegramBackgroundSenders(env = {}, fetchImpl = fetch) {
       relaySecret,
       botKey,
       fetchImpl,
+      ...senderOptions,
     });
+  }
+
+  return senders;
+}
+
+export function createTelegramBackgroundSenders(env = {}, fetchImpl = fetch) {
+  const mode = String(envValue(env.TELEGRAM_BACKGROUND_SEND_MODE) ?? "").toLowerCase();
+  const directSenders = createTelegramSenders(env, fetchImpl, {
+    maxAttempts: parseNumber(env.TELEGRAM_BACKGROUND_DIRECT_SEND_MAX_ATTEMPTS, 1),
+    retryDelayMs: parseNumber(env.TELEGRAM_BACKGROUND_DIRECT_SEND_RETRY_DELAY_MS, 100),
+    timeoutMs: parseNumber(env.TELEGRAM_BACKGROUND_DIRECT_SEND_TIMEOUT_MS, 1800),
+  });
+  const relaySenders = createTelegramRelaySenders(env, fetchImpl, {
+    maxAttempts: parseNumber(env.TELEGRAM_BACKGROUND_RELAY_SEND_MAX_ATTEMPTS, 2),
+    retryDelayMs: parseNumber(env.TELEGRAM_BACKGROUND_RELAY_SEND_RETRY_DELAY_MS, 250),
+    timeoutMs: parseNumber(env.TELEGRAM_BACKGROUND_RELAY_SEND_TIMEOUT_MS, 5000),
+  });
+
+  if (mode === "direct") {
+    return directSenders;
+  }
+
+  if (mode === "relay") {
+    return relaySenders;
+  }
+
+  const senders = {};
+  for (const botKey of Object.keys(telegramBotEnv)) {
+    if (directSenders[botKey] && relaySenders[botKey]) {
+      senders[botKey] = new TelegramFailoverSender({
+        primary: directSenders[botKey],
+        fallback: relaySenders[botKey],
+      });
+    } else if (directSenders[botKey]) {
+      senders[botKey] = directSenders[botKey];
+    } else if (relaySenders[botKey]) {
+      senders[botKey] = relaySenders[botKey];
+    }
   }
 
   return senders;

@@ -195,7 +195,11 @@ test("production dependencies prefer direct Telegram background senders when bot
     },
   });
 
-  assert.deepEqual(Object.keys(dependencies.telegramBackgroundSenders), ["teacher"]);
+  assert.deepEqual(Object.keys(dependencies.telegramBackgroundSenders).sort(), [
+    "daughter",
+    "owner",
+    "teacher",
+  ]);
 
   await dependencies.telegramBackgroundSenders.teacher.sendMessage({
     chatId: 777,
@@ -206,6 +210,35 @@ test("production dependencies prefer direct Telegram background senders when bot
   assert.deepEqual(JSON.parse(calls[0][1].body).link_preview_options, {
     is_disabled: true,
   });
+});
+
+test("production Telegram background senders fall back to relay after direct failure", async () => {
+  const calls = [];
+  const dependencies = createProductionDependencies({
+    env: {
+      TELEGRAM_RELAY_URL: "https://relay.example/",
+      TELEGRAM_RELAY_SECRET: "relay-secret",
+      TELEGRAM_TEACHER_BOT_TOKEN: "teacher-token",
+    },
+    repositories: createInMemoryRepositories(),
+    fetchImpl: async (...args) => {
+      calls.push(args);
+      if (String(args[0]).includes("api.telegram.org")) {
+        throw new TypeError("fetch failed");
+      }
+
+      return jsonResponse({ ok: true, result: { message_id: 48 } });
+    },
+  });
+
+  const result = await dependencies.telegramBackgroundSenders.teacher.sendMessage({
+    chatId: 777,
+    text: "Teacher async answer",
+  });
+
+  assert.deepEqual(result, { ok: true, result: { message_id: 48 } });
+  assert.equal(calls[0][0], "https://api.telegram.org/botteacher-token/sendMessage");
+  assert.equal(calls[1][0], "https://relay.example/telegram/teacher/send");
 });
 
 test("createTelegramSenders and parseTelegramWebhookSecrets ignore missing bot env", () => {
