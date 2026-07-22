@@ -355,6 +355,20 @@ function parseLearningCommand(text) {
   return null;
 }
 
+function isUnsafeLearningCommand(learningCommand) {
+  if (learningCommand?.type === "memory") {
+    return isUnsafeLongTermContent(learningCommand.content ?? "");
+  }
+
+  if (learningCommand?.type === "material") {
+    return isUnsafeLongTermContent(
+      `${learningCommand.title ?? ""}\n${learningCommand.content ?? ""}`,
+    );
+  }
+
+  return false;
+}
+
 function isMaterialListRequest(text) {
   const normalized = normalizeText(text);
   return (
@@ -552,6 +566,8 @@ export function createRepositoryBackedOrchestrator({
     const conversationId = conversationIdForRequest(request);
     const requestWorkspaceId = workspaceIdForRequest(request, workspaceId);
     const createdAt = now();
+    const learningCommand = parseLearningCommand(request.text);
+    const unsafeLearningCommand = isUnsafeLearningCommand(learningCommand);
     const { userMessage, assistantMessage, messages } =
       await findExistingTelegramExchange(
         repositories,
@@ -587,11 +603,12 @@ export function createRepositoryBackedOrchestrator({
     if (!userMessage) {
       storedUserMessage = await repositories.conversations.appendMessage(conversationId, {
         role: "user",
-        content: request.text ?? "",
+        content: unsafeLearningCommand ? "[unsafe learning command redacted]" : request.text ?? "",
         metadata: {
           source: "telegram",
           intent: request.intent,
           telegramUpdateId: request.telegramUpdateId,
+          ...(unsafeLearningCommand ? { redacted: "unsafe_learning_command" } : {}),
         },
         userId: request.actor.id,
         workspaceId: requestWorkspaceId,
@@ -599,7 +616,6 @@ export function createRepositoryBackedOrchestrator({
       });
     }
 
-    const learningCommand = parseLearningCommand(request.text);
     if (learningCommand?.type === "help") {
       const answerText = buildLearningHelpAnswer(request.actor);
       const durationMs = Date.now() - requestStartedMs;
@@ -679,6 +695,27 @@ export function createRepositoryBackedOrchestrator({
           conversationId,
         };
       }
+
+      const source = repositories.memories?.create
+        ? "learning_memory_rejected"
+        : "learning_memory_unavailable";
+      const answerText = repositories.memories?.create
+        ? "Сохранение памяти недоступно для этого пользователя."
+        : "Память пока не подключена к базе. Обучение не сохранено.";
+      await appendAssistantMessage({
+        answerText,
+        action: source,
+        metadata: { durationMs: Date.now() - requestStartedMs },
+      });
+
+      return {
+        accepted: true,
+        answer: {
+          text: answerText,
+          source,
+        },
+        conversationId,
+      };
     }
 
     if (learningCommand?.type === "material") {

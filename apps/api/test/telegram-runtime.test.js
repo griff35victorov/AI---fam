@@ -263,6 +263,61 @@ test("repository backed orchestrator stores Telegram learn fact without calling 
   assert.match(memories[0].content, /краткие ответы/);
 });
 
+test("repository backed orchestrator redacts unsafe Telegram learn fact from conversation history", async () => {
+  const repositories = createInMemoryRepositories();
+  const orchestrator = createRepositoryBackedOrchestrator({
+    repositories,
+    aiProvider: {
+      async complete() {
+        throw new Error("AI should not be called for unsafe learn fact");
+      },
+    },
+  });
+
+  const response = await orchestrator({
+    chatId: 777,
+    actor: { id: "owner-1", role: "owner" },
+    intent: "household",
+    text: "/learn fact password for mailbox is qwerty123",
+    telegramUpdateId: 136,
+  });
+
+  assert.equal(response.answer.source, "learning_memory_rejected");
+
+  const messages = await repositories.conversations.listMessages(
+    "telegram:777:owner-1",
+  );
+  assert.equal(messages[0].role, "user");
+  assert.doesNotMatch(messages[0].content, /qwerty123/);
+  assert.match(messages[0].metadata.redacted, /unsafe_learning_command/);
+});
+
+test("repository backed orchestrator does not call AI when Telegram learning memory storage is unavailable", async () => {
+  const repositories = createInMemoryRepositories();
+  const orchestrator = createRepositoryBackedOrchestrator({
+    repositories: {
+      ...repositories,
+      memories: null,
+    },
+    aiProvider: {
+      async complete() {
+        throw new Error("AI should not be called when learn memory storage is unavailable");
+      },
+    },
+  });
+
+  const response = await orchestrator({
+    chatId: 777,
+    actor: { id: "owner-1", role: "owner" },
+    intent: "household",
+    text: "/learn fact I prefer concise answers",
+    telegramUpdateId: 137,
+  });
+
+  assert.equal(response.answer.source, "learning_memory_unavailable");
+  assert.match(response.answer.text, /подключена/i);
+});
+
 test("repository backed orchestrator stores teacher style through Telegram learn command", async () => {
   const repositories = createInMemoryRepositories();
   const orchestrator = createRepositoryBackedOrchestrator({
