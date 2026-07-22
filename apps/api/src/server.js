@@ -415,6 +415,21 @@ function telegramChatIdFromUpdate(update) {
   return chatId === undefined || chatId === null ? null : chatId;
 }
 
+function telegramTextFromUpdate(update) {
+  return update?.message?.text ?? update?.message?.caption ?? "";
+}
+
+function isTelegramStartCommandText(text) {
+  return String(text ?? "").trim().toLowerCase() === "/start";
+}
+
+function buildRawQueuedTelegramRequest(update, botKey) {
+  return {
+    chatId: telegramChatIdFromUpdate(update),
+    telegramBotKey: botKey,
+  };
+}
+
 function logTelegramBackgroundError(error) {
   console.error("telegram background handling failed", error);
 }
@@ -887,6 +902,62 @@ export function createAppServer(options = {}) {
         const routeReplyMode = telegramReplyMode;
 
         if (routeReplyMode === "webhook_response") {
+          const rawText = telegramTextFromUpdate(body);
+          const rawTelegramRequest = buildRawQueuedTelegramRequest(body, botKey);
+
+          if (isTelegramConnectivityCheckText(rawText)) {
+            sendJson(response, 200, buildConnectivityTelegramWebhookResponse(rawTelegramRequest));
+            return;
+          }
+
+          if (
+            telegramUpdateQueueEnabled &&
+            !isTelegramStartCommandText(rawText) &&
+            typeof repositories?.jobs?.enqueue === "function" &&
+            telegramUpdateJobKey(body, botKey)
+          ) {
+            const backgroundSender = resolveTelegramBackgroundSender({
+              botKey,
+              telegramSender,
+              telegramSenders,
+              telegramBackgroundSender,
+              telegramBackgroundSenders,
+            });
+
+            if (!backgroundSender) {
+              sendJson(
+                response,
+                200,
+                buildTelegramDeliveryNotConfiguredWebhookResponse(rawTelegramRequest),
+              );
+              return;
+            }
+
+            const queuedJob = await enqueueTelegramUpdateJob({
+              repositories,
+              update: body,
+              botKey,
+            });
+            triggerTelegramUpdateDispatcher?.();
+
+            sendJson(
+              response,
+              200,
+              buildScheduledTelegramWebhookResponse(
+                rawTelegramRequest,
+                {
+                  queued: Boolean(queuedJob),
+                  duplicate: queuedJob?.status === "completed",
+                },
+                {
+                  ackTimestamps: telegramAcceptedAckTimestamps,
+                  ackThrottleMs: telegramAcceptedAckThrottleMs,
+                },
+              ),
+            );
+            return;
+          }
+
           const telegramRequest = await buildTelegramWebhookRequest(body, {
             users,
             repositories,
@@ -916,11 +987,6 @@ export function createAppServer(options = {}) {
             telegramRequest.isStartCommand
           ) {
             sendJson(response, 200, buildImmediateTelegramWebhookResponse(telegramRequest));
-            return;
-          }
-
-          if (isTelegramConnectivityCheckText(telegramRequest.text)) {
-            sendJson(response, 200, buildConnectivityTelegramWebhookResponse(telegramRequest));
             return;
           }
 
