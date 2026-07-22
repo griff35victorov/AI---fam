@@ -61,6 +61,7 @@ test("setTelegramWebhook validates bot and registers secret webhook", async () =
   assert.deepEqual(JSON.parse(calls[1].options.body), {
     url: "https://family.example.ru/telegram/webhook",
     allowed_updates: ["message"],
+    max_connections: 1,
     secret_token: "secret-token",
     drop_pending_updates: true,
   });
@@ -87,6 +88,7 @@ test("setTelegramWebhook can register a dedicated daughter bot webhook", async (
   assert.deepEqual(JSON.parse(calls[1].options.body), {
     url: "https://family.example.ru/telegram/daughter/webhook",
     allowed_updates: ["message"],
+    max_connections: 1,
     secret_token: "daughter-secret",
   });
 });
@@ -118,6 +120,7 @@ test("runTelegramWebhookCli can register all dedicated bot webhooks", async () =
   assert.deepEqual(JSON.parse(calls[5].options.body), {
     url: "https://family.example.ru/telegram/teacher/webhook",
     allowed_updates: ["message"],
+    max_connections: 1,
   });
 });
 

@@ -16,6 +16,11 @@ function parseBoolean(value) {
   return ["1", "true", "yes"].includes(String(value ?? "").toLowerCase());
 }
 
+function parsePositiveInteger(value, fallback) {
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
+}
+
 function publicBaseUrlFromEnv(env) {
   const value = envValue(env.APP_PUBLIC_URL) ?? envValue(env.APP_BASE_URL);
   if (!value) {
@@ -118,6 +123,7 @@ export async function setTelegramWebhook({
   const payload = {
     url: buildTelegramWebhookUrl(env, { botKey }),
     allowed_updates: ["message"],
+    max_connections: parsePositiveInteger(env.TELEGRAM_WEBHOOK_MAX_CONNECTIONS, 1),
   };
 
   const secretToken = telegramWebhookSecretFromEnv(env, botKey);
