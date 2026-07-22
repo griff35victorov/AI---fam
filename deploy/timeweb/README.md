@@ -48,7 +48,7 @@ Completed:
 - Owner, daughter, and teacher webhooks use `max_connections=1`.
 - `/health` returns 200 OK.
 - Telegram relay code is available in `apps/telegram-relay` and is the production Telegram ingress. It keeps Telegram away from the unstable direct Telegram -> Timeweb path while keeping Timeweb as the core runtime. The relay also exposes a protected send API for final AI answers.
-- Production should use `TELEGRAM_WEBHOOK_INGRESS=relay` and `TELEGRAM_ALLOW_DIRECT_BACKGROUND_SEND=false`. Direct Telegram sending is only a deliberate debug override.
+- Production can accept Telegram webhooks either directly or through the relay with `TELEGRAM_WEBHOOK_INGRESS=direct_or_relay`. `TELEGRAM_ALLOW_DIRECT_BACKGROUND_SEND=false` should remain unchanged; final Telegram answers still go through the relay send API instead of direct Timeweb outbound `sendMessage`.
 
 Remaining:
 

@@ -168,6 +168,7 @@ test("production dependencies keep Telegram polling disabled by default in produ
 
   assert.equal(dependencies.telegramPollingEnabled, false);
   assert.equal(dependencies.telegramUpdateQueueEnabled, true);
+  assert.equal(dependencies.telegramWebhookIngressMode, "direct_or_relay");
   assert.equal(dependencies.telegramUpdateDispatcherIntervalMs, 1000);
   assert.equal(dependencies.telegramUpdateDispatcherMaxJobs, 10);
   assert.equal(dependencies.telegramUpdateDispatcherMaxAttempts, 3);
@@ -180,6 +181,33 @@ test("production dependencies keep Telegram polling disabled by default in produ
   assert.equal(dependencies.supervisorAuditOkTicks, false);
   assert.equal(dependencies.supervisorAuditDedupMs, 600_000);
   assert.deepEqual(dependencies.telegramPollingBotTokens, { owner: "owner-token" });
+});
+
+test("production dependencies allow direct Telegram ingress even when relay upstream secret is configured", () => {
+  const dependencies = createProductionDependencies({
+    env: {
+      NODE_ENV: "production",
+      TELEGRAM_OWNER_BOT_TOKEN: "owner-token",
+      TELEGRAM_RELAY_UPSTREAM_SECRET: "relay-upstream-secret",
+    },
+    repositories: createInMemoryRepositories(),
+  });
+
+  assert.equal(dependencies.telegramWebhookIngressMode, "direct_or_relay");
+});
+
+test("production dependencies still support explicit relay-only Telegram ingress", () => {
+  const dependencies = createProductionDependencies({
+    env: {
+      NODE_ENV: "production",
+      TELEGRAM_OWNER_BOT_TOKEN: "owner-token",
+      TELEGRAM_RELAY_UPSTREAM_SECRET: "relay-upstream-secret",
+      TELEGRAM_WEBHOOK_INGRESS: "relay",
+    },
+    repositories: createInMemoryRepositories(),
+  });
+
+  assert.equal(dependencies.telegramWebhookIngressMode, "relay");
 });
 
 test("production dependencies disable durable queue defaults without repositories", () => {

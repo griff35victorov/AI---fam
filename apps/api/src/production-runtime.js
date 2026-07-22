@@ -367,10 +367,7 @@ export function createProductionDependencies({
     telegramWebhookSecrets: parseTelegramWebhookSecrets(env),
     telegramRelayWebhookSecret: envValue(env.TELEGRAM_RELAY_UPSTREAM_SECRET),
     telegramWebhookIngressMode:
-      envValue(env.TELEGRAM_WEBHOOK_INGRESS) ??
-      (env.NODE_ENV === "production" && envValue(env.TELEGRAM_RELAY_UPSTREAM_SECRET)
-        ? "relay"
-        : "direct_or_relay"),
+      envValue(env.TELEGRAM_WEBHOOK_INGRESS) ?? "direct_or_relay",
     telegramRequireWebhookSecret: parseBoolean(
       env.TELEGRAM_REQUIRE_WEBHOOK_SECRET,
       env.NODE_ENV === "production",
