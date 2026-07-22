@@ -84,6 +84,19 @@ function resolveTelegramWebhookSecretForKey(env, botKey) {
   return envValue(env[envName]);
 }
 
+export function parseTelegramBotTokens(env = {}) {
+  const tokens = {};
+
+  for (const botKey of Object.keys(telegramBotEnv)) {
+    const botToken = resolveTelegramBotTokenForKey(env, botKey);
+    if (botToken) {
+      tokens[botKey] = botToken;
+    }
+  }
+
+  return tokens;
+}
+
 export function createTelegramSenders(env = {}, fetchImpl = fetch, senderOptions = {}) {
   const senders = {};
 
@@ -336,6 +349,15 @@ export function createProductionDependencies({
       env.NODE_ENV === "production",
     ),
     telegramReplyMode: envValue(env.TELEGRAM_REPLY_MODE) ?? "webhook_response",
+    telegramPollingEnabled: parseBoolean(
+      env.TELEGRAM_POLLING_ENABLED,
+      env.NODE_ENV === "production",
+    ),
+    telegramPollingIntervalMs: parseNumber(env.TELEGRAM_POLLING_INTERVAL_MS, 1000),
+    telegramPollingErrorDelayMs: parseNumber(env.TELEGRAM_POLLING_ERROR_DELAY_MS, 5000),
+    telegramPollingTimeoutSeconds: parseNumber(env.TELEGRAM_POLLING_TIMEOUT_SECONDS, 20),
+    telegramPollingBotTokens: parseTelegramBotTokens(env),
+    telegramPollingFetchImpl: fetchImpl,
     reminderDispatcherEnabled: parseBoolean(
       env.REMINDER_DISPATCHER_ENABLED,
       env.NODE_ENV === "production" && Boolean(resolvedRepositories?.jobs?.claim),

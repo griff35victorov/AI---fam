@@ -12,6 +12,7 @@ import {
   createRepositoryBackedOrchestrator,
   isImmediateRepositoryBackedRequest,
 } from "./runtime.js";
+import { startTelegramPolling } from "./telegram-poller.js";
 import {
   accessNotConfiguredText,
   accessNotConfiguredTextForRequest,
@@ -293,6 +294,18 @@ export function createAppServer(options = {}) {
     false;
   const telegramReplyMode =
     options.telegramReplyMode ?? dependencies.telegramReplyMode ?? "send_message";
+  const telegramPollingEnabled =
+    options.telegramPollingEnabled ?? dependencies.telegramPollingEnabled ?? false;
+  const telegramPollingBotTokens =
+    options.telegramPollingBotTokens ?? dependencies.telegramPollingBotTokens ?? {};
+  const telegramPollingFetchImpl =
+    options.telegramPollingFetchImpl ?? dependencies.telegramPollingFetchImpl ?? fetch;
+  const telegramPollingIntervalMs =
+    options.telegramPollingIntervalMs ?? dependencies.telegramPollingIntervalMs ?? 1000;
+  const telegramPollingErrorDelayMs =
+    options.telegramPollingErrorDelayMs ?? dependencies.telegramPollingErrorDelayMs ?? 5000;
+  const telegramPollingTimeoutSeconds =
+    options.telegramPollingTimeoutSeconds ?? dependencies.telegramPollingTimeoutSeconds ?? 20;
   const telegramBackgroundDelayMs =
     options.telegramBackgroundDelayMs ?? dependencies.telegramBackgroundDelayMs ?? 0;
   const reminderDispatcherEnabled =
@@ -314,6 +327,7 @@ export function createAppServer(options = {}) {
         })
       : ((request) => handleOrchestratorRequest(request, dependencies)));
   const telegramBackgroundUpdates = new Set();
+  let stopTelegramPolling;
 
   const server = createServer(async (request, response) => {
     try {
@@ -550,6 +564,57 @@ export function createAppServer(options = {}) {
     });
     server.on("close", () => {
       stopReminderDispatcher?.();
+    });
+  }
+
+  if (telegramPollingEnabled) {
+    server.on("listening", () => {
+      const polling = startTelegramPolling({
+        botTokens: telegramPollingBotTokens,
+        fetchImpl: telegramPollingFetchImpl,
+        intervalMs: telegramPollingIntervalMs,
+        errorDelayMs: telegramPollingErrorDelayMs,
+        timeoutSeconds: telegramPollingTimeoutSeconds,
+        handleUpdate: async (botKey, update) => {
+          const pollingSender = resolveTelegramSender({
+            botKey,
+            telegramSender: telegramBackgroundSender ?? telegramSender,
+            telegramSenders:
+              Object.keys(telegramBackgroundSenders).length > 0
+                ? telegramBackgroundSenders
+                : telegramSenders,
+          });
+
+          sendBackgroundChatAction({ telegramSender: pollingSender, body: update });
+
+          await handleTelegramUpdate(update, {
+            users,
+            repositories,
+            orchestrator,
+            telegramSender: pollingSender,
+            voiceTranscriber: resolveVoiceTranscriber({
+              botKey,
+              voiceTranscriber,
+              voiceTranscribers,
+            }),
+            imageOcr: resolveImageOcr({
+              botKey,
+              imageOcr,
+              imageOcrs,
+            }),
+            documentTextExtractor: resolveDocumentTextExtractor({
+              botKey,
+              documentTextExtractor,
+              documentTextExtractors,
+            }),
+            botKey,
+          });
+        },
+      });
+      stopTelegramPolling = () => polling.stop();
+    });
+    server.on("close", () => {
+      stopTelegramPolling?.();
     });
   }
 

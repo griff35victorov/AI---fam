@@ -149,6 +149,25 @@ test("production dependencies create dedicated Telegram bot senders and secrets"
     daughter: "daughter-secret",
     teacher: "teacher-secret",
   });
+  assert.equal(dependencies.telegramPollingEnabled, false);
+  assert.deepEqual(Object.keys(dependencies.telegramPollingBotTokens).sort(), [
+    "daughter",
+    "owner",
+    "teacher",
+  ]);
+});
+
+test("production dependencies enable Telegram polling by default in production", () => {
+  const dependencies = createProductionDependencies({
+    env: {
+      NODE_ENV: "production",
+      TELEGRAM_OWNER_BOT_TOKEN: "owner-token",
+    },
+    repositories: createInMemoryRepositories(),
+  });
+
+  assert.equal(dependencies.telegramPollingEnabled, true);
+  assert.deepEqual(dependencies.telegramPollingBotTokens, { owner: "owner-token" });
 });
 
 test("production dependencies create background relay senders when relay is configured", async () => {
