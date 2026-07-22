@@ -158,6 +158,14 @@ export function createTelegramBackgroundSenders(env = {}, fetchImpl = fetch) {
     return relaySenders;
   }
 
+  if (mode && mode !== "failover") {
+    return Object.keys(relaySenders).length > 0 ? relaySenders : directSenders;
+  }
+
+  if (mode !== "failover" && Object.keys(relaySenders).length > 0) {
+    return relaySenders;
+  }
+
   const senders = {};
   for (const botKey of Object.keys(telegramBotEnv)) {
     if (directSenders[botKey] && relaySenders[botKey]) {
@@ -351,7 +359,7 @@ export function createProductionDependencies({
     telegramReplyMode: envValue(env.TELEGRAM_REPLY_MODE) ?? "webhook_response",
     telegramPollingEnabled: parseBoolean(
       env.TELEGRAM_POLLING_ENABLED,
-      env.NODE_ENV === "production",
+      false,
     ),
     telegramPollingIntervalMs: parseNumber(env.TELEGRAM_POLLING_INTERVAL_MS, 1000),
     telegramPollingErrorDelayMs: parseNumber(env.TELEGRAM_POLLING_ERROR_DELAY_MS, 5000),

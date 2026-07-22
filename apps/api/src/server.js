@@ -87,6 +87,27 @@ function resolveTelegramSender({ botKey, telegramSender, telegramSenders }) {
   return telegramSenders?.[botKey];
 }
 
+function resolveTelegramBackgroundSender({
+  botKey,
+  telegramSender,
+  telegramSenders,
+  telegramBackgroundSender,
+  telegramBackgroundSenders,
+}) {
+  return (
+    resolveTelegramSender({
+      botKey,
+      telegramSender: telegramBackgroundSender,
+      telegramSenders: telegramBackgroundSenders,
+    }) ??
+    resolveTelegramSender({
+      botKey,
+      telegramSender,
+      telegramSenders,
+    })
+  );
+}
+
 function resolveVoiceTranscriber({ botKey, voiceTranscriber, voiceTranscribers }) {
   if (!botKey) {
     return voiceTranscriber;
@@ -201,6 +222,28 @@ function telegramBackgroundUpdateKey(update, botKey) {
   }
 
   return `${botKey ?? "default"}:${update.update_id}`;
+}
+
+function telegramReplyDeliveryKey(update, botKey) {
+  if (update?.update_id == null) {
+    return null;
+  }
+
+  return `telegram:${botKey ?? "default"}:${update.update_id}:reply`;
+}
+
+function isRetryableTelegramDelivery(delivery) {
+  return delivery?.status === "failed" && delivery?.result?.stage !== "send";
+}
+
+async function isTelegramReplyDeliveryDuplicate({ repositories, update, botKey } = {}) {
+  const key = telegramReplyDeliveryKey(update, botKey);
+  if (!key || typeof repositories?.telegramDeliveries?.get !== "function") {
+    return false;
+  }
+
+  const delivery = await repositories.telegramDeliveries.get(key);
+  return Boolean(delivery && !isRetryableTelegramDelivery(delivery));
 }
 
 function telegramChatIdFromUpdate(update) {
@@ -404,17 +447,22 @@ export function createAppServer(options = {}) {
             !telegramRequest.mediaDeferred &&
             isImmediateRepositoryBackedRequest(telegramRequest.text)
           ) {
-            const backgroundSender = resolveTelegramSender({
+            const backgroundSender = resolveTelegramBackgroundSender({
               botKey,
-              telegramSender: telegramBackgroundSender,
-              telegramSenders: telegramBackgroundSenders,
+              telegramSender,
+              telegramSenders,
+              telegramBackgroundSender,
+              telegramBackgroundSenders,
             });
 
             if (backgroundSender) {
               sendJson(response, 200, buildWebhookOkResponse());
 
               const backgroundKey = telegramBackgroundUpdateKey(body, botKey);
-              if (!backgroundKey || !telegramBackgroundUpdates.has(backgroundKey)) {
+              if (
+                (!backgroundKey || !telegramBackgroundUpdates.has(backgroundKey)) &&
+                !(await isTelegramReplyDeliveryDuplicate({ repositories, update: body, botKey }))
+              ) {
                 if (backgroundKey) {
                   telegramBackgroundUpdates.add(backgroundKey);
                 }
@@ -466,10 +514,12 @@ export function createAppServer(options = {}) {
             return;
           }
 
-          const backgroundSender = resolveTelegramSender({
+          const backgroundSender = resolveTelegramBackgroundSender({
             botKey,
-            telegramSender: telegramBackgroundSender,
-            telegramSenders: telegramBackgroundSenders,
+            telegramSender,
+            telegramSenders,
+            telegramBackgroundSender,
+            telegramBackgroundSenders,
           });
           sendJson(
             response,
@@ -480,7 +530,10 @@ export function createAppServer(options = {}) {
           );
 
           const backgroundKey = telegramBackgroundUpdateKey(body, botKey);
-          if (!backgroundKey || !telegramBackgroundUpdates.has(backgroundKey)) {
+          if (
+            (!backgroundKey || !telegramBackgroundUpdates.has(backgroundKey)) &&
+            !(await isTelegramReplyDeliveryDuplicate({ repositories, update: body, botKey }))
+          ) {
             if (backgroundKey) {
               telegramBackgroundUpdates.add(backgroundKey);
             }
@@ -576,13 +629,12 @@ export function createAppServer(options = {}) {
         errorDelayMs: telegramPollingErrorDelayMs,
         timeoutSeconds: telegramPollingTimeoutSeconds,
         handleUpdate: async (botKey, update) => {
-          const pollingSender = resolveTelegramSender({
+          const pollingSender = resolveTelegramBackgroundSender({
             botKey,
-            telegramSender: telegramBackgroundSender ?? telegramSender,
-            telegramSenders:
-              Object.keys(telegramBackgroundSenders).length > 0
-                ? telegramBackgroundSenders
-                : telegramSenders,
+            telegramSender,
+            telegramSenders,
+            telegramBackgroundSender,
+            telegramBackgroundSenders,
           });
 
           sendBackgroundChatAction({ telegramSender: pollingSender, body: update });

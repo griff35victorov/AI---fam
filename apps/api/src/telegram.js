@@ -416,12 +416,64 @@ export async function buildTelegramRequestFromRepositories(
   };
 }
 
+function telegramReplyDeliveryKey(update, botKey) {
+  if (update?.update_id == null) {
+    return null;
+  }
+
+  return `telegram:${botKey ?? "default"}:${update.update_id}:reply`;
+}
+
+function telegramChatIdFromUpdate(update) {
+  const chatId = update?.message?.chat?.id;
+  return chatId === undefined || chatId === null ? null : chatId;
+}
+
+async function claimTelegramReplyDelivery({ repositories, update, botKey } = {}) {
+  const key = telegramReplyDeliveryKey(update, botKey);
+  if (!key || typeof repositories?.telegramDeliveries?.claim !== "function") {
+    return { key, claimed: true, delivery: null };
+  }
+
+  const result = await repositories.telegramDeliveries.claim({
+    key,
+    botKey: botKey ?? "default",
+    updateId: update.update_id,
+    chatId: telegramChatIdFromUpdate(update),
+  });
+
+  return { key, ...result };
+}
+
+async function markTelegramReplySent({ repositories, key, chatId, text } = {}) {
+  if (!key || typeof repositories?.telegramDeliveries?.markSent !== "function") {
+    return;
+  }
+
+  await repositories.telegramDeliveries.markSent(key, {
+    stage: "sent",
+    chatId,
+    textLength: String(text ?? "").length,
+  });
+}
+
+async function markTelegramReplyFailed({ repositories, key, stage, error } = {}) {
+  if (!key || typeof repositories?.telegramDeliveries?.markFailed !== "function") {
+    return;
+  }
+
+  await repositories.telegramDeliveries.markFailed(key, {
+    stage,
+    error: error?.message ?? String(error ?? "telegram delivery failed"),
+  });
+}
+
 async function sendTelegramReply(telegramSender, { chatId, text }) {
   if (!telegramSender) {
     return;
   }
 
-  await telegramSender.sendMessage({ chatId, text });
+  return telegramSender.sendMessage({ chatId, text });
 }
 
 export async function handleTelegramUpdate(
@@ -437,72 +489,93 @@ export async function handleTelegramUpdate(
     documentTextExtractor,
   },
 ) {
-  const request = repositories?.users
-    ? await buildTelegramRequestFromRepositories(update, {
+  const delivery = telegramSender
+    ? await claimTelegramReplyDelivery({ repositories, update, botKey })
+    : { key: null, claimed: true, delivery: null };
+  if (!delivery.claimed) {
+    return {
+      chatId: telegramChatIdFromUpdate(update),
+      text: delivery.delivery?.result?.text ?? "",
+      duplicate: true,
+    };
+  }
+
+  let request;
+  try {
+    request = repositories?.users
+      ? await buildTelegramRequestFromRepositories(update, {
+          repositories,
+          botKey,
+          voiceTranscriber,
+          imageOcr,
+          documentTextExtractor,
+        })
+      : buildTelegramRequest(update, { users, botKey });
+  } catch (error) {
+    await markTelegramReplyFailed({
+      repositories,
+      key: delivery.key,
+      stage: "processing",
+      error,
+    });
+    throw error;
+  }
+
+  async function finish({ chatId, text }) {
+    try {
+      await sendTelegramReply(telegramSender, { chatId, text });
+      await markTelegramReplySent({ repositories, key: delivery.key, chatId, text });
+    } catch (error) {
+      await markTelegramReplyFailed({
         repositories,
-        botKey,
-        voiceTranscriber,
-        imageOcr,
-        documentTextExtractor,
-      })
-    : buildTelegramRequest(update, { users, botKey });
+        key: delivery.key,
+        stage: "send",
+        error,
+      });
+      throw error;
+    }
+
+    return { chatId, text };
+  }
 
   if (request.rejected) {
     const text = accessNotConfiguredText;
-    await sendTelegramReply(telegramSender, { chatId: request.chatId, text });
-
-    return {
-      chatId: request.chatId,
-      text,
-    };
+    return finish({ chatId: request.chatId, text });
   }
 
   if (request.isStartCommand) {
     const text = startCommandText;
-    await sendTelegramReply(telegramSender, { chatId: request.chatId, text });
-
-    return {
-      chatId: request.chatId,
-      text,
-    };
+    return finish({ chatId: request.chatId, text });
   }
 
   if (request.voiceRejected) {
     const text = request.voiceReplyText ?? voiceInputNotConfiguredText;
-    await sendTelegramReply(telegramSender, { chatId: request.chatId, text });
-
-    return {
-      chatId: request.chatId,
-      text,
-    };
+    return finish({ chatId: request.chatId, text });
   }
 
   if (request.imageRejected) {
     const text = request.imageReplyText ?? imageInputNotConfiguredText;
-    await sendTelegramReply(telegramSender, { chatId: request.chatId, text });
-
-    return {
-      chatId: request.chatId,
-      text,
-    };
+    return finish({ chatId: request.chatId, text });
   }
 
   if (request.documentRejected) {
     const text = request.documentReplyText ?? documentInputNotConfiguredText;
-    await sendTelegramReply(telegramSender, { chatId: request.chatId, text });
-
-    return {
-      chatId: request.chatId,
-      text,
-    };
+    return finish({ chatId: request.chatId, text });
   }
 
-  const result = await orchestrator(request);
-  const text = result.answer?.text ?? defaultProcessedText;
-  await sendTelegramReply(telegramSender, { chatId: request.chatId, text });
+  let result;
+  try {
+    result = await orchestrator(request);
+  } catch (error) {
+    await markTelegramReplyFailed({
+      repositories,
+      key: delivery.key,
+      stage: "processing",
+      error,
+    });
+    throw error;
+  }
 
-  return {
-    chatId: request.chatId,
-    text,
-  };
+  const text = result.answer?.text ?? defaultProcessedText;
+  return finish({ chatId: request.chatId, text });
 }

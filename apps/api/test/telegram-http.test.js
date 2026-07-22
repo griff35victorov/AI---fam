@@ -336,7 +336,7 @@ test("POST /telegram/daughter/webhook refuses wrong-role /start through webhook 
   assert.deepEqual(sentMessages, []);
 });
 
-test("POST /telegram/teacher/webhook closes immediate response and runs AI without outbound sender", async () => {
+test("POST /telegram/teacher/webhook closes immediate response and uses regular sender as background fallback", async () => {
   let releaseOrchestrator;
   const orchestratorCanFinish = new Promise((resolve) => {
     releaseOrchestrator = resolve;
@@ -389,22 +389,23 @@ test("POST /telegram/teacher/webhook closes immediate response and runs AI witho
       assert.equal(response.status, 200);
       assert.equal(response.headers.get("connection"), "close");
       assert.ok(Number(response.headers.get("content-length")) > 0);
-      const body = await response.json();
-      assert.equal(body.method, "sendMessage");
-      assert.equal(body.chat_id, 777);
-      assert.equal(typeof body.text, "string");
-      assert.notEqual(body.text, "Teacher async answer");
+      assert.deepEqual(await response.json(), { ok: true });
 
       await waitFor(
         () => calls.length === 1,
         1000,
         "background AI handler was not called",
       );
+      await waitFor(
+        () => sentMessages.length === 1,
+        1000,
+        "regular sender was not used as background fallback",
+      );
     },
   );
 
   assert.equal(calls.length, 1);
-  assert.deepEqual(sentMessages, []);
+  assert.deepEqual(sentMessages, [{ chatId: 777, text: "Teacher async answer" }]);
 });
 
 test("POST /telegram/teacher/webhook sends only background AI answer through relay sender when configured", async () => {
@@ -524,6 +525,76 @@ test("POST /telegram/owner/webhook answers /learn once through background sender
   assert.match(sentMessages[0].text, /\/learn fact/);
 });
 
+test("POST /telegram/owner/webhook does not resend /learn answer for repeated update id", async () => {
+  const sentMessages = [];
+  const chatActions = [];
+  const repositories = createInMemoryRepositories({
+    users: [
+      {
+        id: "owner-1",
+        role: "owner",
+        telegramUserId: "100",
+        workspaceId: "workspace-family",
+      },
+    ],
+  });
+  const update = {
+    update_id: 226,
+    message: {
+      chat: { id: 777 },
+      from: { id: 100 },
+      text: "/learn",
+    },
+  };
+
+  await withServer(
+    {
+      repositories,
+      dependencies: {
+        telegramReplyMode: "webhook_response",
+        telegramBackgroundDelayMs: 0,
+        telegramBackgroundSenders: {
+          owner: {
+            async sendChatAction(action) {
+              chatActions.push(action);
+              return { ok: true };
+            },
+            async sendMessage(message) {
+              sentMessages.push(message);
+              return { ok: true };
+            },
+          },
+        },
+        aiProvider: {
+          async complete() {
+            throw new Error("AI should not be called for /learn");
+          },
+        },
+      },
+    },
+    async (baseUrl) => {
+      const first = await postJson(`${baseUrl}/telegram/owner/webhook`, update);
+      assert.equal(first.status, 200);
+      assert.deepEqual(await first.json(), { ok: true });
+
+      await waitFor(
+        () => sentMessages.length === 1,
+        1000,
+        "first /learn sender was not called",
+      );
+
+      const second = await postJson(`${baseUrl}/telegram/owner/webhook`, update);
+      assert.equal(second.status, 200);
+      assert.deepEqual(await second.json(), { ok: true });
+
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    },
+  );
+
+  assert.equal(sentMessages.length, 1);
+  assert.equal(chatActions.length, 1);
+});
+
 test("POST /telegram/owner/webhook stores explicit memory once through background sender", async () => {
   const sentMessages = [];
   const repositories = createInMemoryRepositories({
@@ -584,6 +655,70 @@ test("POST /telegram/owner/webhook stores explicit memory once through backgroun
   assert.equal(sentMessages[0].chatId, 777);
   assert.match(sentMessages[0].text, /Запомнил/);
   assert.match(sentMessages[0].text, /rksurfmag\.club/);
+});
+
+test("POST /telegram/owner/webhook does not resend explicit memory answer for repeated update id", async () => {
+  const sentMessages = [];
+  const repositories = createInMemoryRepositories({
+    users: [
+      {
+        id: "owner-1",
+        role: "owner",
+        telegramUserId: "100",
+        workspaceId: "workspace-family",
+      },
+    ],
+  });
+  const update = {
+    update_id: 227,
+    message: {
+      chat: { id: 777 },
+      from: { id: 100 },
+      text: "Р—Р°РїРѕРјРЅРё, С‡С‚Рѕ СЏ РїСЂРµРґРїРѕС‡РёС‚Р°СЋ РєРѕСЂРѕС‚РєРёРµ РѕС‚РІРµС‚С‹",
+    },
+  };
+
+  await withServer(
+    {
+      repositories,
+      dependencies: {
+        telegramReplyMode: "webhook_response",
+        telegramBackgroundDelayMs: 0,
+        telegramBackgroundSenders: {
+          owner: {
+            async sendMessage(message) {
+              sentMessages.push(message);
+              return { ok: true };
+            },
+          },
+        },
+        aiProvider: {
+          async complete() {
+            throw new Error("AI should not be called for explicit memory");
+          },
+        },
+      },
+    },
+    async (baseUrl) => {
+      const first = await postJson(`${baseUrl}/telegram/owner/webhook`, update);
+      assert.equal(first.status, 200);
+      assert.deepEqual(await first.json(), { ok: true });
+
+      await waitFor(
+        () => sentMessages.length === 1,
+        1000,
+        "first explicit-memory sender was not called",
+      );
+
+      const second = await postJson(`${baseUrl}/telegram/owner/webhook`, update);
+      assert.equal(second.status, 200);
+      assert.deepEqual(await second.json(), { ok: true });
+
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    },
+  );
+
+  assert.equal(sentMessages.length, 1);
 });
 
 test("POST /telegram/owner/webhook fails closed when production secret is required but missing", async () => {

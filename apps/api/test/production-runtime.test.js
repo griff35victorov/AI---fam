@@ -157,10 +157,24 @@ test("production dependencies create dedicated Telegram bot senders and secrets"
   ]);
 });
 
-test("production dependencies enable Telegram polling by default in production", () => {
+test("production dependencies keep Telegram polling disabled by default in production", () => {
   const dependencies = createProductionDependencies({
     env: {
       NODE_ENV: "production",
+      TELEGRAM_OWNER_BOT_TOKEN: "owner-token",
+    },
+    repositories: createInMemoryRepositories(),
+  });
+
+  assert.equal(dependencies.telegramPollingEnabled, false);
+  assert.deepEqual(dependencies.telegramPollingBotTokens, { owner: "owner-token" });
+});
+
+test("production dependencies enable Telegram polling only when explicitly requested", () => {
+  const dependencies = createProductionDependencies({
+    env: {
+      NODE_ENV: "production",
+      TELEGRAM_POLLING_ENABLED: "true",
       TELEGRAM_OWNER_BOT_TOKEN: "owner-token",
     },
     repositories: createInMemoryRepositories(),
@@ -199,7 +213,7 @@ test("production dependencies create background relay senders when relay is conf
   assert.equal(calls[0][1].headers["x-family-ai-relay-secret"], "relay-secret");
 });
 
-test("production dependencies prefer direct Telegram background senders when bot tokens exist", async () => {
+test("production dependencies prefer relay background senders when relay is configured", async () => {
   const calls = [];
   const dependencies = createProductionDependencies({
     env: {
@@ -225,19 +239,20 @@ test("production dependencies prefer direct Telegram background senders when bot
     text: "Teacher async answer https://example.com",
   });
 
-  assert.equal(calls[0][0], "https://api.telegram.org/botteacher-token/sendMessage");
+  assert.equal(calls[0][0], "https://relay.example/telegram/teacher/send");
   assert.deepEqual(JSON.parse(calls[0][1].body).link_preview_options, {
     is_disabled: true,
   });
 });
 
-test("production Telegram background senders fall back to relay after direct failure", async () => {
+test("production Telegram background senders can fall back to relay in explicit failover mode", async () => {
   const calls = [];
   const dependencies = createProductionDependencies({
     env: {
       TELEGRAM_RELAY_URL: "https://relay.example/",
       TELEGRAM_RELAY_SECRET: "relay-secret",
       TELEGRAM_TEACHER_BOT_TOKEN: "teacher-token",
+      TELEGRAM_BACKGROUND_SEND_MODE: "failover",
     },
     repositories: createInMemoryRepositories(),
     fetchImpl: async (...args) => {

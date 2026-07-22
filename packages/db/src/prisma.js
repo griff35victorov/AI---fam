@@ -483,6 +483,127 @@ export function createPrismaRepositories(prisma) {
         }
       : {}),
 
+    ...(prisma.job?.create && prisma.job?.findUnique
+      ? {
+          telegramDeliveries: {
+            async get(key) {
+              if (!key) {
+                return null;
+              }
+
+              return prisma.job.findUnique({
+                where: { dedupeKey: key },
+              });
+            },
+
+            async claim({
+              key,
+              botKey = null,
+              updateId = null,
+              chatId = null,
+              now = new Date(),
+            } = {}) {
+              if (!key) {
+                return { claimed: true, delivery: null };
+              }
+
+              const nowDate = new Date(now);
+              const lockedUntil = new Date(nowDate.getTime() + 5 * 60_000);
+              try {
+                const delivery = await prisma.job.create({
+                  data: {
+                    type: "telegram-delivery",
+                    payload: { botKey, updateId, chatId },
+                    status: "running",
+                    runAt: nowDate,
+                    attempts: 1,
+                    lockedBy: "telegram-delivery",
+                    lockedUntil,
+                    dedupeKey: key,
+                    createdAt: nowDate,
+                    updatedAt: nowDate,
+                  },
+                });
+
+                return { claimed: true, delivery };
+              } catch (error) {
+                if (error?.code !== "P2002") {
+                  throw error;
+                }
+
+                const delivery = await prisma.job.findUnique({
+                  where: { dedupeKey: key },
+                });
+                if (delivery?.status === "failed" && delivery.result?.stage !== "send") {
+                  const reclaimed = await prisma.job.updateMany({
+                    where: {
+                      dedupeKey: key,
+                      status: "failed",
+                    },
+                    data: {
+                      status: "running",
+                      attempts: { increment: 1 },
+                      lockedBy: "telegram-delivery",
+                      lockedUntil,
+                      updatedAt: nowDate,
+                    },
+                  });
+
+                  if (reclaimed.count === 1) {
+                    return {
+                      claimed: true,
+                      delivery: await prisma.job.findUnique({
+                        where: { dedupeKey: key },
+                      }),
+                    };
+                  }
+                }
+
+                return { claimed: false, delivery };
+              }
+            },
+
+            async markSent(key, result = {}, now = new Date()) {
+              return prisma.job.update({
+                where: { dedupeKey: key },
+                data: {
+                  status: "completed",
+                  result,
+                  error: null,
+                  lockedBy: null,
+                  lockedUntil: null,
+                  completedAt: new Date(now),
+                  updatedAt: new Date(now),
+                },
+              });
+            },
+
+            async markFailed(key, error = {}, now = new Date()) {
+              const message =
+                typeof error === "string"
+                  ? error
+                  : error?.message ?? error?.error ?? "telegram delivery failed";
+
+              return prisma.job.update({
+                where: { dedupeKey: key },
+                data: {
+                  status: "failed",
+                  error: message,
+                  result:
+                    typeof error === "object" && error !== null
+                      ? { error: message, ...error }
+                      : { error: message },
+                  lockedBy: null,
+                  lockedUntil: null,
+                  failedAt: new Date(now),
+                  updatedAt: new Date(now),
+                },
+              });
+            },
+          },
+        }
+      : {}),
+
     jobs: {
       async enqueue(job) {
         if (job.dedupeKey != null) {

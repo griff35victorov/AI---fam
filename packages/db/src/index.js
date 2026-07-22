@@ -185,6 +185,10 @@ const normalizeJob = (job) => ({
   lockedUntil: cloneDate(job.lockedUntil) ?? null,
   lockedBy: job.lockedBy ?? null,
   dedupeKey: job.dedupeKey ?? null,
+  result: job.result ?? null,
+  error: job.error ?? null,
+  completedAt: cloneDate(job.completedAt) ?? null,
+  failedAt: cloneDate(job.failedAt) ?? null,
   createdAt: cloneDate(job.createdAt) ?? new Date(),
   updatedAt: cloneDate(job.updatedAt) ?? new Date(),
 });
@@ -257,6 +261,17 @@ export function createInMemoryRepositories(seed = {}) {
 
   const updateJob = (jobId, updater) => {
     const stored = jobs.find((candidate) => candidate.id === jobId);
+
+    if (stored == null) {
+      return null;
+    }
+
+    updater(stored);
+    return cloneRecord(stored);
+  };
+
+  const updateJobByDedupeKey = (dedupeKey, updater) => {
+    const stored = jobs.find((candidate) => candidate.dedupeKey === dedupeKey);
 
     if (stored == null) {
       return null;
@@ -448,6 +463,89 @@ export function createInMemoryRepositories(seed = {}) {
 
         return applyRecentLimit(visibleAuditLogs, limit)
           .map(cloneRecord);
+      },
+    },
+
+    telegramDeliveries: {
+      async get(key) {
+        if (!key) {
+          return null;
+        }
+
+        return cloneRecord(jobs.find((candidate) => candidate.dedupeKey === key) ?? null);
+      },
+
+      async claim({ key, botKey = null, updateId = null, chatId = null, now = new Date() } = {}) {
+        if (!key) {
+          return { claimed: true, delivery: null };
+        }
+
+        const existing = jobs.find((candidate) => candidate.dedupeKey === key);
+        if (existing != null) {
+          if (existing.status === "failed" && existing.result?.stage !== "send") {
+            const nowDate = cloneDate(now) ?? new Date();
+            existing.status = "running";
+            existing.attempts += 1;
+            existing.lockedBy = "telegram-delivery";
+            existing.lockedUntil = new Date(nowDate.getTime() + 5 * 60_000);
+            existing.updatedAt = nowDate;
+            return { claimed: true, delivery: cloneRecord(existing) };
+          }
+
+          return { claimed: false, delivery: cloneRecord(existing) };
+        }
+
+        const nowDate = cloneDate(now) ?? new Date();
+        const stored = normalizeJob({
+          type: "telegram-delivery",
+          payload: { botKey, updateId, chatId },
+          status: "running",
+          runAt: nowDate,
+          attempts: 1,
+          lockedBy: "telegram-delivery",
+          lockedUntil: new Date(nowDate.getTime() + 5 * 60_000),
+          dedupeKey: key,
+          createdAt: nowDate,
+          updatedAt: nowDate,
+        });
+        jobs.push(stored);
+
+        return { claimed: true, delivery: cloneRecord(stored) };
+      },
+
+      async markSent(key, result = {}, now = new Date()) {
+        const nowDate = cloneDate(now) ?? new Date();
+
+        return updateJobByDedupeKey(key, (stored) => {
+          stored.status = "completed";
+          stored.result = result;
+          stored.error = null;
+          stored.lockedBy = null;
+          stored.lockedUntil = null;
+          stored.completedAt = nowDate;
+          stored.updatedAt = nowDate;
+        });
+      },
+
+      async markFailed(key, error = {}, now = new Date()) {
+        const nowDate = cloneDate(now) ?? new Date();
+        const message =
+          typeof error === "string"
+            ? error
+            : error?.message ?? error?.error ?? "telegram delivery failed";
+
+        return updateJobByDedupeKey(key, (stored) => {
+          stored.status = "failed";
+          stored.error = message;
+          stored.result =
+            typeof error === "object" && error !== null
+              ? { error: message, ...error }
+              : { error: message };
+          stored.lockedBy = null;
+          stored.lockedUntil = null;
+          stored.failedAt = nowDate;
+          stored.updatedAt = nowDate;
+        });
       },
     },
 

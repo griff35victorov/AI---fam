@@ -344,4 +344,49 @@ describe("in-memory repositories", () => {
     assert.equal(claimed.attempts, 1);
     assert.equal(failed.attempts, 1);
   });
+
+  it("claims Telegram delivery once and reclaims only processing failures", async () => {
+    const repositories = createInMemoryRepositories();
+    const key = "telegram:owner:123:reply";
+
+    const first = await repositories.telegramDeliveries.claim({
+      key,
+      botKey: "owner",
+      updateId: 123,
+      chatId: 777,
+    });
+    const duplicate = await repositories.telegramDeliveries.claim({
+      key,
+      botKey: "owner",
+      updateId: 123,
+      chatId: 777,
+    });
+
+    assert.equal(first.claimed, true);
+    assert.equal(duplicate.claimed, false);
+
+    await repositories.telegramDeliveries.markFailed(key, {
+      stage: "processing",
+      error: "AI failed",
+    });
+    const retryAfterProcessingFailure = await repositories.telegramDeliveries.claim({
+      key,
+      botKey: "owner",
+      updateId: 123,
+      chatId: 777,
+    });
+    assert.equal(retryAfterProcessingFailure.claimed, true);
+
+    await repositories.telegramDeliveries.markFailed(key, {
+      stage: "send",
+      error: "send timeout",
+    });
+    const retryAfterSendFailure = await repositories.telegramDeliveries.claim({
+      key,
+      botKey: "owner",
+      updateId: 123,
+      chatId: 777,
+    });
+    assert.equal(retryAfterSendFailure.claimed, false);
+  });
 });
