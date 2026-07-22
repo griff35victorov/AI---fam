@@ -180,6 +180,34 @@ test("production dependencies create background relay senders when relay is conf
   assert.equal(calls[0][1].headers["x-family-ai-relay-secret"], "relay-secret");
 });
 
+test("production dependencies prefer direct Telegram background senders when bot tokens exist", async () => {
+  const calls = [];
+  const dependencies = createProductionDependencies({
+    env: {
+      TELEGRAM_RELAY_URL: "https://relay.example/",
+      TELEGRAM_RELAY_SECRET: "relay-secret",
+      TELEGRAM_TEACHER_BOT_TOKEN: "teacher-token",
+    },
+    repositories: createInMemoryRepositories(),
+    fetchImpl: async (...args) => {
+      calls.push(args);
+      return jsonResponse({ ok: true, result: { message_id: 47 } });
+    },
+  });
+
+  assert.deepEqual(Object.keys(dependencies.telegramBackgroundSenders), ["teacher"]);
+
+  await dependencies.telegramBackgroundSenders.teacher.sendMessage({
+    chatId: 777,
+    text: "Teacher async answer https://example.com",
+  });
+
+  assert.equal(calls[0][0], "https://api.telegram.org/botteacher-token/sendMessage");
+  assert.deepEqual(JSON.parse(calls[0][1].body).link_preview_options, {
+    is_disabled: true,
+  });
+});
+
 test("createTelegramSenders and parseTelegramWebhookSecrets ignore missing bot env", () => {
   const senders = createTelegramSenders({
     TELEGRAM_OWNER_BOT_TOKEN: "owner-token",

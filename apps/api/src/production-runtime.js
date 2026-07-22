@@ -99,6 +99,12 @@ export function createTelegramSenders(env = {}, fetchImpl = fetch) {
 }
 
 export function createTelegramBackgroundSenders(env = {}, fetchImpl = fetch) {
+  const directSenders = createTelegramSenders(env, fetchImpl);
+  const mode = String(envValue(env.TELEGRAM_BACKGROUND_SEND_MODE) ?? "").toLowerCase();
+  if (mode !== "relay" && Object.keys(directSenders).length > 0) {
+    return directSenders;
+  }
+
   const relayUrl = envValue(env.TELEGRAM_RELAY_URL) ?? envValue(env.TELEGRAM_RELAY_BASE_URL);
   const relaySecret = envValue(env.TELEGRAM_RELAY_SECRET);
   if (!relayUrl || !relaySecret) {
