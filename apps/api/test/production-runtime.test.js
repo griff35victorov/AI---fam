@@ -172,6 +172,7 @@ test("production dependencies keep Telegram polling disabled by default in produ
   assert.equal(dependencies.telegramUpdateDispatcherMaxJobs, 10);
   assert.equal(dependencies.telegramUpdateDispatcherMaxAttempts, 3);
   assert.equal(dependencies.telegramUpdateDispatcherRetryDelayMs, 5000);
+  assert.equal(dependencies.telegramAcceptedAckThrottleMs, 8000);
   assert.equal(dependencies.supervisorEnabled, true);
   assert.equal(dependencies.supervisorIntervalMs, 60_000);
   assert.equal(dependencies.supervisorAlertCooldownMs, 600_000);

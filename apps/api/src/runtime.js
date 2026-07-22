@@ -1,4 +1,5 @@
 import { handleOrchestratorRequest } from "./orchestrator.js";
+import { runSupervisorTick } from "./supervisor-runner.js";
 import {
   analyzeSupervisorState,
   canStoreMemory,
@@ -590,6 +591,8 @@ function isDiagnosticsRequest(text) {
   return (
     normalized === "/diag" ||
     normalized === "/diagnostics" ||
+    normalized === "/repair" ||
+    normalized === "/supervisor" ||
     normalized === "проверка связи" ||
     normalized === "статус связи" ||
     normalized === "связь" ||
@@ -600,6 +603,25 @@ function isDiagnosticsRequest(text) {
     normalized.includes("бот тупит") ||
     normalized.includes("бот долго")
   );
+}
+
+function isSupervisorRepairRequest(text) {
+  const normalized = normalizeText(text);
+  return (
+    normalized === "/repair" ||
+    normalized === "/supervisor" ||
+    normalized === "ремонт" ||
+    normalized === "саморемонт" ||
+    normalized === "почини бота" ||
+    normalized === "почини оркестр" ||
+    normalized.includes("запусти supervisor") ||
+    normalized.includes("запусти супервизор") ||
+    normalized.includes("самодиагностика и ремонт")
+  );
+}
+
+function canRunSupervisorRepair(actor) {
+  return actor?.role === "owner";
 }
 
 function isCapabilitiesRequest(text) {
@@ -667,6 +689,38 @@ function buildDiagnosticsAnswer({
     supervisorReport ? "" : null,
     supervisorReport ? formatSupervisorReport(supervisorReport) : null,
   ].join("\n");
+}
+
+function buildSupervisorRepairAnswer(result) {
+  return [
+    "Supervisor-ремонт выполнен.",
+    `- Статус после проверки: ${result.status}.`,
+    `- Авто-лечением переотложено задач: ${result.autoHealedJobs}.`,
+    "",
+    formatSupervisorReport(result.report),
+  ].join("\n");
+}
+
+async function loadDiagnosticJobs({
+  repositories,
+  now = new Date(),
+  jobLimit = 200,
+  staleJobLimit = 100,
+} = {}) {
+  const [recentJobs, staleJobs] = await Promise.all([
+    repositories.jobs?.listRecent
+      ? repositories.jobs.listRecent({ limit: jobLimit })
+      : [],
+    repositories.jobs?.listStaleRunning
+      ? repositories.jobs.listStaleRunning({ now, limit: staleJobLimit })
+      : [],
+  ]);
+  const jobsById = new Map();
+  for (const job of [...recentJobs, ...staleJobs]) {
+    jobsById.set(job.id, job);
+  }
+
+  return Array.from(jobsById.values());
 }
 
 function buildMaterialListAnswer(materials) {
@@ -1107,13 +1161,57 @@ export function createRepositoryBackedOrchestrator({
     }
 
     if (isDiagnosticsRequest(request.text)) {
+      if (isSupervisorRepairRequest(request.text)) {
+        let answerText;
+        let source = "supervisor_repair";
+        let metadata = {};
+
+        if (!canRunSupervisorRepair(request.actor)) {
+          answerText = "Запускать supervisor-ремонт может только владелец семейного оркестра.";
+          source = "supervisor_repair_rejected";
+        } else {
+          const result = await runSupervisorTick({
+            repositories,
+            now: now(),
+            autoHeal: true,
+            notifier: undefined,
+          });
+          answerText = buildSupervisorRepairAnswer(result);
+          metadata = {
+            status: result.status,
+            autoHealedJobs: result.autoHealedJobs,
+            findingCodes: result.report.findings.map((finding) => finding.code),
+          };
+        }
+
+        const durationMs = Date.now() - requestStartedMs;
+        await appendAssistantMessage({
+          answerText,
+          action: source,
+          metadata: { ...metadata, durationMs },
+        });
+
+        return {
+          accepted: true,
+          answer: {
+            text: answerText,
+            source,
+          },
+          conversationId,
+        };
+      }
+
       const diagnosticMessages = repositories.conversations.listMessages
         ? await repositories.conversations.listMessages(conversationId, {
             limit: diagnosticsLookupLimit,
           })
         : messages;
-      const diagnosticJobs = repositories.jobs?.listRecent
-        ? await repositories.jobs.listRecent({ limit: 200 })
+      const diagnosticNow = now();
+      const diagnosticJobs = repositories.jobs
+        ? await loadDiagnosticJobs({
+            repositories,
+            now: diagnosticNow,
+          })
         : [];
       const diagnosticAuditLogs = repositories.auditLogs?.listRecent
         ? await repositories.auditLogs.listRecent({ limit: 100 })
@@ -1121,7 +1219,7 @@ export function createRepositoryBackedOrchestrator({
       const supervisorReport = analyzeSupervisorState({
         jobs: diagnosticJobs,
         auditLogs: diagnosticAuditLogs,
-        now: now(),
+        now: diagnosticNow,
       });
       const answerText = buildDiagnosticsAnswer({
         messages: diagnosticMessages,

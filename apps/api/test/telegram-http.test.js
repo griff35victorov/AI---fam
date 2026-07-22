@@ -473,6 +473,79 @@ test("POST /telegram/teacher/webhook returns visible ack and sends background AI
   assert.deepEqual(sentMessages, [{ chatId: 777, text: "Teacher async answer" }]);
 });
 
+test("POST /telegram/owner/webhook keeps burst acknowledgements quiet while sending every final answer", async () => {
+  const sentMessages = [];
+  const calls = [];
+  const repositories = createInMemoryRepositories({
+    users: [
+      {
+        id: "owner-1",
+        role: "owner",
+        telegramUserId: "100",
+        workspaceId: "workspace-family",
+      },
+    ],
+  });
+
+  await withServer(
+    {
+      repositories,
+      orchestrator: async (request) => {
+        calls.push(request);
+        return { answer: { text: `final answer ${request.telegramUpdateId}` } };
+      },
+      dependencies: {
+        telegramReplyMode: "webhook_response",
+        telegramUpdateDispatcherIntervalMs: 10,
+        telegramBackgroundSenders: {
+          owner: {
+            async sendChatAction() {
+              return { ok: true };
+            },
+            async sendMessage(message) {
+              sentMessages.push(message);
+              return { ok: true };
+            },
+          },
+        },
+      },
+    },
+    async (baseUrl) => {
+      const responses = [];
+      for (const [index, text] of ["first burst item", "second burst item", "third burst item"].entries()) {
+        responses.push(await postJson(`${baseUrl}/telegram/owner/webhook`, {
+          update_id: 500 + index,
+          message: {
+            message_id: 9200 + index,
+            chat: { id: 777 },
+            from: { id: 100 },
+            text,
+          },
+        }));
+      }
+
+      assert.equal(responses[0].status, 200);
+      await assertAcceptedWebhookMessage(responses[0]);
+      assert.equal(responses[1].status, 200);
+      await assertSilentWebhookAction(responses[1]);
+      assert.equal(responses[2].status, 200);
+      await assertSilentWebhookAction(responses[2]);
+
+      await waitFor(
+        () => sentMessages.length === 3,
+        1000,
+        "background sender did not deliver every burst answer",
+      );
+    },
+  );
+
+  assert.equal(calls.length, 3);
+  assert.deepEqual(
+    sentMessages.map((message) => message.text).sort(),
+    ["final answer 500", "final answer 501", "final answer 502"],
+  );
+});
+
 test("POST /telegram/owner/webhook answers connectivity check immediately without AI", async () => {
   const sentMessages = [];
   let orchestratorCalled = false;

@@ -856,6 +856,104 @@ test("repository backed orchestrator answers diagnostics without calling AI", as
   assert.match(response.answer.text, /Самодиагностика/);
 });
 
+test("repository backed orchestrator diagnostics include stale jobs outside recent window", async () => {
+  const now = new Date("2026-07-22T12:00:00.000Z");
+  const freshJobs = Array.from({ length: 220 }, (_, index) => ({
+    id: `fresh-${index}`,
+    type: "send_reminder",
+    payload: {},
+    status: "completed",
+    runAt: new Date("2026-07-22T11:00:00.000Z"),
+    updatedAt: new Date(now.getTime() - index * 1000),
+  }));
+  const repositories = createInMemoryRepositories({
+    jobs: [
+      ...freshJobs,
+      {
+        id: "old-stale-telegram",
+        type: "telegram-update",
+        payload: { botKey: "owner", update: { update_id: 797 } },
+        status: "running",
+        runAt: new Date("2026-07-22T10:00:00.000Z"),
+        lockedUntil: new Date("2026-07-22T10:01:00.000Z"),
+        updatedAt: new Date("2026-07-22T10:01:00.000Z"),
+        result: { stage: "processing" },
+      },
+    ],
+  });
+  const orchestrator = createRepositoryBackedOrchestrator({
+    repositories,
+    now: () => now,
+    aiProvider: {
+      async complete() {
+        throw new Error("AI should not be called for diagnostics");
+      },
+    },
+  });
+
+  const response = await orchestrator({
+    chatId: 777,
+    actor: { id: "owner-1", role: "owner" },
+    intent: "household",
+    text: "диагностика",
+    telegramUpdateId: 797,
+  });
+
+  assert.equal(response.answer.source, "diagnostics");
+  assert.match(response.answer.text, /зависших running jobs: 1/);
+});
+
+test("repository backed orchestrator lets owner run supervisor repair from Telegram", async () => {
+  const now = new Date("2026-07-22T12:00:00.000Z");
+  const repositories = createInMemoryRepositories({
+    jobs: [
+      {
+        id: "stale-telegram-update",
+        type: "telegram-update",
+        payload: { botKey: "owner", update: { update_id: 801 } },
+        status: "running",
+        runAt: new Date("2026-07-22T11:50:00.000Z"),
+        lockedUntil: new Date("2026-07-22T11:55:00.000Z"),
+        result: { stage: "processing" },
+      },
+      {
+        id: "stale-reminder",
+        type: "send_reminder",
+        payload: { reminderId: "reminder-1" },
+        status: "running",
+        runAt: new Date("2026-07-22T11:50:00.000Z"),
+        lockedUntil: new Date("2026-07-22T11:55:00.000Z"),
+        result: { stage: "processing" },
+      },
+    ],
+  });
+  const orchestrator = createRepositoryBackedOrchestrator({
+    repositories,
+    now: () => now,
+    aiProvider: {
+      async complete() {
+        throw new Error("AI should not be called for supervisor repair");
+      },
+    },
+  });
+
+  const response = await orchestrator({
+    chatId: 777,
+    actor: { id: "owner-1", role: "owner" },
+    intent: "household",
+    text: "/repair",
+    telegramUpdateId: 801,
+  });
+
+  assert.equal(response.answer.source, "supervisor_repair");
+  assert.match(response.answer.text, /Supervisor-ремонт выполнен/);
+  assert.match(response.answer.text, /Авто-лечением переотложено задач: 1/);
+
+  const jobs = await repositories.jobs.listRecent({ limit: 10 });
+  assert.equal(jobs.find((job) => job.id === "stale-telegram-update").status, "queued");
+  assert.equal(jobs.find((job) => job.id === "stale-reminder").status, "running");
+});
+
 test("repository backed orchestrator uses weather capability before AI", async () => {
   const repositories = createInMemoryRepositories();
   const orchestrator = createRepositoryBackedOrchestrator({

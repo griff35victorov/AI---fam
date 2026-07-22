@@ -111,3 +111,70 @@ test("supervisor treats running jobs without lock as stale", () => {
     ["telegram-no-lock"],
   );
 });
+
+test("supervisor reports duplicate active Telegram update jobs", () => {
+  const now = new Date("2026-07-22T12:00:00.000Z");
+  const report = analyzeSupervisorState({
+    now,
+    jobs: [
+      {
+        id: "telegram-duplicate-1",
+        type: "telegram-update",
+        status: "queued",
+        payload: {
+          botKey: "owner",
+          update: { update_id: 900 },
+        },
+        runAt: new Date("2026-07-22T11:59:00.000Z"),
+        dedupeKey: "legacy-key-1",
+      },
+      {
+        id: "telegram-duplicate-2",
+        type: "telegram-update",
+        status: "running",
+        payload: {
+          botKey: "owner",
+          update: { update_id: 900 },
+        },
+        runAt: new Date("2026-07-22T11:59:00.000Z"),
+        lockedUntil: new Date("2026-07-22T12:05:00.000Z"),
+        dedupeKey: "legacy-key-2",
+      },
+    ],
+  });
+
+  assert.equal(report.status, "warning");
+  assert.equal(report.metrics.duplicateActiveJobs, 2);
+  assert.deepEqual(
+    report.findings.map((finding) => finding.code),
+    ["duplicate_active_jobs"],
+  );
+});
+
+test("supervisor reports Telegram delivery failures separately", () => {
+  const now = new Date("2026-07-22T12:00:00.000Z");
+  const report = analyzeSupervisorState({
+    now,
+    jobs: [
+      {
+        id: "delivery-failed",
+        type: "telegram-delivery",
+        status: "failed",
+        payload: {
+          botKey: "owner",
+          updateId: 900,
+          chatId: 777,
+        },
+        result: { stage: "processing" },
+        runAt: new Date("2026-07-22T11:59:00.000Z"),
+      },
+    ],
+  });
+
+  assert.equal(report.status, "critical");
+  assert.equal(report.metrics.failedTelegramDeliveries, 1);
+  assert.deepEqual(
+    report.findings.map((finding) => finding.code),
+    ["failed_jobs", "telegram_delivery_failed"],
+  );
+});

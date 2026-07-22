@@ -385,6 +385,10 @@ export function createProductionDependencies({
     telegramPollingTimeoutSeconds: parseNumber(env.TELEGRAM_POLLING_TIMEOUT_SECONDS, 20),
     telegramPollingBotTokens: parseTelegramBotTokens(env),
     telegramPollingFetchImpl: fetchImpl,
+    telegramAcceptedAckThrottleMs: parseNumber(
+      env.TELEGRAM_ACCEPTED_ACK_THROTTLE_MS,
+      8000,
+    ),
     telegramUpdateQueueEnabled: parseBoolean(
       env.TELEGRAM_UPDATE_QUEUE_ENABLED,
       Boolean(resolvedRepositories?.jobs?.enqueue && resolvedRepositories?.jobs?.claim),

@@ -29,7 +29,13 @@ The first version focuses on a working cloud-ready core:
 
 ## Repository Status
 
-This repository is being built locally first. GitHub synchronization is paused for now, per the current project direction; the working goal is to get the local orchestrator ready for a later Timeweb Cloud deployment.
+This repository is built locally and deployed to Timeweb Cloud from GitHub. Telegram traffic is routed through the relay gateway before it reaches the orchestrator.
+
+## Telegram Operations
+
+- `проверка связи` - fast health check for Telegram gateway, App Platform, and orchestrator.
+- `диагностика` or `/diag` - shows recent latency, memory/material status, queue health, stale jobs, failed jobs, duplicates, and delivery signals.
+- `/repair` - owner-only supervisor repair; safely requeues stale Telegram update jobs that failed before a send attempt.
 
 ## Documentation
 
