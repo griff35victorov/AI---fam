@@ -376,6 +376,7 @@ export function createProductionDependencies({
       apiKey: envValue(env.TIMEWEB_AI_API_KEY),
       agentIds: parseTimewebAgentIds(env),
       fetchImpl,
+      timeoutMs: parseNumber(env.TIMEWEB_AI_TIMEOUT_MS, 30_000),
     }),
     telegramSender: new TelegramBotSender({
       botToken: resolveTelegramBotToken(env),

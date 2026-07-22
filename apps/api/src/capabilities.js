@@ -933,6 +933,41 @@ function normalizeWebSearchQuery({ query, text }) {
     .trim();
 }
 
+function normalizeWebSearchDomain(domain) {
+  const raw = String(domain ?? "").trim();
+  if (!raw) return null;
+
+  let hostname = raw;
+  try {
+    const parsed = new URL(raw.includes("://") ? raw : `https://${raw}`);
+    hostname = parsed.hostname;
+  } catch {
+    hostname = raw.split(/[/?#\s]/)[0] ?? "";
+  }
+
+  const normalized = hostname.toLowerCase().replace(/^www\./, "");
+  if (
+    !/^(?!-)(?:[a-z0-9-]{1,63}\.)+[a-z]{2,63}$/.test(normalized) ||
+    isIpLiteral(normalized) ||
+    normalized === "localhost" ||
+    normalized.endsWith(".localhost")
+  ) {
+    return null;
+  }
+
+  return normalized;
+}
+
+function domainScopedWebSearchQuery(query, domain) {
+  const normalizedQuery = String(query ?? "").trim();
+  const normalizedDomain = normalizeWebSearchDomain(domain);
+  if (!normalizedQuery || !normalizedDomain || /\bsite:[^\s]+/i.test(normalizedQuery)) {
+    return normalizedQuery;
+  }
+
+  return `site:${normalizedDomain} ${normalizedQuery}`;
+}
+
 function duckDuckGoResultUrl(href) {
   if (!href) return null;
 
@@ -993,8 +1028,12 @@ export function createPublicWebSearchProvider({
   providerLabel = "DuckDuckGo HTML, best-effort public search",
 } = {}) {
   return {
-    async search({ query, text, limit = 5 } = {}) {
-      const searchQuery = normalizeWebSearchQuery({ query, text });
+    async search({ query, text, limit = 5, domain, site } = {}) {
+      const requestedDomain = normalizeWebSearchDomain(domain ?? site);
+      const searchQuery = domainScopedWebSearchQuery(
+        normalizeWebSearchQuery({ query, text }),
+        requestedDomain,
+      );
       if (searchQuery.length < 3) {
         return {
           text: "Уточните, что нужно найти в актуальных публичных источниках.",
@@ -1029,6 +1068,7 @@ export function createPublicWebSearchProvider({
         source: "web_current_data",
         metadata: {
           query: searchQuery,
+          domain: requestedDomain,
           provider: providerLabel,
           resultCount: results.length,
         },

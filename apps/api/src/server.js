@@ -20,6 +20,7 @@ import {
   buildTelegramRequestFromRepositories,
   handleTelegramUpdate,
   startCommandText,
+  telegramUpdateDedupeKeyPart,
 } from "./telegram.js";
 
 const telegramAcceptedText = "Принял. Готовлю ответ отдельным сообщением.";
@@ -217,19 +218,21 @@ function buildImmediateTelegramWebhookResponse(telegramRequest) {
 }
 
 function telegramBackgroundUpdateKey(update, botKey) {
-  if (update?.update_id == null) {
+  const keyPart = telegramUpdateDedupeKeyPart(update);
+  if (!keyPart) {
     return null;
   }
 
-  return `${botKey ?? "default"}:${update.update_id}`;
+  return `${botKey ?? "default"}:${keyPart}`;
 }
 
 function telegramReplyDeliveryKey(update, botKey) {
-  if (update?.update_id == null) {
+  const keyPart = telegramUpdateDedupeKeyPart(update);
+  if (!keyPart) {
     return null;
   }
 
-  return `telegram:${botKey ?? "default"}:${update.update_id}:reply`;
+  return `telegram:${botKey ?? "default"}:${keyPart}:reply`;
 }
 
 function isRetryableTelegramDelivery(delivery, now = new Date()) {

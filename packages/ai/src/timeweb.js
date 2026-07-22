@@ -1,12 +1,13 @@
 import { AiProvider } from "./provider.js";
 
 export class TimewebAiProvider extends AiProvider {
-  constructor({ baseUrl, apiKey, agentIds = {}, fetchImpl = fetch }) {
+  constructor({ baseUrl, apiKey, agentIds = {}, fetchImpl = fetch, timeoutMs = 30_000 }) {
     super();
     this.baseUrl = baseUrl.replace(/\/+$/, "");
     this.apiKey = apiKey;
     this.agentIds = agentIds;
     this.fetchImpl = fetchImpl;
+    this.timeoutMs = timeoutMs;
   }
 
   async complete({ agentProfile, modelProfile, messages, agentId: directAgentId, model }) {
@@ -16,6 +17,11 @@ export class TimewebAiProvider extends AiProvider {
     if (!agentId) throw new Error(`Timeweb agentId is required for agentProfile "${agentProfile}"`);
 
     let response;
+    const controller = new AbortController();
+    const timeout =
+      Number.isFinite(this.timeoutMs) && this.timeoutMs > 0
+        ? setTimeout(() => controller.abort(), this.timeoutMs)
+        : null;
     try {
       response = await this.fetchImpl(
         `${this.baseUrl}/api/v1/cloud-ai/agents/${agentId}/v1/chat/completions`,
@@ -30,12 +36,23 @@ export class TimewebAiProvider extends AiProvider {
             messages,
             stream: false,
           }),
+          signal: controller.signal,
         },
       );
     } catch (error) {
+      if (error?.name === "AbortError" || controller.signal.aborted) {
+        throw new Error(`Timeweb AI request timed out after ${this.timeoutMs}ms`, {
+          cause: error,
+        });
+      }
+
       throw new Error(`Timeweb AI request network failed: ${error.message}`, {
         cause: error,
       });
+    } finally {
+      if (timeout) {
+        clearTimeout(timeout);
+      }
     }
 
     if (!response.ok) {

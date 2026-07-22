@@ -595,6 +595,81 @@ test("POST /telegram/owner/webhook does not resend /learn answer for repeated up
   assert.equal(chatActions.length, 1);
 });
 
+test("POST /telegram/owner/webhook does not resend answer for same Telegram message with new update id", async () => {
+  const sentMessages = [];
+  const chatActions = [];
+  const calls = [];
+  const repositories = createInMemoryRepositories({
+    users: [
+      {
+        id: "owner-1",
+        role: "owner",
+        telegramUserId: "100",
+        workspaceId: "workspace-family",
+      },
+    ],
+  });
+  const message = {
+    message_id: 9001,
+    chat: { id: 777 },
+    from: { id: 100 },
+    text: "test 2",
+  };
+
+  await withServer(
+    {
+      repositories,
+      orchestrator: async (request) => {
+        calls.push(request);
+        return { answer: { text: "single answer" } };
+      },
+      dependencies: {
+        telegramReplyMode: "webhook_response",
+        telegramBackgroundDelayMs: 0,
+        telegramBackgroundSenders: {
+          owner: {
+            async sendChatAction(action) {
+              chatActions.push(action);
+              return { ok: true };
+            },
+            async sendMessage(messageToSend) {
+              sentMessages.push(messageToSend);
+              return { ok: true };
+            },
+          },
+        },
+      },
+    },
+    async (baseUrl) => {
+      const first = await postJson(`${baseUrl}/telegram/owner/webhook`, {
+        update_id: 326,
+        message,
+      });
+      assert.equal(first.status, 200);
+      assert.deepEqual(await first.json(), { ok: true });
+
+      await waitFor(
+        () => sentMessages.length === 1,
+        1000,
+        "first message sender was not called",
+      );
+
+      const second = await postJson(`${baseUrl}/telegram/owner/webhook`, {
+        update_id: 327,
+        message,
+      });
+      assert.equal(second.status, 200);
+      assert.deepEqual(await second.json(), { ok: true });
+
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    },
+  );
+
+  assert.equal(calls.length, 1);
+  assert.deepEqual(chatActions, [{ chatId: 777, action: "typing" }]);
+  assert.deepEqual(sentMessages, [{ chatId: 777, text: "single answer" }]);
+});
+
 test("POST /telegram/owner/webhook stores explicit memory once through background sender", async () => {
   const sentMessages = [];
   const repositories = createInMemoryRepositories({

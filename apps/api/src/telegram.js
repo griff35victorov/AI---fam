@@ -89,6 +89,32 @@ function telegramTextDocumentFile(message) {
   };
 }
 
+function telegramMessageFromUpdate(update) {
+  return (
+    update?.message ??
+    update?.edited_message ??
+    update?.channel_post ??
+    update?.edited_channel_post ??
+    update?.callback_query?.message ??
+    null
+  );
+}
+
+export function telegramUpdateDedupeKeyPart(update) {
+  const message = telegramMessageFromUpdate(update);
+  const chatId = message?.chat?.id;
+  const messageId = message?.message_id;
+  if (chatId !== undefined && chatId !== null && messageId !== undefined && messageId !== null) {
+    return `message:${chatId}:${messageId}`;
+  }
+
+  if (update?.update_id !== undefined && update.update_id !== null) {
+    return `update:${update.update_id}`;
+  }
+
+  return null;
+}
+
 async function resolveTelegramMessageText(
   message,
   {
@@ -417,15 +443,16 @@ export async function buildTelegramRequestFromRepositories(
 }
 
 function telegramReplyDeliveryKey(update, botKey) {
-  if (update?.update_id == null) {
+  const keyPart = telegramUpdateDedupeKeyPart(update);
+  if (!keyPart) {
     return null;
   }
 
-  return `telegram:${botKey ?? "default"}:${update.update_id}:reply`;
+  return `telegram:${botKey ?? "default"}:${keyPart}:reply`;
 }
 
 function telegramChatIdFromUpdate(update) {
-  const chatId = update?.message?.chat?.id;
+  const chatId = telegramMessageFromUpdate(update)?.chat?.id;
   return chatId === undefined || chatId === null ? null : chatId;
 }
 

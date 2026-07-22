@@ -3,7 +3,10 @@ import test from "node:test";
 
 import { createInMemoryRepositories } from "../../../packages/db/src/index.js";
 import { createAppServer } from "../src/server.js";
-import { createCapabilityRegistry } from "../src/capabilities.js";
+import {
+  createCapabilityRegistry,
+  createPublicWebSearchProvider,
+} from "../src/capabilities.js";
 import { createRepositoryBackedOrchestrator } from "../src/runtime.js";
 
 async function withServer(options, run) {
@@ -854,6 +857,87 @@ test("repository backed orchestrator uses web_current_data before AI", async () 
   assert.equal(response.answer.source, "web_current_data");
   assert.equal(calls.length, 1);
   assert.equal(calls[0].capabilityId, "web_current_data");
+});
+
+test("repository backed orchestrator scopes current-data search to remembered site", async () => {
+  const repositories = createInMemoryRepositories({
+    memories: [
+      {
+        workspaceId: "workspace-family",
+        ownerUserId: "owner-1",
+        scope: "family",
+        subjectType: "user_stated_fact",
+        content: "https://rksurfmag.club/ \u043c\u043e\u0439 \u0436\u0443\u0440\u043d\u0430\u043b, \u044f \u0435\u0433\u043e \u0430\u0432\u0442\u043e\u0440 \u0438 \u0440\u0435\u0434\u0430\u043a\u0442\u043e\u0440",
+      },
+    ],
+  });
+  const calls = [];
+  const orchestrator = createRepositoryBackedOrchestrator({
+    repositories,
+    capabilityRegistry: {
+      has(capabilityId) {
+        return capabilityId === "web_current_data";
+      },
+      async run(capabilityId, args) {
+        calls.push({ capabilityId, args });
+        return {
+          text: "site-scoped results",
+          source: "web_current_data",
+          metadata: { provider: "test" },
+        };
+      },
+    },
+    aiProvider: {
+      async complete() {
+        throw new Error("AI should not be called for current data");
+      },
+    },
+  });
+
+  const response = await orchestrator({
+    chatId: 777,
+    actor: { id: "owner-1", role: "owner" },
+    intent: "household",
+    text: "\u043a\u0430\u043a\u0438\u0435 \u0432 \u043d\u0435\u043c \u043f\u043e\u0441\u043b\u0435\u0434\u043d\u0438\u0435 10 \u043d\u043e\u0432\u043e\u0441\u0442\u0435\u0439?",
+    telegramUpdateId: 813,
+  });
+
+  assert.equal(response.answer.source, "web_current_data");
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].capabilityId, "web_current_data");
+  assert.equal(calls[0].args.domain, "rksurfmag.club");
+  assert.equal(calls[0].args.limit, 10);
+});
+
+test("public web search provider adds safe site scope when domain is supplied", async () => {
+  const requestedUrls = [];
+  const provider = createPublicWebSearchProvider({
+    fetchImpl: async (url) => {
+      requestedUrls.push(String(url));
+      return new Response(
+        [
+          '<div class="result">',
+          '<a class="result__a" href="https://rksurfmag.club/news">Latest</a>',
+          '<a class="result__snippet">Snippet</a>',
+          "</div>",
+        ].join(""),
+        {
+          status: 200,
+          headers: { "content-type": "text/html" },
+        },
+      );
+    },
+  });
+
+  const result = await provider.search({
+    query: "latest news",
+    domain: "https://www.rksurfmag.club/archive",
+    limit: 10,
+  });
+
+  assert.equal(result.metadata.query, "site:rksurfmag.club latest news");
+  assert.equal(result.metadata.domain, "rksurfmag.club");
+  assert.match(decodeURIComponent(requestedUrls[0]), /q=site:rksurfmag\.club latest news/);
 });
 
 test("repository backed orchestrator routes news briefing to web_current_data", async () => {

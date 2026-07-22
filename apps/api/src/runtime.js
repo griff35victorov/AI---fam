@@ -159,6 +159,123 @@ function memoryAlreadyExists(memories, content) {
   return memories.some((memory) => canonicalMemoryContent(memory.content) === canonical);
 }
 
+const journalReferencePattern =
+  /(?:\u0436\u0443\u0440\u043d\u0430\u043b|journal|magazine)/i;
+const siteReferencePattern =
+  /(?:\u0441\u0430\u0439\u0442|\u0434\u043e\u043c\u0435\u043d|site|domain)/i;
+const stableMemoryDomainReferencePattern =
+  /(?:\u0432\s+\u043d(?:\u0435|\u0451)\u043c|\u043d\u0430\s+\u043d(?:\u0435|\u0451)\u043c|\u0442\u0430\u043c|\u043d\u0430\s+\u044d\u0442\u043e\u043c|\u043d\u0430\s+\u0441\u0430\u0439\u0442\u0435|\u043c\u043e(?:\u0435|\u0451)\u043c\s+\u0441\u0430\u0439\u0442\u0435|\u0432\s+\u0436\u0443\u0440\u043d\u0430\u043b\u0435|\u043c\u043e(?:\u0435|\u0451)\u043c\s+\u0436\u0443\u0440\u043d\u0430\u043b\u0435|on\s+it|there|my\s+site|my\s+journal)/i;
+
+function normalizeMemoryDomain(hostname) {
+  const normalized = String(hostname ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/^www\./, "");
+
+  if (!/^(?!-)(?:[a-z0-9-]{1,63}\.)+[a-z]{2,63}$/.test(normalized)) {
+    return null;
+  }
+
+  return normalized;
+}
+
+function domainsFromMemory(memory) {
+  return extractUrls(memory?.content ?? "")
+    .map((url) => {
+      try {
+        const parsed = new URL(url);
+        if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+          return null;
+        }
+
+        return normalizeMemoryDomain(parsed.hostname);
+      } catch {
+        return null;
+      }
+    })
+    .filter(Boolean);
+}
+
+function resolveMemoryDomainHint({ actor, memories, text }) {
+  if (!stableMemoryDomainReferencePattern.test(String(text ?? ""))) {
+    return null;
+  }
+
+  const allowedMemories = buildAllowedMemoryContext({
+    actor,
+    memories,
+    action: "read",
+  });
+  const domainCandidatesByName = new Map();
+  for (const [index, memory] of allowedMemories.entries()) {
+    for (const domain of domainsFromMemory(memory)) {
+      const score =
+        (journalReferencePattern.test(text) && journalReferencePattern.test(memory.content)
+          ? 4
+          : 0) +
+        (siteReferencePattern.test(text) && siteReferencePattern.test(memory.content)
+          ? 2
+          : 0);
+      const previous = domainCandidatesByName.get(domain);
+      if (
+        !previous ||
+        score > previous.score ||
+        (score === previous.score && index > previous.index)
+      ) {
+        domainCandidatesByName.set(domain, {
+          domain,
+          memory,
+          index,
+          score,
+        });
+      }
+    }
+  }
+  const domainCandidates = Array.from(domainCandidatesByName.values());
+
+  if (domainCandidates.length === 0) {
+    return null;
+  }
+
+  const sorted = domainCandidates.sort((left, right) => {
+    if (right.score !== left.score) return right.score - left.score;
+    return right.index - left.index;
+  });
+
+  if (sorted.length === 1 || sorted[0].score > sorted[1].score) {
+    return sorted[0].domain;
+  }
+
+  return null;
+}
+
+function parseRequestedSearchLimit(text) {
+  const match = String(text ?? "").match(/\b([1-9]|[1-4][0-9]|50)\b/);
+  if (!match) return null;
+
+  return Math.min(50, Math.max(1, Number(match[1])));
+}
+
+function buildWebCurrentDataArgs({ request, memories, workspaceId }) {
+  const domain = resolveMemoryDomainHint({
+    actor: request.actor,
+    memories,
+    text: request.text,
+  });
+  const limit = parseRequestedSearchLimit(request.text);
+
+  return {
+    text: request.text,
+    query: request.text,
+    actor: request.actor,
+    workspaceId,
+    chatId: request.chatId,
+    botKey: request.telegramBotKey,
+    ...(domain ? { domain } : {}),
+    ...(limit ? { limit } : {}),
+  };
+}
+
 function shouldSkipAutomaticMemory(text) {
   const normalized = normalizeText(text);
   if (!normalized || normalized.length < 12) return true;
@@ -1180,14 +1297,22 @@ export function createRepositoryBackedOrchestrator({
       let metadata = {};
 
       try {
-        const result = await capabilityRegistry.run(requiredCapability, {
-          text: request.text,
-          query: request.text,
-          actor: request.actor,
-          workspaceId: requestWorkspaceId,
-          chatId: request.chatId,
-          botKey: request.telegramBotKey,
-        });
+        const args =
+          requiredCapability === "web_current_data"
+            ? buildWebCurrentDataArgs({
+                request,
+                memories,
+                workspaceId: requestWorkspaceId,
+              })
+            : {
+                text: request.text,
+                query: request.text,
+                actor: request.actor,
+                workspaceId: requestWorkspaceId,
+                chatId: request.chatId,
+                botKey: request.telegramBotKey,
+              };
+        const result = await capabilityRegistry.run(requiredCapability, args);
         answerText = result.text;
         source = result.source ?? source;
         metadata = result.metadata ?? {};

@@ -130,6 +130,35 @@ test("TimewebAiProvider.complete labels network failures", async () => {
   );
 });
 
+test("TimewebAiProvider.complete aborts slow requests with a clear timeout", async () => {
+  const provider = new TimewebAiProvider({
+    baseUrl: "https://timeweb.example",
+    apiKey: "test-key",
+    agentIds: {
+      tutor: "agent-123",
+    },
+    timeoutMs: 1,
+    fetchImpl: async (_url, options) =>
+      new Promise((_resolve, reject) => {
+        options.signal.addEventListener("abort", () => {
+          const error = new Error("aborted");
+          error.name = "AbortError";
+          reject(error);
+        });
+      }),
+  });
+
+  await assert.rejects(
+    () =>
+      provider.complete({
+        agentProfile: "tutor",
+        modelProfile: { model: "tw-model" },
+        messages: [{ role: "user", content: "Hello" }],
+      }),
+    /Timeweb AI request timed out after 1ms/,
+  );
+});
+
 test("TimewebAiProvider.complete explains missing api key", async () => {
   const provider = new TimewebAiProvider({
     baseUrl: "https://timeweb.example",
