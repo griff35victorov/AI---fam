@@ -590,6 +590,11 @@ function isDiagnosticsRequest(text) {
   return (
     normalized === "/diag" ||
     normalized === "/diagnostics" ||
+    normalized === "проверка связи" ||
+    normalized === "статус связи" ||
+    normalized === "связь" ||
+    normalized === "ping" ||
+    normalized === "пинг" ||
     normalized.includes("диагностик") ||
     normalized.includes("почему долго") ||
     normalized.includes("бот тупит") ||

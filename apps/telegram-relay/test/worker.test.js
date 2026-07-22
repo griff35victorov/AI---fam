@@ -126,6 +126,24 @@ test("returns a fast Timeweb webhook response when Timeweb answers", async () =>
   assert.equal(calls[0].options.body.includes('"update_id":10'), true);
 });
 
+test("falls back to visible acknowledgement when Timeweb returns only ok", async () => {
+  const response = await handleRelayRequest(
+    request("/telegram/owner/webhook"),
+    env(),
+    {},
+    {
+      fetchImpl: async () => Response.json({ ok: true }),
+    },
+  );
+
+  assert.equal(response.status, 200);
+  assert.deepEqual(await json(response), {
+    method: "sendMessage",
+    chat_id: 777,
+    text: "Запрос получен.",
+  });
+});
+
 test("falls back immediately and retries in background when Timeweb fails", async () => {
   const calls = [];
   const waited = [];
@@ -215,6 +233,72 @@ test("protected send endpoint sends through Telegram Bot API", async () => {
     text: "Final answer https://example.com",
     link_preview_options: { is_disabled: true },
   });
+});
+
+test("protected send endpoint splits long Telegram messages", async () => {
+  const calls = [];
+  const response = await handleRelayRequest(
+    new Request("https://relay.example/telegram/owner/send", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-family-ai-relay-secret": "relay-secret",
+      },
+      body: JSON.stringify({ chat_id: 777, text: "a".repeat(4200) }),
+    }),
+    env({
+      TELEGRAM_RELAY_SECRET: "relay-secret",
+      TELEGRAM_OWNER_BOT_TOKEN: "owner-token",
+      TELEGRAM_API_BASE_URL: "https://telegram.example",
+    }),
+    {},
+    {
+      fetchImpl: async (url, options) => {
+        calls.push({ url, options });
+        return Response.json({ ok: true, result: { message_id: calls.length } });
+      },
+    },
+  );
+
+  assert.equal(response.status, 200);
+  assert.equal((await json(response)).ok, true);
+  assert.equal(calls.length, 2);
+  assert.ok(JSON.parse(calls[0].options.body).text.length <= 3900);
+  assert.ok(JSON.parse(calls[1].options.body).text.length <= 3900);
+});
+
+test("protected send endpoint marks partial long-message delivery as non-retryable", async () => {
+  const calls = [];
+  const response = await handleRelayRequest(
+    new Request("https://relay.example/telegram/owner/send", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-family-ai-relay-secret": "relay-secret",
+      },
+      body: JSON.stringify({ chat_id: 777, text: `${"a".repeat(3900)} b` }),
+    }),
+    env({
+      TELEGRAM_RELAY_SECRET: "relay-secret",
+      TELEGRAM_OWNER_BOT_TOKEN: "owner-token",
+      TELEGRAM_API_BASE_URL: "https://telegram.example",
+      TELEGRAM_SEND_MAX_ATTEMPTS: "1",
+    }),
+    {},
+    {
+      fetchImpl: async (_url, options) => {
+        calls.push({ options });
+        const text = JSON.parse(options.body).text;
+        return text.startsWith("a")
+          ? Response.json({ ok: true, result: { message_id: 1 } })
+          : Response.json({ ok: false }, { status: 500 });
+      },
+    },
+  );
+
+  assert.equal(response.status, 409);
+  assert.deepEqual(await json(response), { error: "telegram_partial_delivery_failed" });
+  assert.equal(calls.length, 2);
 });
 
 test("protected send endpoint retries transient Telegram network errors", async () => {

@@ -25,6 +25,8 @@ import {
 } from "./telegram.js";
 
 const telegramAcceptedText = "Принял. Готовлю ответ отдельным сообщением.";
+const telegramConnectivityText =
+  "Связь установлена. Telegram gateway, App Platform и оркестр отвечают. Если запрос требует AI или инструмента, финальный ответ придет отдельным сообщением.";
 const urlPattern = /https?:\/\/\S+/i;
 
 function sendJson(response, statusCode, body) {
@@ -167,6 +169,66 @@ function buildTelegramWebhookResponse(result, replyMode) {
 
 function buildWebhookOkResponse() {
   return { ok: true };
+}
+
+function normalizeTelegramCommandText(text) {
+  return String(text ?? "")
+    .trim()
+    .toLowerCase()
+    .replaceAll("ё", "е")
+    .replace(/[?!.,]+$/g, "");
+}
+
+function isTelegramConnectivityCheckText(text) {
+  const normalized = normalizeTelegramCommandText(text);
+  return (
+    normalized === "/ping" ||
+    normalized === "ping" ||
+    normalized === "пинг" ||
+    normalized === "проверка" ||
+    normalized === "проверка связи" ||
+    normalized === "связь" ||
+    normalized === "статус связи"
+  );
+}
+
+function buildAcceptedTelegramWebhookResponse(telegramRequest) {
+  return buildTelegramWebhookResponse(
+    {
+      chatId: telegramRequest?.chatId,
+      text: telegramAcceptedText,
+    },
+    "webhook_response",
+  );
+}
+
+function buildConnectivityTelegramWebhookResponse(telegramRequest) {
+  return buildTelegramWebhookResponse(
+    {
+      chatId: telegramRequest?.chatId,
+      text: telegramConnectivityText,
+    },
+    "webhook_response",
+  );
+}
+
+function buildSilentTelegramWebhookResponse(telegramRequest) {
+  const chatId = telegramRequest?.chatId;
+  if (!chatId) {
+    return buildWebhookOkResponse();
+  }
+
+  return {
+    method: "sendChatAction",
+    chat_id: chatId,
+    action: "typing",
+  };
+}
+
+function buildScheduledTelegramWebhookResponse(telegramRequest, scheduleResult) {
+  return scheduleResult?.duplicate
+    ? buildSilentTelegramWebhookResponse(telegramRequest)
+    : buildAcceptedTelegramWebhookResponse(telegramRequest);
 }
 
 async function buildTelegramWebhookRequest(
@@ -398,6 +460,10 @@ async function scheduleTelegramBackgroundUpdate({
   telegramUpdateQueueEnabled,
   triggerTelegramUpdateDispatcher,
 }) {
+  if (await isTelegramReplyDeliveryDuplicate({ repositories, update: body, botKey })) {
+    return { duplicate: true };
+  }
+
   if (
     telegramUpdateQueueEnabled &&
     typeof repositories?.jobs?.enqueue === "function" &&
@@ -416,13 +482,6 @@ async function scheduleTelegramBackgroundUpdate({
     }
     telegramBackgroundUpdates.add(backgroundKey);
     reservedBackgroundKey = true;
-  }
-
-  if (await isTelegramReplyDeliveryDuplicate({ repositories, update: body, botKey })) {
-    if (reservedBackgroundKey) {
-      telegramBackgroundUpdates.delete(backgroundKey);
-    }
-    return { duplicate: true };
   }
 
   setTimeout(() => {
@@ -757,44 +816,6 @@ export function createAppServer(options = {}) {
         const routeReplyMode = telegramReplyMode;
 
         if (routeReplyMode === "webhook_response") {
-          const earlyBackgroundSender = resolveTelegramSender({
-            botKey,
-            telegramSender: telegramBackgroundSender,
-            telegramSenders: telegramBackgroundSenders,
-          });
-
-          if (earlyBackgroundSender) {
-            await scheduleTelegramBackgroundUpdate({
-              body,
-              users,
-              repositories,
-              orchestrator,
-              telegramSender: earlyBackgroundSender,
-              voiceTranscriber: resolveVoiceTranscriber({
-                botKey,
-                voiceTranscriber,
-                voiceTranscribers,
-              }),
-              imageOcr: resolveImageOcr({
-                botKey,
-                imageOcr,
-                imageOcrs,
-              }),
-              documentTextExtractor: resolveDocumentTextExtractor({
-                botKey,
-                documentTextExtractor,
-                documentTextExtractors,
-              }),
-              botKey,
-              telegramBackgroundDelayMs,
-              telegramBackgroundUpdates,
-              telegramUpdateQueueEnabled,
-              triggerTelegramUpdateDispatcher,
-            });
-            sendJson(response, 200, buildWebhookOkResponse());
-            return;
-          }
-
           const telegramRequest = await buildTelegramWebhookRequest(body, {
             users,
             repositories,
@@ -827,6 +848,49 @@ export function createAppServer(options = {}) {
             return;
           }
 
+          if (isTelegramConnectivityCheckText(telegramRequest.text)) {
+            sendJson(response, 200, buildConnectivityTelegramWebhookResponse(telegramRequest));
+            return;
+          }
+
+          const earlyBackgroundSender = resolveTelegramSender({
+            botKey,
+            telegramSender: telegramBackgroundSender,
+            telegramSenders: telegramBackgroundSenders,
+          });
+
+          if (earlyBackgroundSender) {
+            const scheduleResult = await scheduleTelegramBackgroundUpdate({
+              body,
+              users,
+              repositories,
+              orchestrator,
+              telegramSender: earlyBackgroundSender,
+              voiceTranscriber: resolveVoiceTranscriber({
+                botKey,
+                voiceTranscriber,
+                voiceTranscribers,
+              }),
+              imageOcr: resolveImageOcr({
+                botKey,
+                imageOcr,
+                imageOcrs,
+              }),
+              documentTextExtractor: resolveDocumentTextExtractor({
+                botKey,
+                documentTextExtractor,
+                documentTextExtractors,
+              }),
+              botKey,
+              telegramBackgroundDelayMs,
+              telegramBackgroundUpdates,
+              telegramUpdateQueueEnabled,
+              triggerTelegramUpdateDispatcher,
+            });
+            sendJson(response, 200, buildScheduledTelegramWebhookResponse(telegramRequest, scheduleResult));
+            return;
+          }
+
           if (
             repositories &&
             !telegramRequest.mediaDeferred &&
@@ -841,7 +905,7 @@ export function createAppServer(options = {}) {
             });
 
             if (backgroundSender) {
-              await scheduleTelegramBackgroundUpdate({
+              const scheduleResult = await scheduleTelegramBackgroundUpdate({
                 body,
                 users,
                 repositories,
@@ -868,7 +932,7 @@ export function createAppServer(options = {}) {
                 telegramUpdateQueueEnabled,
                 triggerTelegramUpdateDispatcher,
               });
-              sendJson(response, 200, buildWebhookOkResponse());
+              sendJson(response, 200, buildScheduledTelegramWebhookResponse(telegramRequest, scheduleResult));
               return;
             }
 
@@ -894,8 +958,9 @@ export function createAppServer(options = {}) {
             telegramBackgroundSender,
             telegramBackgroundSenders,
           });
+          let scheduleResult = null;
           if (backgroundSender) {
-            await scheduleTelegramBackgroundUpdate({
+            scheduleResult = await scheduleTelegramBackgroundUpdate({
               body,
               users,
               repositories,
@@ -928,7 +993,7 @@ export function createAppServer(options = {}) {
             response,
             200,
             backgroundSender
-              ? buildWebhookOkResponse()
+              ? buildScheduledTelegramWebhookResponse(telegramRequest, scheduleResult)
               : buildImmediateTelegramWebhookResponse(telegramRequest),
           );
 

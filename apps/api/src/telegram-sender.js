@@ -20,6 +20,30 @@ export class TelegramBotSender {
       throw new Error("TELEGRAM_BOT_TOKEN is required");
     }
 
+    const chunks = splitTelegramMessageText(text);
+    const results = [];
+    for (const [index, chunk] of chunks.entries()) {
+      try {
+        results.push(await this.sendMessageChunk({ chatId, text: chunk }));
+      } catch (error) {
+        if (index > 0) {
+          throw markTelegramPartialDeliveryError(error);
+        }
+
+        throw error;
+      }
+    }
+
+    return results.length === 1
+      ? results[0]
+      : { ok: true, result: results.map((result) => result.result ?? result) };
+  }
+
+  async sendMessageChunk({ chatId, text }) {
+    if (!this.botToken) {
+      throw new Error("TELEGRAM_BOT_TOKEN is required");
+    }
+
     const attempts = Math.max(1, Number(this.maxAttempts) || 1);
     let lastError;
 
@@ -142,11 +166,26 @@ export class TelegramRelaySender {
           return response.json();
         }
 
+        let responseBody = {};
+        try {
+          responseBody = await response.json();
+        } catch {
+          responseBody = {};
+        }
+
         lastError = new Error(`Telegram relay send failed with ${response.status}`);
+        if (responseBody?.error === "telegram_partial_delivery_failed") {
+          throw markTelegramPartialDeliveryError(lastError);
+        }
+
         if (!telegramStatusIsRetryable(response.status) || attempt === attempts) {
           throw lastError;
         }
       } catch (error) {
+        if (error?.partialDelivery) {
+          throw error;
+        }
+
         lastError =
           error === lastError
             ? error
@@ -180,6 +219,10 @@ export class TelegramFailoverSender {
     try {
       return await this.primary.sendMessage(message);
     } catch (primaryError) {
+      if (primaryError?.partialDelivery) {
+        throw primaryError;
+      }
+
       if (!this.fallback) {
         throw primaryError;
       }
@@ -205,12 +248,60 @@ function telegramStatusIsRetryable(status) {
   return status === 429 || status >= 500;
 }
 
+export function markTelegramPartialDeliveryError(error) {
+  const partialError =
+    error instanceof Error
+      ? error
+      : new Error(String(error ?? "Telegram partial delivery failed"));
+  partialError.partialDelivery = true;
+  partialError.nonRetryable = true;
+  return partialError;
+}
+
 function buildTelegramSendMessageBody({ chatId, text }) {
   return {
     chat_id: chatId,
     text,
     ...(hasUrl(text) ? { link_preview_options: { is_disabled: true } } : {}),
   };
+}
+
+const telegramTextLimit = 4096;
+const telegramSafeTextLimit = 3900;
+
+export function splitTelegramMessageText(text, limit = telegramSafeTextLimit) {
+  const normalizedText = String(text ?? "").trim();
+  if (!normalizedText) {
+    return [""];
+  }
+
+  const maxLength = Math.min(telegramTextLimit, Math.max(500, Number(limit) || telegramSafeTextLimit));
+  if (normalizedText.length <= maxLength) {
+    return [normalizedText];
+  }
+
+  const chunks = [];
+  let remaining = normalizedText;
+  while (remaining.length > maxLength) {
+    const window = remaining.slice(0, maxLength);
+    const newlineIndex = window.lastIndexOf("\n");
+    const spaceIndex = window.lastIndexOf(" ");
+    const splitIndex =
+      newlineIndex >= Math.floor(maxLength * 0.6)
+        ? newlineIndex
+        : spaceIndex >= Math.floor(maxLength * 0.6)
+          ? spaceIndex
+          : maxLength;
+
+    chunks.push(remaining.slice(0, splitIndex).trim());
+    remaining = remaining.slice(splitIndex).trim();
+  }
+
+  if (remaining) {
+    chunks.push(remaining);
+  }
+
+  return chunks;
 }
 
 function hasUrl(text) {

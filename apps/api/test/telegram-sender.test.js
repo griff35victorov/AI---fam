@@ -56,6 +56,30 @@ test("TelegramBotSender disables Telegram link previews by default", async () =>
   });
 });
 
+test("TelegramBotSender splits long Telegram messages into chunks", async () => {
+  const calls = [];
+  const sender = new TelegramBotSender({
+    botToken: "token-123",
+    baseUrl: "https://telegram.example",
+    fetchImpl: async (url, options) => {
+      calls.push({ url, options });
+      return {
+        ok: true,
+        async json() {
+          return { ok: true, result: { message_id: calls.length } };
+        },
+      };
+    },
+  });
+
+  const result = await sender.sendMessage({ chatId: 777, text: "a".repeat(4200) });
+
+  assert.equal(result.ok, true);
+  assert.equal(calls.length, 2);
+  assert.ok(JSON.parse(calls[0].options.body).text.length <= 3900);
+  assert.ok(JSON.parse(calls[1].options.body).text.length <= 3900);
+});
+
 test("TelegramBotSender sends typing chat action", async () => {
   const calls = [];
   const sender = new TelegramBotSender({
@@ -270,4 +294,75 @@ test("TelegramFailoverSender uses fallback sender after primary failure", async 
 
   assert.deepEqual(result, { ok: true, result: { message_id: 50 } });
   assert.deepEqual(fallbackMessages, [{ chatId: 777, text: "hello" }]);
+});
+
+test("TelegramFailoverSender does not resend whole message after partial delivery", async () => {
+  const fallbackMessages = [];
+  const primary = new TelegramBotSender({
+    botToken: "token-123",
+    baseUrl: "https://telegram.example",
+    maxAttempts: 1,
+    fetchImpl: async (_url, options) => {
+      const text = JSON.parse(options.body).text;
+      if (text.startsWith("a")) {
+        return {
+          ok: true,
+          async json() {
+            return { ok: true, result: { message_id: 51 } };
+          },
+        };
+      }
+
+      throw new Error("second chunk failed");
+    },
+  });
+  const sender = new TelegramFailoverSender({
+    primary,
+    fallback: {
+      async sendMessage(message) {
+        fallbackMessages.push(message);
+        return { ok: true, result: { message_id: 52 } };
+      },
+    },
+  });
+
+  let error;
+  try {
+    await sender.sendMessage({ chatId: 777, text: `${"a".repeat(3900)} b` });
+  } catch (caught) {
+    error = caught;
+  }
+
+  assert.equal(error?.partialDelivery, true);
+  assert.deepEqual(fallbackMessages, []);
+});
+
+test("TelegramFailoverSender does not fallback after relay reports partial delivery", async () => {
+  const fallbackMessages = [];
+  const primary = new TelegramRelaySender({
+    relayUrl: "https://relay.example",
+    relaySecret: "relay-secret",
+    botKey: "owner",
+    fetchImpl: async () =>
+      Response.json({ error: "telegram_partial_delivery_failed" }, { status: 409 }),
+  });
+  const sender = new TelegramFailoverSender({
+    primary,
+    fallback: {
+      async sendMessage(message) {
+        fallbackMessages.push(message);
+        return { ok: true, result: { message_id: 53 } };
+      },
+    },
+  });
+
+  let error;
+  try {
+    await sender.sendMessage({ chatId: 777, text: "long answer" });
+  } catch (caught) {
+    error = caught;
+  }
+
+  assert.equal(error?.partialDelivery, true);
+  assert.deepEqual(fallbackMessages, []);
 });

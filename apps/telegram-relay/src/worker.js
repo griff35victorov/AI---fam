@@ -84,7 +84,7 @@ function fallbackTelegramResponse(update, env) {
 
 function isUsableTelegramWebhookBody(body) {
   if (!body || typeof body !== "object" || Array.isArray(body)) return false;
-  return body.ok === true || typeof body.method === "string";
+  return typeof body.method === "string";
 }
 
 async function responseJson(response) {
@@ -107,6 +107,36 @@ async function sendTelegramMessage({ env, botKey, body, fetchImpl }) {
     return json({ error: "invalid_send_message" }, 400);
   }
 
+  const chunks = splitTelegramMessageText(text);
+  const results = [];
+  for (const chunk of chunks) {
+    const response = await sendTelegramMessageChunk({
+      env,
+      botKey,
+      botToken,
+      chatId,
+      text: chunk,
+      fetchImpl,
+    });
+    if (response.status !== 200) {
+      if (results.length > 0) {
+        return json({ error: "telegram_partial_delivery_failed" }, 409);
+      }
+
+      return response;
+    }
+
+    results.push(await responseJson(response));
+  }
+
+  return json(
+    results.length === 1
+      ? results[0]
+      : { ok: true, result: results.map((result) => result.result ?? result) },
+  );
+}
+
+async function sendTelegramMessageChunk({ env, botKey, botToken, chatId, text, fetchImpl }) {
   const baseUrl = (envValue(env.TELEGRAM_API_BASE_URL) ?? defaultTelegramBaseUrl).replace(/\/+$/, "");
   const maxAttempts = Math.max(1, parseInteger(env.TELEGRAM_SEND_MAX_ATTEMPTS, 3));
   const retryDelayMs = parseInteger(env.TELEGRAM_SEND_RETRY_DELAY_MS, 500);
@@ -150,6 +180,44 @@ function buildTelegramSendMessageBody({ chatId, text }) {
     text,
     ...(hasUrl(text) ? { link_preview_options: { is_disabled: true } } : {}),
   };
+}
+
+const telegramTextLimit = 4096;
+const telegramSafeTextLimit = 3900;
+
+function splitTelegramMessageText(text, limit = telegramSafeTextLimit) {
+  const normalizedText = String(text ?? "").trim();
+  if (!normalizedText) {
+    return [""];
+  }
+
+  const maxLength = Math.min(telegramTextLimit, Math.max(500, Number(limit) || telegramSafeTextLimit));
+  if (normalizedText.length <= maxLength) {
+    return [normalizedText];
+  }
+
+  const chunks = [];
+  let remaining = normalizedText;
+  while (remaining.length > maxLength) {
+    const window = remaining.slice(0, maxLength);
+    const newlineIndex = window.lastIndexOf("\n");
+    const spaceIndex = window.lastIndexOf(" ");
+    const splitIndex =
+      newlineIndex >= Math.floor(maxLength * 0.6)
+        ? newlineIndex
+        : spaceIndex >= Math.floor(maxLength * 0.6)
+          ? spaceIndex
+          : maxLength;
+
+    chunks.push(remaining.slice(0, splitIndex).trim());
+    remaining = remaining.slice(splitIndex).trim();
+  }
+
+  if (remaining) {
+    chunks.push(remaining);
+  }
+
+  return chunks;
 }
 
 function hasUrl(text) {
