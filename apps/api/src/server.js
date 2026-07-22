@@ -100,6 +100,18 @@ function resolveImageOcr({ botKey, imageOcr, imageOcrs }) {
   return imageOcrs?.[botKey] ?? imageOcr;
 }
 
+function resolveDocumentTextExtractor({
+  botKey,
+  documentTextExtractor,
+  documentTextExtractors,
+}) {
+  if (!botKey) {
+    return documentTextExtractor;
+  }
+
+  return documentTextExtractors?.[botKey] ?? documentTextExtractor;
+}
+
 function resolveTelegramWebhookSecret({ botKey, telegramWebhookSecret, telegramWebhookSecrets }) {
   if (!botKey) {
     return telegramWebhookSecret;
@@ -132,6 +144,7 @@ async function buildTelegramWebhookRequest(
     botKey,
     voiceTranscriber,
     imageOcr,
+    documentTextExtractor,
     deferMediaProcessing = false,
   },
 ) {
@@ -141,6 +154,7 @@ async function buildTelegramWebhookRequest(
         botKey,
         voiceTranscriber,
         imageOcr,
+        documentTextExtractor,
         deferMediaProcessing,
       })
     : buildTelegramRequest(body, { users, botKey });
@@ -161,6 +175,8 @@ function buildImmediateTelegramWebhookResponse(telegramRequest) {
           ? telegramRequest.voiceReplyText
         : telegramRequest.imageRejected
           ? telegramRequest.imageReplyText
+        : telegramRequest.documentRejected
+          ? telegramRequest.documentReplyText
         : telegramRequest.isStartCommand
           ? startCommandText
           : telegramAcceptedText,
@@ -190,6 +206,7 @@ function runTelegramBackgroundUpdate({
   botKey,
   voiceTranscriber,
   imageOcr,
+  documentTextExtractor,
   backgroundKey,
   telegramBackgroundUpdates,
 }) {
@@ -200,6 +217,7 @@ function runTelegramBackgroundUpdate({
     telegramSender,
     voiceTranscriber,
     imageOcr,
+    documentTextExtractor,
     botKey,
   })
     .catch(logTelegramBackgroundError)
@@ -228,6 +246,10 @@ export function createAppServer(options = {}) {
     options.voiceTranscribers ?? dependencies.voiceTranscribers ?? {};
   const imageOcr = options.imageOcr ?? dependencies.imageOcr;
   const imageOcrs = options.imageOcrs ?? dependencies.imageOcrs ?? {};
+  const documentTextExtractor =
+    options.documentTextExtractor ?? dependencies.documentTextExtractor;
+  const documentTextExtractors =
+    options.documentTextExtractors ?? dependencies.documentTextExtractors ?? {};
   const telegramWebhookSecret =
     options.telegramWebhookSecret ?? dependencies.telegramWebhookSecret;
   const telegramWebhookSecrets =
@@ -314,6 +336,11 @@ export function createAppServer(options = {}) {
               imageOcr,
               imageOcrs,
             }),
+            documentTextExtractor: resolveDocumentTextExtractor({
+              botKey,
+              documentTextExtractor,
+              documentTextExtractors,
+            }),
             deferMediaProcessing: true,
           });
           sendJson(response, 200, buildImmediateTelegramWebhookResponse(telegramRequest));
@@ -322,6 +349,7 @@ export function createAppServer(options = {}) {
             telegramRequest.rejected ||
             telegramRequest.voiceRejected ||
             telegramRequest.imageRejected ||
+            telegramRequest.documentRejected ||
             telegramRequest.isStartCommand
           ) {
             return;
@@ -354,6 +382,11 @@ export function createAppServer(options = {}) {
                   imageOcr,
                   imageOcrs,
                 }),
+                documentTextExtractor: resolveDocumentTextExtractor({
+                  botKey,
+                  documentTextExtractor,
+                  documentTextExtractors,
+                }),
                 botKey,
                 backgroundKey,
                 telegramBackgroundUpdates,
@@ -381,6 +414,11 @@ export function createAppServer(options = {}) {
             botKey,
             imageOcr,
             imageOcrs,
+          }),
+          documentTextExtractor: resolveDocumentTextExtractor({
+            botKey,
+            documentTextExtractor,
+            documentTextExtractors,
           }),
           botKey,
         });

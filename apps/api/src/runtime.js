@@ -78,7 +78,7 @@ function materialScopeForActor(actor) {
 }
 
 function canStoreMaterial(actor) {
-  return actor?.role === "teacher" || actor?.role === "owner";
+  return actor?.role === "teacher" || actor?.role === "owner" || actor?.role === "family_child";
 }
 
 function extractExplicitMemory(text) {
@@ -302,6 +302,59 @@ function parseMaterialCommand(text) {
   };
 }
 
+function parseLearningCommand(text) {
+  const normalized = String(text ?? "").trim();
+  if (!normalized) return null;
+
+  if (/^(?:\/learn|\/teach|обучение|как обучать)$/i.test(normalized)) {
+    return { matched: true, type: "help" };
+  }
+
+  if (/^(?:\/learn|\/teach)\s+(?:list|список|что выучено)$/i.test(normalized)) {
+    return { matched: true, type: "list" };
+  }
+
+  const slashMaterialMatch =
+    normalized.match(/^\/(?:learn|teach)\s+(?:material|материал)\s+([^\n]+)(?:\n([\s\S]+))?$/i);
+  if (slashMaterialMatch) {
+    const parsed = splitMaterialBody(slashMaterialMatch[1], slashMaterialMatch[2] ?? "");
+    return { matched: true, type: "material", ...parsed };
+  }
+
+  const russianMaterialMatch =
+    normalized.match(/^обучи\s+(?:материал|библиотек[ау])\s*:?\s*([\s\S]+)$/i);
+  if (russianMaterialMatch) {
+    const parsed = splitMaterialBody(null, russianMaterialMatch[1]);
+    return { matched: true, type: "material", ...parsed };
+  }
+
+  const styleMatch =
+    normalized.match(/^\/(?:learn|teach)\s+(?:style|стиль)\s+([\s\S]+)$/i) ??
+    normalized.match(/^обучи\s+(?:стиль|стилю)\s*:?\s*([\s\S]+)$/i);
+  if (styleMatch?.[1]?.trim()) {
+    return {
+      matched: true,
+      type: "memory",
+      memoryKind: "style",
+      content: styleMatch[1].trim(),
+    };
+  }
+
+  const memoryMatch =
+    normalized.match(/^\/(?:learn|teach)\s+(?:fact|memory|факт|память)\s+([\s\S]+)$/i) ??
+    normalized.match(/^обучи\s+(?:агента|бота|оркестратор)?\s*:?\s*([\s\S]+)$/i);
+  if (memoryMatch?.[1]?.trim()) {
+    return {
+      matched: true,
+      type: "memory",
+      memoryKind: "fact",
+      content: memoryMatch[1].trim(),
+    };
+  }
+
+  return null;
+}
+
 function isMaterialListRequest(text) {
   const normalized = normalizeText(text);
   return (
@@ -312,6 +365,60 @@ function isMaterialListRequest(text) {
     normalized.includes("что есть в библиотек") ||
     normalized.includes("список материалов")
   );
+}
+
+function learningSubjectType(actor, memoryKind) {
+  if (memoryKind === "style" && actor?.role === "teacher") return "teaching_style";
+  if (memoryKind === "style") return "preference";
+  if (actor?.role === "family_child") return "study_preference";
+  return "user_stated_fact";
+}
+
+function buildLearningHelpAnswer(actor) {
+  const scopeLine =
+    actor?.role === "teacher"
+      ? "У вас обучение сохраняется в личную базу преподавателя: стиль, материалы, уроки."
+      : actor?.role === "family_child"
+        ? "У тебя обучение сохраняется в учебную память и личную библиотеку."
+        : "У вас обучение сохраняется в семейную память и библиотеку.";
+
+  return [
+    "Как обучать агентов прямо из Telegram:",
+    "",
+    "/learn fact Я предпочитаю короткие ответы",
+    "/learn style На уроках начинаем со speaking warm-up",
+    "/learn material Название материала",
+    "Текст материала, упражнения, плана урока или инструкции",
+    "/learn list",
+    "",
+    "Также работает обычная команда: «Запомни, что ...».",
+    "Для файлов: отправьте .txt/.md/.csv с подписью /learn material Название.",
+    scopeLine,
+  ].join("\n");
+}
+
+function buildLearningListAnswer({ actor, memories, materials }) {
+  const allowedMemories = buildAllowedMemoryContext({
+    actor,
+    memories,
+    action: "read",
+  });
+  const memoryLines = allowedMemories.length
+    ? allowedMemories.slice(-8).map((memory) => `- ${memory.content}`)
+    : ["- пока нет сохраненных фактов"];
+  const materialLines = materials.length
+    ? materials.slice(-8).map((material) => `- ${material.title}`)
+    : ["- пока нет материалов"];
+
+  return [
+    "Что агенты уже используют при ответах:",
+    "",
+    "Память:",
+    ...memoryLines,
+    "",
+    "Материалы/RAG:",
+    ...materialLines,
+  ].join("\n");
 }
 
 function isDiagnosticsRequest(text) {
@@ -492,6 +599,152 @@ export function createRepositoryBackedOrchestrator({
       });
     }
 
+    const learningCommand = parseLearningCommand(request.text);
+    if (learningCommand?.type === "help") {
+      const answerText = buildLearningHelpAnswer(request.actor);
+      const durationMs = Date.now() - requestStartedMs;
+      await appendAssistantMessage({
+        answerText,
+        action: "learning_help",
+        metadata: { durationMs },
+      });
+
+      return {
+        accepted: true,
+        answer: {
+          text: answerText,
+          source: "learning_help",
+        },
+        conversationId,
+      };
+    }
+
+    if (learningCommand?.type === "memory") {
+      const learnedContent = learningCommand.content
+        .replace(/[.!?]+$/g, "")
+        .trim();
+
+      if (isUnsafeLongTermContent(learnedContent)) {
+        const answerText =
+          "Я не буду сохранять пароли, токены, ключи, данные карт или документы в память. Лучше не отправлять такие данные в чат.";
+        await appendAssistantMessage({
+          answerText,
+          action: "learning_memory_rejected",
+          metadata: { durationMs: Date.now() - requestStartedMs },
+        });
+
+        return {
+          accepted: true,
+          answer: {
+            text: answerText,
+            source: "learning_memory_rejected",
+          },
+          conversationId,
+        };
+      }
+
+      const memory = {
+        workspaceId: requestWorkspaceId,
+        ownerUserId: request.actor.id,
+        scope: memoryScopeForActor(request.actor),
+        sensitivity: "normal",
+        subjectType: learningSubjectType(request.actor, learningCommand.memoryKind),
+        content: learnedContent,
+        sourceMessageIds: storedUserMessage?.id ? [storedUserMessage.id] : [],
+        confidence: 1,
+      };
+
+      if (repositories.memories?.create && canStoreMemory(request.actor, memory)) {
+        await repositories.memories.create(memory);
+        const answerText = [
+          `Обучение сохранено: ${learnedContent}`,
+          "Буду учитывать это в следующих ответах этого бота.",
+        ].join("\n");
+        await appendAssistantMessage({
+          answerText,
+          action: "learning_memory_write",
+          metadata: {
+            subjectType: memory.subjectType,
+            scope: memory.scope,
+            durationMs: Date.now() - requestStartedMs,
+          },
+        });
+
+        return {
+          accepted: true,
+          answer: {
+            text: answerText,
+            source: "learning_memory_write",
+          },
+          conversationId,
+        };
+      }
+    }
+
+    if (learningCommand?.type === "material") {
+      let answerText;
+      let source = "learning_material_write";
+      let metadata = {};
+
+      if (!canStoreMaterial(request.actor)) {
+        answerText = "Сохранять материалы в обучение может только подключенный семейный пользователь.";
+        source = "learning_material_rejected";
+      } else if (!repositories.materials?.create) {
+        answerText = "Библиотека материалов пока не подключена к базе.";
+        source = "learning_material_unavailable";
+      } else if (!learningCommand.title || !learningCommand.content) {
+        answerText = [
+          "Не вижу название или текст материала.",
+          "Формат:",
+          "/learn material Past Simple warm-up",
+          "текст упражнения или плана урока",
+          "",
+          "Файл .txt/.md/.csv можно отправить с подписью: /learn material Название",
+        ].join("\n");
+        source = "learning_material_invalid";
+      } else if (isUnsafeLongTermContent(`${learningCommand.title}\n${learningCommand.content}`)) {
+        answerText = "Я не буду сохранять материалы с паролями, токенами, ключами или данными карт.";
+        source = "learning_material_rejected";
+      } else {
+        const storedMaterial = await repositories.materials.create({
+          workspaceId: requestWorkspaceId,
+          ownerUserId: request.actor.id,
+          scope: materialScopeForActor(request.actor),
+          sensitivity: "normal",
+          title: learningCommand.title.slice(0, 160),
+          content: learningCommand.content,
+          mimeType: "text/plain",
+          sourceMessageIds: storedUserMessage?.id ? [storedUserMessage.id] : [],
+        });
+        metadata = {
+          materialId: storedMaterial.id,
+          chunkCount: storedMaterial.chunks?.length ?? 0,
+          scope: storedMaterial.scope,
+        };
+        answerText = [
+          `Материал добавлен в обучение: ${storedMaterial.title}`,
+          `Фрагментов в RAG-библиотеке: ${metadata.chunkCount}.`,
+          "Теперь агент будет использовать его при ответах и подготовке материалов.",
+        ].join("\n");
+      }
+
+      const durationMs = Date.now() - requestStartedMs;
+      await appendAssistantMessage({
+        answerText,
+        action: source,
+        metadata: { ...metadata, durationMs },
+      });
+
+      return {
+        accepted: true,
+        answer: {
+          text: answerText,
+          source,
+        },
+        conversationId,
+      };
+    }
+
     const explicitMemory = extractExplicitMemory(request.text);
     if (explicitMemory) {
       if (isUnsafeLongTermContent(explicitMemory)) {
@@ -606,8 +859,41 @@ export function createRepositoryBackedOrchestrator({
       };
     }
 
+    if (learningCommand?.type === "list") {
+      const materials = repositories.materials?.listForActor
+        ? await repositories.materials.listForActor({
+            actorUserId: request.actor.id,
+            workspaceId: requestWorkspaceId,
+            limit: 8,
+          })
+        : [];
+      const answerText = buildLearningListAnswer({
+        actor: request.actor,
+        memories,
+        materials,
+      });
+      const durationMs = Date.now() - requestStartedMs;
+      await appendAssistantMessage({
+        answerText,
+        action: "learning_list",
+        metadata: { durationMs, materialCount: materials.length, memoryCount: memories.length },
+      });
+
+      return {
+        accepted: true,
+        answer: {
+          text: answerText,
+          source: "learning_list",
+        },
+        conversationId,
+      };
+    }
+
     const requestIsMaterialCommand =
-      parseMaterialCommand(request.text)?.matched || isMaterialListRequest(request.text);
+      parseMaterialCommand(request.text)?.matched ||
+      isMaterialListRequest(request.text) ||
+      learningCommand?.type === "material" ||
+      learningCommand?.type === "list";
 
     if (!requestIsMaterialCommand && isWebFetchRequest(request.text)) {
       let answerText;

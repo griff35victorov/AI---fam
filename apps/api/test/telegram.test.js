@@ -140,6 +140,50 @@ test("buildTelegramRequestFromRepositories recognizes photo text before routing"
   assert.match(request.text, /Домашнее задание/);
 });
 
+test("buildTelegramRequestFromRepositories extracts text document for learn material command", async () => {
+  const repositories = createInMemoryRepositories({
+    users: [
+      {
+        id: "teacher-1",
+        role: "teacher",
+        telegramUserId: "200",
+        workspaceId: "workspace-family",
+      },
+    ],
+  });
+
+  const request = await buildTelegramRequestFromRepositories(
+    {
+      update_id: 559,
+      message: {
+        chat: { id: 778 },
+        from: { id: 200 },
+        caption: "/learn material Irregular verbs drill",
+        document: {
+          file_id: "document-file",
+          file_name: "verbs.md",
+          mime_type: "text/markdown",
+          file_size: 120,
+        },
+      },
+    },
+    {
+      repositories,
+      documentTextExtractor: {
+        async extractTelegramDocument({ fileId, fileName }) {
+          assert.equal(fileId, "document-file");
+          assert.equal(fileName, "verbs.md");
+          return { ok: true, text: "go-went-gone\nsee-saw-seen" };
+        },
+      },
+    },
+  );
+
+  assert.equal(request.documentExtracted, true);
+  assert.match(request.text, /\/learn material Irregular verbs drill/);
+  assert.match(request.text, /go-went-gone/);
+});
+
 test("handleTelegramUpdate rejects photo before orchestrator when OCR is not configured", async () => {
   const repositories = createInMemoryRepositories({
     users: [

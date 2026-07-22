@@ -7,6 +7,7 @@ import {
 } from "./capabilities.js";
 import { LocalTesseractTelegramImageOcr } from "./ocr.js";
 import { createLocalTasksProvider } from "./tasks.js";
+import { TelegramTextDocumentExtractor } from "./telegram-documents.js";
 import { TelegramBotSender, TelegramRelaySender } from "./telegram-sender.js";
 import { LocalVoskTelegramVoiceTranscriber, TelegramVoiceTranscriber } from "./voice.js";
 
@@ -180,6 +181,30 @@ export function createImageOcrs(env = {}, fetchImpl = fetch) {
   return imageOcrs;
 }
 
+export function createDocumentTextExtractors(env = {}, fetchImpl = fetch) {
+  const provider = envValue(env.TELEGRAM_DOCUMENT_TEXT_PROVIDER) ?? "telegram_text";
+  if (["none", "off", "disabled"].includes(provider.toLowerCase())) {
+    return {};
+  }
+
+  const maxBytes = parseNumber(env.TELEGRAM_DOCUMENT_TEXT_MAX_BYTES, 512 * 1024);
+  const extractors = {};
+  for (const botKey of Object.keys(telegramBotEnv)) {
+    const botToken = resolveTelegramBotTokenForKey(env, botKey);
+    if (!botToken) {
+      continue;
+    }
+
+    extractors[botKey] = new TelegramTextDocumentExtractor({
+      botToken,
+      fetchImpl,
+      maxBytes,
+    });
+  }
+
+  return extractors;
+}
+
 function createLocalAutomationProvider({ tasksProvider } = {}) {
   if (!tasksProvider) return undefined;
 
@@ -220,6 +245,7 @@ export function createProductionDependencies({
     repositories ?? (prisma ? createPrismaRepositories(prisma) : undefined);
   const voiceTranscribers = createVoiceTranscribers(env, fetchImpl);
   const imageOcrs = createImageOcrs(env, fetchImpl);
+  const documentTextExtractors = createDocumentTextExtractors(env, fetchImpl);
   const defaultLocation = envValue(env.APP_DEFAULT_LOCATION) ?? "Москва";
   const defaultTimeZone = envValue(env.APP_DEFAULT_TIME_ZONE) ?? "Europe/Moscow";
   const webSearchProvider = parseBoolean(env.WEB_CURRENT_DATA_ENABLED, true)
@@ -285,6 +311,7 @@ export function createProductionDependencies({
     telegramBackgroundSenders: createTelegramBackgroundSenders(env, fetchImpl),
     voiceTranscribers,
     imageOcrs,
+    documentTextExtractors,
     tasksProvider,
   };
 }

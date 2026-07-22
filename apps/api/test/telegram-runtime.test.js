@@ -210,6 +210,198 @@ test("repository backed orchestrator stores explicit memory without calling AI",
   assert.equal(memories[0].content, "я люблю короткие ответы");
 });
 
+test("repository backed orchestrator explains Telegram learning commands", async () => {
+  const repositories = createInMemoryRepositories();
+  const orchestrator = createRepositoryBackedOrchestrator({
+    repositories,
+    aiProvider: {
+      async complete() {
+        throw new Error("AI should not be called for learning help");
+      },
+    },
+  });
+
+  const response = await orchestrator({
+    chatId: 777,
+    actor: { id: "owner-1", role: "owner" },
+    intent: "household",
+    text: "/learn",
+    telegramUpdateId: 130,
+  });
+
+  assert.equal(response.answer.source, "learning_help");
+  assert.match(response.answer.text, /\/learn fact/);
+  assert.match(response.answer.text, /\/learn material/);
+});
+
+test("repository backed orchestrator stores Telegram learn fact without calling AI", async () => {
+  const repositories = createInMemoryRepositories();
+  const orchestrator = createRepositoryBackedOrchestrator({
+    repositories,
+    aiProvider: {
+      async complete() {
+        throw new Error("AI should not be called for learn fact");
+      },
+    },
+  });
+
+  const response = await orchestrator({
+    chatId: 777,
+    actor: { id: "owner-1", role: "owner" },
+    intent: "household",
+    text: "/learn fact Я предпочитаю краткие ответы с конкретными шагами",
+    telegramUpdateId: 131,
+  });
+
+  assert.equal(response.answer.source, "learning_memory_write");
+  const memories = await repositories.memories.listForActor({
+    actorUserId: "owner-1",
+    workspaceId: "workspace-family",
+  });
+  assert.equal(memories.length, 1);
+  assert.equal(memories[0].subjectType, "user_stated_fact");
+  assert.match(memories[0].content, /краткие ответы/);
+});
+
+test("repository backed orchestrator stores teacher style through Telegram learn command", async () => {
+  const repositories = createInMemoryRepositories();
+  const orchestrator = createRepositoryBackedOrchestrator({
+    repositories,
+    aiProvider: {
+      async complete() {
+        throw new Error("AI should not be called for learn style");
+      },
+    },
+  });
+
+  const response = await orchestrator({
+    chatId: 778,
+    actor: { id: "teacher-1", role: "teacher" },
+    intent: "lesson_preparation",
+    text: "/learn style На уроках английского жена начинает с короткого speaking warm-up",
+    telegramUpdateId: 132,
+  });
+
+  assert.equal(response.answer.source, "learning_memory_write");
+  const memories = await repositories.memories.listForActor({
+    actorUserId: "teacher-1",
+    workspaceId: "workspace-family",
+  });
+  assert.equal(memories.length, 1);
+  assert.equal(memories[0].scope, "teacher_private");
+  assert.equal(memories[0].subjectType, "teaching_style");
+  assert.match(memories[0].content, /speaking warm-up/);
+});
+
+test("repository backed orchestrator stores Telegram learn material in RAG library", async () => {
+  const repositories = createInMemoryRepositories();
+  const orchestrator = createRepositoryBackedOrchestrator({
+    repositories,
+    aiProvider: {
+      async complete() {
+        throw new Error("AI should not be called for learn material");
+      },
+    },
+  });
+
+  const response = await orchestrator({
+    chatId: 778,
+    actor: { id: "teacher-1", role: "teacher" },
+    intent: "material_search",
+    text: "/learn material Past Simple warm-up\nAsk three questions about yesterday and correct one verb form.",
+    telegramUpdateId: 133,
+  });
+
+  assert.equal(response.answer.source, "learning_material_write");
+  const materials = await repositories.materials.listForActor({
+    actorUserId: "teacher-1",
+    workspaceId: "workspace-family",
+  });
+  assert.equal(materials.length, 1);
+  assert.equal(materials[0].title, "Past Simple warm-up");
+  const results = await repositories.materials.search({
+    actorUserId: "teacher-1",
+    workspaceId: "workspace-family",
+    query: "yesterday verb",
+  });
+  assert.equal(results.length, 1);
+});
+
+test("repository backed orchestrator stores Russian Telegram learn material format", async () => {
+  const repositories = createInMemoryRepositories();
+  const orchestrator = createRepositoryBackedOrchestrator({
+    repositories,
+    aiProvider: {
+      async complete() {
+        throw new Error("AI should not be called for Russian learn material");
+      },
+    },
+  });
+
+  const response = await orchestrator({
+    chatId: 778,
+    actor: { id: "teacher-1", role: "teacher" },
+    intent: "material_search",
+    text: "Обучи материал: Irregular verbs drill\nУченики составляют 5 предложений в Past Simple.",
+    telegramUpdateId: 135,
+  });
+
+  assert.equal(response.answer.source, "learning_material_write");
+  const materials = await repositories.materials.listForActor({
+    actorUserId: "teacher-1",
+    workspaceId: "workspace-family",
+  });
+  assert.equal(materials.length, 1);
+  assert.equal(materials[0].title, "Irregular verbs drill");
+});
+
+test("repository backed orchestrator lists Telegram learning memory and materials", async () => {
+  const repositories = createInMemoryRepositories({
+    memories: [
+      {
+        id: "memory-1",
+        workspaceId: "workspace-family",
+        ownerUserId: "teacher-1",
+        scope: "teacher_private",
+        sensitivity: "normal",
+        subjectType: "teaching_style",
+        content: "Start lessons with speaking warm-up.",
+      },
+    ],
+    materials: [
+      {
+        id: "material-1",
+        workspaceId: "workspace-family",
+        ownerUserId: "teacher-1",
+        scope: "teacher_private",
+        sensitivity: "normal",
+        title: "Past Simple warm-up",
+        content: "Ask about yesterday.",
+      },
+    ],
+  });
+  const orchestrator = createRepositoryBackedOrchestrator({
+    repositories,
+    aiProvider: {
+      async complete() {
+        throw new Error("AI should not be called for learn list");
+      },
+    },
+  });
+
+  const response = await orchestrator({
+    chatId: 778,
+    actor: { id: "teacher-1", role: "teacher" },
+    intent: "material_search",
+    text: "/learn list",
+    telegramUpdateId: 134,
+  });
+
+  assert.equal(response.answer.source, "learning_list");
+  assert.match(response.answer.text, /speaking warm-up/);
+  assert.match(response.answer.text, /Past Simple warm-up/);
+});
+
 test("repository backed orchestrator refuses to store explicit secret memory", async () => {
   const repositories = createInMemoryRepositories({
     users: [

@@ -139,6 +139,11 @@ test("production dependencies create dedicated Telegram bot senders and secrets"
     "owner",
     "teacher",
   ]);
+  assert.deepEqual(Object.keys(dependencies.documentTextExtractors).sort(), [
+    "daughter",
+    "owner",
+    "teacher",
+  ]);
   assert.deepEqual(dependencies.telegramWebhookSecrets, {
     owner: "owner-secret",
     daughter: "daughter-secret",

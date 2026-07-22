@@ -1,11 +1,14 @@
 export const accessNotConfiguredText =
   "Доступ не настроен. Обратитесь к владельцу семейного оркестратора.";
 export const defaultProcessedText = "Принял. Задача обработана.";
-export const startCommandText = "Бот подключен. Напишите задачу одним сообщением.";
+export const startCommandText =
+  "Бот подключен. Напишите задачу одним сообщением.\n\nДля обучения агента напишите /learn.";
 export const voiceInputNotConfiguredText =
   "Голосовой ввод пока не настроен. Нужно подключить speech-to-text endpoint в VOICE_TRANSCRIPTION_URL.";
 export const imageInputNotConfiguredText =
   "Распознавание фото пока не настроено. Нужно подключить OCR provider: локальный Tesseract или OCR endpoint.";
+export const documentInputNotConfiguredText =
+  "Чтение файлов пока не настроено. Для обучения из Telegram можно подключить extractor текстовых файлов.";
 
 const expectedRoleByBotKey = {
   owner: "owner",
@@ -65,17 +68,40 @@ function telegramImageFile(message) {
   return null;
 }
 
+function telegramTextDocumentFile(message) {
+  const document = message?.document;
+  if (!document?.file_id) return null;
+
+  const mimeType = document.mime_type ?? "";
+  const fileName = document.file_name ?? "";
+  if (
+    String(mimeType).startsWith("image/") ||
+    /\.(?:png|jpe?g|webp|gif)$/i.test(String(fileName))
+  ) {
+    return null;
+  }
+
+  return {
+    fileId: document.file_id,
+    fileName,
+    mimeType,
+    fileSize: document.file_size,
+  };
+}
+
 async function resolveTelegramMessageText(
   message,
   {
     voiceTranscriber,
     imageOcr,
+    documentTextExtractor,
     botKey,
     deferMediaProcessing = false,
   } = {},
 ) {
   const text = telegramMessageText(message);
   const imageFile = telegramImageFile(message);
+  const textDocument = telegramTextDocumentFile(message);
 
   if (imageFile?.fileId) {
     if (deferMediaProcessing && imageOcr?.recognizeTelegramImage) {
@@ -121,6 +147,54 @@ async function resolveTelegramMessageText(
         imageRejected: true,
         imageError: "ocr_failed",
         imageReplyText: "Не удалось распознать изображение из-за ошибки OCR. Попробуйте фото меньшего размера или напишите текстом.",
+      };
+    }
+  }
+
+  if (textDocument?.fileId) {
+    if (deferMediaProcessing && documentTextExtractor?.extractTelegramDocument) {
+      return { text, mediaDeferred: true };
+    }
+
+    if (!documentTextExtractor?.extractTelegramDocument) {
+      return {
+        text: "",
+        documentRejected: true,
+        documentError: "document_extraction_not_configured",
+        documentReplyText: documentInputNotConfiguredText,
+      };
+    }
+
+    try {
+      const extraction = await documentTextExtractor.extractTelegramDocument({
+        fileId: textDocument.fileId,
+        fileName: textDocument.fileName,
+        mimeType: textDocument.mimeType,
+        fileSize: textDocument.fileSize,
+        botKey,
+      });
+
+      if (!extraction?.ok || !extraction.text) {
+        return {
+          text: "",
+          documentRejected: true,
+          documentError: extraction?.error ?? "document_extraction_empty",
+          documentReplyText: extraction?.text || "Не удалось прочитать текст файла. Для обучения отправьте .txt, .md или .csv.",
+        };
+      }
+
+      return {
+        text: [text, extraction.text].filter(Boolean).join("\n\n"),
+        documentExtracted: true,
+        documentFileId: textDocument.fileId,
+        documentTitle: extraction.title ?? textDocument.fileName,
+      };
+    } catch {
+      return {
+        text: "",
+        documentRejected: true,
+        documentError: "document_extraction_failed",
+        documentReplyText: "Не удалось прочитать файл из-за ошибки Telegram/download. Попробуйте файл меньшего размера или вставьте текст сообщением.",
       };
     }
   }
@@ -280,6 +354,7 @@ export async function buildTelegramRequestFromRepositories(
     botKey,
     voiceTranscriber,
     imageOcr,
+    documentTextExtractor,
     deferMediaProcessing = false,
   } = {},
 ) {
@@ -307,6 +382,7 @@ export async function buildTelegramRequestFromRepositories(
   const voiceState = await resolveTelegramMessageText(message, {
     voiceTranscriber,
     imageOcr,
+    documentTextExtractor,
     botKey,
     deferMediaProcessing,
   });
@@ -328,6 +404,12 @@ export async function buildTelegramRequestFromRepositories(
     imageReplyText: voiceState.imageReplyText,
     imageRecognized: voiceState.imageRecognized,
     imageFileId: voiceState.imageFileId,
+    documentRejected: voiceState.documentRejected,
+    documentError: voiceState.documentError,
+    documentReplyText: voiceState.documentReplyText,
+    documentExtracted: voiceState.documentExtracted,
+    documentFileId: voiceState.documentFileId,
+    documentTitle: voiceState.documentTitle,
     mediaDeferred: voiceState.mediaDeferred,
     telegramUpdateId: update.update_id,
     telegramBotKey: botKey,
@@ -352,6 +434,7 @@ export async function handleTelegramUpdate(
     botKey,
     voiceTranscriber,
     imageOcr,
+    documentTextExtractor,
   },
 ) {
   const request = repositories?.users
@@ -360,6 +443,7 @@ export async function handleTelegramUpdate(
         botKey,
         voiceTranscriber,
         imageOcr,
+        documentTextExtractor,
       })
     : buildTelegramRequest(update, { users, botKey });
 
@@ -395,6 +479,16 @@ export async function handleTelegramUpdate(
 
   if (request.imageRejected) {
     const text = request.imageReplyText ?? imageInputNotConfiguredText;
+    await sendTelegramReply(telegramSender, { chatId: request.chatId, text });
+
+    return {
+      chatId: request.chatId,
+      text,
+    };
+  }
+
+  if (request.documentRejected) {
+    const text = request.documentReplyText ?? documentInputNotConfiguredText;
     await sendTelegramReply(telegramSender, { chatId: request.chatId, text });
 
     return {
