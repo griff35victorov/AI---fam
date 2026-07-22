@@ -355,6 +355,18 @@ function parseLearningCommand(text) {
   return null;
 }
 
+export function isImmediateRepositoryBackedRequest(text) {
+  return Boolean(
+    parseLearningCommand(text) ||
+    extractExplicitMemory(text) ||
+    isMemoryRecallRequest(text) ||
+    isDiagnosticsRequest(text) ||
+    isCapabilitiesRequest(text) ||
+    parseMaterialCommand(text)?.matched ||
+    isMaterialListRequest(text),
+  );
+}
+
 function isUnsafeLearningCommand(learningCommand) {
   if (learningCommand?.type === "memory") {
     return isUnsafeLongTermContent(learningCommand.content ?? "");

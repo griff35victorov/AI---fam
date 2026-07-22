@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import { createInMemoryRepositories } from "../../../packages/db/src/index.js";
 import { createAppServer } from "../src/server.js";
 
 const users = [
@@ -406,7 +407,7 @@ test("POST /telegram/teacher/webhook closes immediate response and runs AI witho
   assert.deepEqual(sentMessages, []);
 });
 
-test("POST /telegram/teacher/webhook sends background AI answer through relay sender when configured", async () => {
+test("POST /telegram/teacher/webhook sends only background AI answer through relay sender when configured", async () => {
   const sentMessages = [];
   const calls = [];
 
@@ -442,9 +443,7 @@ test("POST /telegram/teacher/webhook sends background AI answer through relay se
 
       assert.equal(response.status, 200);
       const body = await response.json();
-      assert.equal(body.method, "sendMessage");
-      assert.equal(body.chat_id, 777);
-      assert.notEqual(body.text, "Teacher async answer");
+      assert.deepEqual(body, { ok: true });
 
       await waitFor(
         () => sentMessages.length === 1,
@@ -456,6 +455,123 @@ test("POST /telegram/teacher/webhook sends background AI answer through relay se
 
   assert.equal(calls.length, 1);
   assert.deepEqual(sentMessages, [{ chatId: 777, text: "Teacher async answer" }]);
+});
+
+test("POST /telegram/owner/webhook answers /learn immediately without duplicate background reply", async () => {
+  const sentMessages = [];
+  const repositories = createInMemoryRepositories({
+    users: [
+      {
+        id: "owner-1",
+        role: "owner",
+        telegramUserId: "100",
+        workspaceId: "workspace-family",
+      },
+    ],
+  });
+
+  await withServer(
+    {
+      repositories,
+      dependencies: {
+        telegramReplyMode: "webhook_response",
+        telegramBackgroundDelayMs: 0,
+        telegramBackgroundSenders: {
+          owner: {
+            async sendMessage(message) {
+              sentMessages.push(message);
+              return { ok: true };
+            },
+          },
+        },
+        aiProvider: {
+          async complete() {
+            throw new Error("AI should not be called for /learn");
+          },
+        },
+      },
+    },
+    async (baseUrl) => {
+      const response = await postJson(`${baseUrl}/telegram/owner/webhook`, {
+        update_id: 126,
+        message: {
+          chat: { id: 777 },
+          from: { id: 100 },
+          text: "/learn",
+        },
+      });
+
+      assert.equal(response.status, 200);
+      const body = await response.json();
+      assert.equal(body.method, "sendMessage");
+      assert.equal(body.chat_id, 777);
+      assert.match(body.text, /\/learn fact/);
+      assert.equal(body.link_preview_options, undefined);
+
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    },
+  );
+
+  assert.deepEqual(sentMessages, []);
+});
+
+test("POST /telegram/owner/webhook stores explicit memory immediately and disables link preview", async () => {
+  const sentMessages = [];
+  const repositories = createInMemoryRepositories({
+    users: [
+      {
+        id: "owner-1",
+        role: "owner",
+        telegramUserId: "100",
+        workspaceId: "workspace-family",
+      },
+    ],
+  });
+
+  await withServer(
+    {
+      repositories,
+      dependencies: {
+        telegramReplyMode: "webhook_response",
+        telegramBackgroundDelayMs: 0,
+        telegramBackgroundSenders: {
+          owner: {
+            async sendMessage(message) {
+              sentMessages.push(message);
+              return { ok: true };
+            },
+          },
+        },
+        aiProvider: {
+          async complete() {
+            throw new Error("AI should not be called for explicit memory");
+          },
+        },
+      },
+    },
+    async (baseUrl) => {
+      const response = await postJson(`${baseUrl}/telegram/owner/webhook`, {
+        update_id: 127,
+        message: {
+          chat: { id: 777 },
+          from: { id: 100 },
+          text: "Запомни https://rksurfmag.club/ мой журнал, я его автор и редактор",
+        },
+      });
+
+      assert.equal(response.status, 200);
+      const body = await response.json();
+      assert.equal(body.method, "sendMessage");
+      assert.equal(body.chat_id, 777);
+      assert.match(body.text, /Запомнил/);
+      assert.match(body.text, /rksurfmag\.club/);
+      assert.deepEqual(body.link_preview_options, { is_disabled: true });
+
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    },
+  );
+
+  assert.deepEqual(sentMessages, []);
 });
 
 test("POST /telegram/owner/webhook fails closed when production secret is required but missing", async () => {

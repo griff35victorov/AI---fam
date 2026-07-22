@@ -117,7 +117,7 @@ async function sendTelegramMessage({ env, botKey, body, fetchImpl }) {
       const response = await fetchImpl(`${baseUrl}/bot${botToken}/sendMessage`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ chat_id: chatId, text }),
+        body: JSON.stringify(buildTelegramSendMessageBody({ chatId, text })),
       });
       responseBody = await responseJson(response);
 
@@ -142,6 +142,18 @@ async function sendTelegramMessage({ env, botKey, body, fetchImpl }) {
 
 function telegramStatusIsRetryable(status) {
   return status === 429 || status >= 500;
+}
+
+function buildTelegramSendMessageBody({ chatId, text }) {
+  return {
+    chat_id: chatId,
+    text,
+    ...(hasUrl(text) ? { link_preview_options: { is_disabled: true } } : {}),
+  };
+}
+
+function hasUrl(text) {
+  return /https?:\/\/\S+/i.test(String(text ?? ""));
 }
 
 async function forwardToTimeweb({

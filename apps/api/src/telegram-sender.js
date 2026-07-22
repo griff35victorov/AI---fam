@@ -26,7 +26,7 @@ export class TelegramBotSender {
         const response = await this.fetchImpl(`${this.baseUrl}/bot${this.botToken}/sendMessage`, {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ chat_id: chatId, text }),
+          body: JSON.stringify(buildTelegramSendMessageBody({ chatId, text })),
         });
 
         if (response.ok) {
@@ -98,7 +98,7 @@ export class TelegramRelaySender {
             "content-type": "application/json",
             "x-family-ai-relay-secret": this.relaySecret,
           },
-          body: JSON.stringify({ chat_id: chatId, text }),
+          body: JSON.stringify(buildTelegramSendMessageBody({ chatId, text })),
         });
 
         if (response.ok) {
@@ -131,6 +131,18 @@ export class TelegramRelaySender {
 
 function telegramStatusIsRetryable(status) {
   return status === 429 || status >= 500;
+}
+
+function buildTelegramSendMessageBody({ chatId, text }) {
+  return {
+    chat_id: chatId,
+    text,
+    ...(hasUrl(text) ? { link_preview_options: { is_disabled: true } } : {}),
+  };
+}
+
+function hasUrl(text) {
+  return /https?:\/\/\S+/i.test(String(text ?? ""));
 }
 
 function delay(ms) {

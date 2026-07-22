@@ -29,6 +29,29 @@ test("TelegramBotSender sends a Telegram message through Bot API", async () => {
   assert.equal(calls[0].options.body, JSON.stringify({ chat_id: 777, text: "hello" }));
 });
 
+test("TelegramBotSender disables Telegram link previews by default", async () => {
+  const calls = [];
+  const sender = new TelegramBotSender({
+    botToken: "token-123",
+    baseUrl: "https://telegram.example",
+    fetchImpl: async (url, options) => {
+      calls.push({ url, options });
+      return {
+        ok: true,
+        async json() {
+          return { ok: true, result: { message_id: 42 } };
+        },
+      };
+    },
+  });
+
+  await sender.sendMessage({ chatId: 777, text: "https://example.com" });
+
+  assert.deepEqual(JSON.parse(calls[0].options.body).link_preview_options, {
+    is_disabled: true,
+  });
+});
+
 test("TelegramBotSender retries transient network failures", async () => {
   let calls = 0;
   const sender = new TelegramBotSender({

@@ -190,7 +190,7 @@ test("protected send endpoint sends through Telegram Bot API", async () => {
         "content-type": "application/json",
         "x-family-ai-relay-secret": "relay-secret",
       },
-      body: JSON.stringify({ chat_id: 777, text: "Final answer" }),
+      body: JSON.stringify({ chat_id: 777, text: "Final answer https://example.com" }),
     }),
     env({
       TELEGRAM_RELAY_SECRET: "relay-secret",
@@ -212,7 +212,8 @@ test("protected send endpoint sends through Telegram Bot API", async () => {
   assert.equal(calls[0].url, "https://telegram.example/botowner-token/sendMessage");
   assert.deepEqual(JSON.parse(calls[0].options.body), {
     chat_id: 777,
-    text: "Final answer",
+    text: "Final answer https://example.com",
+    link_preview_options: { is_disabled: true },
   });
 });
 

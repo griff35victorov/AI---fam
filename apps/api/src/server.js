@@ -8,7 +8,10 @@ import { createHealthResponse } from "./health.js";
 import { handleOrchestratorRequest } from "./orchestrator.js";
 import { createProductionDependencies } from "./production-runtime.js";
 import { startReminderDispatcher } from "./reminder-dispatcher.js";
-import { createRepositoryBackedOrchestrator } from "./runtime.js";
+import {
+  createRepositoryBackedOrchestrator,
+  isImmediateRepositoryBackedRequest,
+} from "./runtime.js";
 import {
   accessNotConfiguredText,
   accessNotConfiguredTextForRequest,
@@ -19,6 +22,7 @@ import {
 } from "./telegram.js";
 
 const telegramAcceptedText = "Принял. Готовлю ответ отдельным сообщением.";
+const urlPattern = /https?:\/\/\S+/i;
 
 function sendJson(response, statusCode, body) {
   const payload = JSON.stringify(body);
@@ -133,7 +137,14 @@ function buildTelegramWebhookResponse(result, replyMode) {
     method: "sendMessage",
     chat_id: result.chatId,
     text: result.text,
+    ...(urlPattern.test(result.text)
+      ? { link_preview_options: { is_disabled: true } }
+      : {}),
   };
+}
+
+function buildWebhookOkResponse() {
+  return { ok: true };
 }
 
 async function buildTelegramWebhookRequest(
@@ -343,8 +354,6 @@ export function createAppServer(options = {}) {
             }),
             deferMediaProcessing: true,
           });
-          sendJson(response, 200, buildImmediateTelegramWebhookResponse(telegramRequest));
-
           if (
             telegramRequest.rejected ||
             telegramRequest.voiceRejected ||
@@ -352,8 +361,42 @@ export function createAppServer(options = {}) {
             telegramRequest.documentRejected ||
             telegramRequest.isStartCommand
           ) {
+            sendJson(response, 200, buildImmediateTelegramWebhookResponse(telegramRequest));
             return;
           }
+
+          if (
+            repositories &&
+            !telegramRequest.mediaDeferred &&
+            isImmediateRepositoryBackedRequest(telegramRequest.text)
+          ) {
+            const result = await orchestrator(telegramRequest);
+            sendJson(
+              response,
+              200,
+              buildTelegramWebhookResponse(
+                {
+                  chatId: telegramRequest.chatId,
+                  text: result.answer?.text ?? telegramAcceptedText,
+                },
+                "webhook_response",
+              ),
+            );
+            return;
+          }
+
+          const backgroundSender = resolveTelegramSender({
+            botKey,
+            telegramSender: telegramBackgroundSender,
+            telegramSenders: telegramBackgroundSenders,
+          });
+          sendJson(
+            response,
+            200,
+            backgroundSender
+              ? buildWebhookOkResponse()
+              : buildImmediateTelegramWebhookResponse(telegramRequest),
+          );
 
           const backgroundKey = telegramBackgroundUpdateKey(body, botKey);
           if (!backgroundKey || !telegramBackgroundUpdates.has(backgroundKey)) {
@@ -367,11 +410,7 @@ export function createAppServer(options = {}) {
                 users,
                 repositories,
                 orchestrator,
-                telegramSender: resolveTelegramSender({
-                  botKey,
-                  telegramSender: telegramBackgroundSender,
-                  telegramSenders: telegramBackgroundSenders,
-                }),
+                telegramSender: backgroundSender,
                 voiceTranscriber: resolveVoiceTranscriber({
                   botKey,
                   voiceTranscriber,
