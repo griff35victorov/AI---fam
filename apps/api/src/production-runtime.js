@@ -366,11 +366,48 @@ export function createProductionDependencies({
     telegramPollingTimeoutSeconds: parseNumber(env.TELEGRAM_POLLING_TIMEOUT_SECONDS, 20),
     telegramPollingBotTokens: parseTelegramBotTokens(env),
     telegramPollingFetchImpl: fetchImpl,
+    telegramUpdateQueueEnabled: parseBoolean(
+      env.TELEGRAM_UPDATE_QUEUE_ENABLED,
+      Boolean(resolvedRepositories?.jobs?.enqueue && resolvedRepositories?.jobs?.claim),
+    ),
+    telegramUpdateDispatcherIntervalMs: parseNumber(
+      env.TELEGRAM_UPDATE_DISPATCHER_INTERVAL_MS,
+      1000,
+    ),
+    telegramUpdateDispatcherMaxJobs: parseNumber(
+      env.TELEGRAM_UPDATE_DISPATCHER_MAX_JOBS,
+      10,
+    ),
+    telegramUpdateDispatcherMaxAttempts: parseNumber(
+      env.TELEGRAM_UPDATE_DISPATCHER_MAX_ATTEMPTS,
+      3,
+    ),
+    telegramUpdateDispatcherRetryDelayMs: parseNumber(
+      env.TELEGRAM_UPDATE_DISPATCHER_RETRY_DELAY_MS,
+      5000,
+    ),
     reminderDispatcherEnabled: parseBoolean(
       env.REMINDER_DISPATCHER_ENABLED,
       env.NODE_ENV === "production" && Boolean(resolvedRepositories?.jobs?.claim),
     ),
     reminderDispatcherIntervalMs: parseNumber(env.REMINDER_DISPATCHER_INTERVAL_MS, 30_000),
+    supervisorEnabled: parseBoolean(
+      env.SUPERVISOR_ENABLED,
+      env.NODE_ENV === "production" && Boolean(resolvedRepositories?.jobs?.listRecent),
+    ),
+    supervisorIntervalMs: parseNumber(env.SUPERVISOR_INTERVAL_MS, 60_000),
+    supervisorAlertCooldownMs: parseNumber(
+      env.SUPERVISOR_ALERT_COOLDOWN_MS,
+      10 * 60_000,
+    ),
+    supervisorAutoHeal: parseBoolean(env.SUPERVISOR_AUTO_HEAL, true),
+    supervisorAuditOkTicks: parseBoolean(env.SUPERVISOR_AUDIT_OK_TICKS, false),
+    supervisorAuditDedupMs: parseNumber(
+      env.SUPERVISOR_AUDIT_DEDUP_MS,
+      10 * 60_000,
+    ),
+    supervisorAlertChatId:
+      envValue(env.SUPERVISOR_ALERT_CHAT_ID) ?? envValue(env.TELEGRAM_OWNER_CHAT_ID),
     aiProvider: new TimewebAiProvider({
       baseUrl: envValue(env.TIMEWEB_AI_BASE_URL) ?? defaultTimewebBaseUrl,
       apiKey: envValue(env.TIMEWEB_AI_API_KEY),

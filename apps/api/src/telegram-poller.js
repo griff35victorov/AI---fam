@@ -72,16 +72,16 @@ export async function pollTelegramBotOnce({
   for (const update of updates) {
     try {
       await handleUpdate(botKey, update);
+      if (update?.update_id != null) {
+        nextOffset = Math.max(Number(nextOffset ?? 0), Number(update.update_id) + 1);
+      }
     } catch (error) {
       logger?.error?.("telegram polling update failed", {
         botKey,
         updateId: update?.update_id,
         errorMessage: error.message,
       });
-    } finally {
-      if (update?.update_id != null) {
-        nextOffset = Math.max(Number(nextOffset ?? 0), Number(update.update_id) + 1);
-      }
+      break;
     }
   }
 

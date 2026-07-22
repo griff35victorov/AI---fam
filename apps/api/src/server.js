@@ -12,6 +12,7 @@ import {
   createRepositoryBackedOrchestrator,
   isImmediateRepositoryBackedRequest,
 } from "./runtime.js";
+import { startSupervisorLoop } from "./supervisor-runner.js";
 import { startTelegramPolling } from "./telegram-poller.js";
 import {
   accessNotConfiguredText,
@@ -235,6 +236,15 @@ function telegramReplyDeliveryKey(update, botKey) {
   return `telegram:${botKey ?? "default"}:${keyPart}:reply`;
 }
 
+function telegramUpdateJobKey(update, botKey) {
+  const keyPart = telegramUpdateDedupeKeyPart(update);
+  if (!keyPart) {
+    return null;
+  }
+
+  return `telegram-update:${botKey ?? "default"}:${keyPart}`;
+}
+
 function isRetryableTelegramDelivery(delivery, now = new Date()) {
   if (delivery?.status === "failed" && delivery?.result?.stage !== "send") {
     return true;
@@ -246,6 +256,25 @@ function isRetryableTelegramDelivery(delivery, now = new Date()) {
     delivery.lockedUntil != null &&
     new Date(delivery.lockedUntil).getTime() <= new Date(now).getTime()
   );
+}
+
+async function telegramReplySendWasAttempted({ repositories, update, botKey }) {
+  const key = telegramReplyDeliveryKey(update, botKey);
+  if (!key || typeof repositories?.telegramDeliveries?.get !== "function") {
+    return false;
+  }
+
+  const delivery = await repositories.telegramDeliveries.get(key);
+  return (
+    delivery?.status === "completed" ||
+    delivery?.result?.stage === "send" ||
+    delivery?.result?.stage === "sent"
+  );
+}
+
+function telegramUpdateRetryRunAt({ now = new Date(), attempts = 1, retryDelayMs = 5000 } = {}) {
+  const delayMs = Math.max(0, Number(retryDelayMs) || 0) * Math.max(1, Number(attempts) || 1);
+  return new Date(new Date(now).getTime() + delayMs);
 }
 
 async function isTelegramReplyDeliveryDuplicate({ repositories, update, botKey } = {}) {
@@ -315,6 +344,271 @@ function runTelegramBackgroundUpdate({
     });
 }
 
+async function enqueueTelegramUpdateJob({ repositories, update, botKey, now = new Date() }) {
+  const key = telegramUpdateJobKey(update, botKey);
+  if (!key || typeof repositories?.jobs?.enqueue !== "function") {
+    return null;
+  }
+
+  const job = await repositories.jobs.enqueue({
+    type: "telegram-update",
+    payload: {
+      botKey: botKey ?? null,
+      update,
+    },
+    status: "queued",
+    runAt: now,
+    dedupeKey: key,
+  });
+
+  if (
+    job?.status === "failed" &&
+    job.result?.sendWasAttempted !== true &&
+    typeof repositories.jobs.rescheduleJob === "function"
+  ) {
+    return repositories.jobs.rescheduleJob(
+      job,
+      {
+        status: "redelivery_requeued",
+        previousStatus: job.status,
+        previousError: job.error ?? job.result?.error ?? null,
+        updateId: update.update_id ?? null,
+        botKey: botKey ?? "default",
+      },
+      now,
+      now,
+    );
+  }
+
+  return job;
+}
+
+async function scheduleTelegramBackgroundUpdate({
+  body,
+  users,
+  repositories,
+  orchestrator,
+  telegramSender,
+  botKey,
+  voiceTranscriber,
+  imageOcr,
+  documentTextExtractor,
+  telegramBackgroundDelayMs,
+  telegramBackgroundUpdates,
+  telegramUpdateQueueEnabled,
+  triggerTelegramUpdateDispatcher,
+}) {
+  if (
+    telegramUpdateQueueEnabled &&
+    typeof repositories?.jobs?.enqueue === "function" &&
+    telegramUpdateJobKey(body, botKey)
+  ) {
+    await enqueueTelegramUpdateJob({ repositories, update: body, botKey });
+    triggerTelegramUpdateDispatcher?.();
+    return { queued: true };
+  }
+
+  const backgroundKey = telegramBackgroundUpdateKey(body, botKey);
+  let reservedBackgroundKey = false;
+  if (backgroundKey) {
+    if (telegramBackgroundUpdates.has(backgroundKey)) {
+      return { duplicate: true };
+    }
+    telegramBackgroundUpdates.add(backgroundKey);
+    reservedBackgroundKey = true;
+  }
+
+  if (await isTelegramReplyDeliveryDuplicate({ repositories, update: body, botKey })) {
+    if (reservedBackgroundKey) {
+      telegramBackgroundUpdates.delete(backgroundKey);
+    }
+    return { duplicate: true };
+  }
+
+  setTimeout(() => {
+    runTelegramBackgroundUpdate({
+      body,
+      users,
+      repositories,
+      orchestrator,
+      telegramSender,
+      voiceTranscriber,
+      imageOcr,
+      documentTextExtractor,
+      botKey,
+      backgroundKey,
+      telegramBackgroundUpdates,
+    });
+  }, telegramBackgroundDelayMs);
+
+  return { queued: false };
+}
+
+export async function dispatchTelegramUpdateJobsOnce({
+  repositories,
+  users,
+  orchestrator,
+  telegramSender,
+  telegramSenders = {},
+  telegramBackgroundSender,
+  telegramBackgroundSenders = {},
+  voiceTranscriber,
+  voiceTranscribers = {},
+  imageOcr,
+  imageOcrs = {},
+  documentTextExtractor,
+  documentTextExtractors = {},
+  now = new Date(),
+  maxJobs = 10,
+  maxAttempts = 3,
+  retryDelayMs = 5000,
+} = {}) {
+  if (typeof repositories?.jobs?.claim !== "function") {
+    return { status: "disabled", processed: 0 };
+  }
+
+  let processed = 0;
+  for (let index = 0; index < maxJobs; index += 1) {
+    const job = await repositories.jobs.claim({
+      workerId: "api-telegram-update-dispatcher",
+      now,
+      lockMs: 10 * 60_000,
+      type: "telegram-update",
+      dedupeKey: null,
+    });
+    if (!job) break;
+
+    const payload = job.payload ?? {};
+    const botKey = payload.botKey ?? undefined;
+    const update = payload.update;
+
+    try {
+      if (!update) {
+        throw new Error("Queued Telegram update job has no update payload");
+      }
+
+      const sender = resolveTelegramBackgroundSender({
+        botKey,
+        telegramSender,
+        telegramSenders,
+        telegramBackgroundSender,
+        telegramBackgroundSenders,
+      });
+      if (!sender?.sendMessage) {
+        throw new Error("Telegram sender is not configured for queued update");
+      }
+
+      sendBackgroundChatAction({ telegramSender: sender, body: update });
+
+      const result = await handleTelegramUpdate(update, {
+        users,
+        repositories,
+        orchestrator,
+        telegramSender: sender,
+        voiceTranscriber: resolveVoiceTranscriber({
+          botKey,
+          voiceTranscriber,
+          voiceTranscribers,
+        }),
+        imageOcr: resolveImageOcr({
+          botKey,
+          imageOcr,
+          imageOcrs,
+        }),
+        documentTextExtractor: resolveDocumentTextExtractor({
+          botKey,
+          documentTextExtractor,
+          documentTextExtractors,
+        }),
+        botKey,
+      });
+
+      await repositories.jobs.completeJob(job, {
+        status: "completed",
+        botKey: botKey ?? "default",
+        updateId: update.update_id ?? null,
+        duplicate: Boolean(result?.duplicate),
+      }, now);
+    } catch (error) {
+      const attempts = Number(job.attempts ?? 1);
+      const sendWasAttempted = await telegramReplySendWasAttempted({
+        repositories,
+        update,
+        botKey,
+      });
+      const canRetry =
+        attempts < Math.max(1, Number(maxAttempts) || 1) &&
+        !sendWasAttempted &&
+        typeof repositories.jobs.rescheduleJob === "function";
+      const failureResult = {
+        status: "failed",
+        error: error.message,
+        botKey: botKey ?? "default",
+        updateId: update?.update_id ?? null,
+        attempts,
+        sendWasAttempted,
+      };
+
+      if (canRetry) {
+        await repositories.jobs.rescheduleJob(
+          job,
+          {
+            ...failureResult,
+            status: "retry_scheduled",
+            retryAt: telegramUpdateRetryRunAt({ now, attempts, retryDelayMs }).toISOString(),
+          },
+          telegramUpdateRetryRunAt({ now, attempts, retryDelayMs }),
+          now,
+        );
+      } else {
+        await repositories.jobs.failJob(job, failureResult, now);
+      }
+    }
+
+    processed += 1;
+  }
+
+  return { status: "ok", processed };
+}
+
+function startTelegramUpdateDispatcher(options = {}) {
+  const intervalMs = options.intervalMs ?? 1000;
+  let running = false;
+  let rerunRequested = false;
+
+  const tick = async () => {
+    if (running) {
+      rerunRequested = true;
+      return;
+    }
+
+    running = true;
+    try {
+      do {
+        rerunRequested = false;
+        await dispatchTelegramUpdateJobsOnce(options);
+      } while (rerunRequested);
+    } catch (error) {
+      console.error("telegram update dispatcher failed", error);
+    } finally {
+      running = false;
+    }
+  };
+
+  const timer = setInterval(tick, intervalMs);
+  timer.unref?.();
+  tick();
+
+  return {
+    stop() {
+      clearInterval(timer);
+    },
+    trigger() {
+      void tick();
+    },
+  };
+}
+
 function envValue(value) {
   return typeof value === "string" && value.trim() === "" ? undefined : value;
 }
@@ -363,12 +657,50 @@ export function createAppServer(options = {}) {
     options.telegramPollingTimeoutSeconds ?? dependencies.telegramPollingTimeoutSeconds ?? 20;
   const telegramBackgroundDelayMs =
     options.telegramBackgroundDelayMs ?? dependencies.telegramBackgroundDelayMs ?? 0;
+  const telegramUpdateQueueEnabled =
+    options.telegramUpdateQueueEnabled ??
+    dependencies.telegramUpdateQueueEnabled ??
+    Boolean(repositories?.jobs?.enqueue && repositories?.jobs?.claim);
+  const telegramUpdateDispatcherIntervalMs =
+    options.telegramUpdateDispatcherIntervalMs ??
+    dependencies.telegramUpdateDispatcherIntervalMs ??
+    1000;
+  const telegramUpdateDispatcherMaxJobs =
+    options.telegramUpdateDispatcherMaxJobs ??
+    dependencies.telegramUpdateDispatcherMaxJobs ??
+    10;
+  const telegramUpdateDispatcherMaxAttempts =
+    options.telegramUpdateDispatcherMaxAttempts ??
+    dependencies.telegramUpdateDispatcherMaxAttempts ??
+    3;
+  const telegramUpdateDispatcherRetryDelayMs =
+    options.telegramUpdateDispatcherRetryDelayMs ??
+    dependencies.telegramUpdateDispatcherRetryDelayMs ??
+    5000;
   const reminderDispatcherEnabled =
     options.reminderDispatcherEnabled ?? dependencies.reminderDispatcherEnabled ?? false;
   const reminderDispatcherIntervalMs =
     options.reminderDispatcherIntervalMs ??
     dependencies.reminderDispatcherIntervalMs ??
     30_000;
+  const supervisorEnabled =
+    options.supervisorEnabled ?? dependencies.supervisorEnabled ?? false;
+  const supervisorIntervalMs =
+    options.supervisorIntervalMs ?? dependencies.supervisorIntervalMs ?? 60_000;
+  const supervisorAlertCooldownMs =
+    options.supervisorAlertCooldownMs ??
+    dependencies.supervisorAlertCooldownMs ??
+    10 * 60_000;
+  const supervisorAutoHeal =
+    options.supervisorAutoHeal ?? dependencies.supervisorAutoHeal ?? true;
+  const supervisorAlertChatId =
+    options.supervisorAlertChatId ?? dependencies.supervisorAlertChatId;
+  const supervisorAuditOkTicks =
+    options.supervisorAuditOkTicks ?? dependencies.supervisorAuditOkTicks ?? false;
+  const supervisorAuditDedupMs =
+    options.supervisorAuditDedupMs ??
+    dependencies.supervisorAuditDedupMs ??
+    10 * 60_000;
   const users = options.users ?? dependencies.users ?? [];
   const orchestrator =
     options.orchestrator ??
@@ -383,6 +715,9 @@ export function createAppServer(options = {}) {
       : ((request) => handleOrchestratorRequest(request, dependencies)));
   const telegramBackgroundUpdates = new Set();
   let stopTelegramPolling;
+  let telegramUpdateDispatcher;
+  let supervisorLoop;
+  let triggerTelegramUpdateDispatcher = () => {};
 
   const server = createServer(async (request, response) => {
     try {
@@ -429,64 +764,34 @@ export function createAppServer(options = {}) {
           });
 
           if (earlyBackgroundSender) {
+            await scheduleTelegramBackgroundUpdate({
+              body,
+              users,
+              repositories,
+              orchestrator,
+              telegramSender: earlyBackgroundSender,
+              voiceTranscriber: resolveVoiceTranscriber({
+                botKey,
+                voiceTranscriber,
+                voiceTranscribers,
+              }),
+              imageOcr: resolveImageOcr({
+                botKey,
+                imageOcr,
+                imageOcrs,
+              }),
+              documentTextExtractor: resolveDocumentTextExtractor({
+                botKey,
+                documentTextExtractor,
+                documentTextExtractors,
+              }),
+              botKey,
+              telegramBackgroundDelayMs,
+              telegramBackgroundUpdates,
+              telegramUpdateQueueEnabled,
+              triggerTelegramUpdateDispatcher,
+            });
             sendJson(response, 200, buildWebhookOkResponse());
-
-            const backgroundKey = telegramBackgroundUpdateKey(body, botKey);
-            Promise.resolve()
-              .then(async () => {
-                let reservedBackgroundKey = false;
-                if (backgroundKey) {
-                  if (telegramBackgroundUpdates.has(backgroundKey)) {
-                    return;
-                  }
-                  telegramBackgroundUpdates.add(backgroundKey);
-                  reservedBackgroundKey = true;
-                }
-
-                if (
-                  await isTelegramReplyDeliveryDuplicate({ repositories, update: body, botKey })
-                ) {
-                  if (reservedBackgroundKey) {
-                    telegramBackgroundUpdates.delete(backgroundKey);
-                  }
-                  return;
-                }
-
-                setTimeout(() => {
-                  runTelegramBackgroundUpdate({
-                    body,
-                    users,
-                    repositories,
-                    orchestrator,
-                    telegramSender: earlyBackgroundSender,
-                    voiceTranscriber: resolveVoiceTranscriber({
-                      botKey,
-                      voiceTranscriber,
-                      voiceTranscribers,
-                    }),
-                    imageOcr: resolveImageOcr({
-                      botKey,
-                      imageOcr,
-                      imageOcrs,
-                    }),
-                    documentTextExtractor: resolveDocumentTextExtractor({
-                      botKey,
-                      documentTextExtractor,
-                      documentTextExtractors,
-                    }),
-                    botKey,
-                    backgroundKey,
-                    telegramBackgroundUpdates,
-                  });
-                }, telegramBackgroundDelayMs);
-              })
-              .catch((error) => {
-                if (backgroundKey) {
-                  telegramBackgroundUpdates.delete(backgroundKey);
-                }
-                logTelegramBackgroundError(error);
-              });
-
             return;
           }
 
@@ -536,46 +841,34 @@ export function createAppServer(options = {}) {
             });
 
             if (backgroundSender) {
+              await scheduleTelegramBackgroundUpdate({
+                body,
+                users,
+                repositories,
+                orchestrator,
+                telegramSender: backgroundSender,
+                voiceTranscriber: resolveVoiceTranscriber({
+                  botKey,
+                  voiceTranscriber,
+                  voiceTranscribers,
+                }),
+                imageOcr: resolveImageOcr({
+                  botKey,
+                  imageOcr,
+                  imageOcrs,
+                }),
+                documentTextExtractor: resolveDocumentTextExtractor({
+                  botKey,
+                  documentTextExtractor,
+                  documentTextExtractors,
+                }),
+                botKey,
+                telegramBackgroundDelayMs,
+                telegramBackgroundUpdates,
+                telegramUpdateQueueEnabled,
+                triggerTelegramUpdateDispatcher,
+              });
               sendJson(response, 200, buildWebhookOkResponse());
-
-              const backgroundKey = telegramBackgroundUpdateKey(body, botKey);
-              if (
-                (!backgroundKey || !telegramBackgroundUpdates.has(backgroundKey)) &&
-                !(await isTelegramReplyDeliveryDuplicate({ repositories, update: body, botKey }))
-              ) {
-                if (backgroundKey) {
-                  telegramBackgroundUpdates.add(backgroundKey);
-                }
-
-                setTimeout(() => {
-                  runTelegramBackgroundUpdate({
-                    body,
-                    users,
-                    repositories,
-                    orchestrator,
-                    telegramSender: backgroundSender,
-                    voiceTranscriber: resolveVoiceTranscriber({
-                      botKey,
-                      voiceTranscriber,
-                      voiceTranscribers,
-                    }),
-                    imageOcr: resolveImageOcr({
-                      botKey,
-                      imageOcr,
-                      imageOcrs,
-                    }),
-                    documentTextExtractor: resolveDocumentTextExtractor({
-                      botKey,
-                      documentTextExtractor,
-                      documentTextExtractors,
-                    }),
-                    botKey,
-                    backgroundKey,
-                    telegramBackgroundUpdates,
-                  });
-                }, telegramBackgroundDelayMs);
-              }
-
               return;
             }
 
@@ -601,6 +894,36 @@ export function createAppServer(options = {}) {
             telegramBackgroundSender,
             telegramBackgroundSenders,
           });
+          if (backgroundSender) {
+            await scheduleTelegramBackgroundUpdate({
+              body,
+              users,
+              repositories,
+              orchestrator,
+              telegramSender: backgroundSender,
+              voiceTranscriber: resolveVoiceTranscriber({
+                botKey,
+                voiceTranscriber,
+                voiceTranscribers,
+              }),
+              imageOcr: resolveImageOcr({
+                botKey,
+                imageOcr,
+                imageOcrs,
+              }),
+              documentTextExtractor: resolveDocumentTextExtractor({
+                botKey,
+                documentTextExtractor,
+                documentTextExtractors,
+              }),
+              botKey,
+              telegramBackgroundDelayMs,
+              telegramBackgroundUpdates,
+              telegramUpdateQueueEnabled,
+              triggerTelegramUpdateDispatcher,
+            });
+          }
+
           sendJson(
             response,
             200,
@@ -608,44 +931,6 @@ export function createAppServer(options = {}) {
               ? buildWebhookOkResponse()
               : buildImmediateTelegramWebhookResponse(telegramRequest),
           );
-
-          const backgroundKey = telegramBackgroundUpdateKey(body, botKey);
-          if (
-            (!backgroundKey || !telegramBackgroundUpdates.has(backgroundKey)) &&
-            !(await isTelegramReplyDeliveryDuplicate({ repositories, update: body, botKey }))
-          ) {
-            if (backgroundKey) {
-              telegramBackgroundUpdates.add(backgroundKey);
-            }
-
-            setTimeout(() => {
-              runTelegramBackgroundUpdate({
-                body,
-                users,
-                repositories,
-                orchestrator,
-                telegramSender: backgroundSender,
-                voiceTranscriber: resolveVoiceTranscriber({
-                  botKey,
-                  voiceTranscriber,
-                  voiceTranscribers,
-                }),
-                imageOcr: resolveImageOcr({
-                  botKey,
-                  imageOcr,
-                  imageOcrs,
-                }),
-                documentTextExtractor: resolveDocumentTextExtractor({
-                  botKey,
-                  documentTextExtractor,
-                  documentTextExtractors,
-                }),
-                botKey,
-                backgroundKey,
-                telegramBackgroundUpdates,
-              });
-            }, telegramBackgroundDelayMs);
-          }
 
           return;
         }
@@ -690,13 +975,76 @@ export function createAppServer(options = {}) {
     server.on("listening", () => {
       stopReminderDispatcher = startReminderDispatcher({
         repositories,
-        telegramSender,
-        telegramSenders,
+        telegramSender: telegramBackgroundSender ?? telegramSender,
+        telegramSenders: {
+          ...telegramSenders,
+          ...telegramBackgroundSenders,
+        },
         intervalMs: reminderDispatcherIntervalMs,
       });
     });
     server.on("close", () => {
       stopReminderDispatcher?.();
+    });
+  }
+
+  if (telegramUpdateQueueEnabled) {
+    server.on("listening", () => {
+      telegramUpdateDispatcher = startTelegramUpdateDispatcher({
+        repositories,
+        users,
+        orchestrator,
+        telegramSender,
+        telegramSenders,
+        telegramBackgroundSender,
+        telegramBackgroundSenders,
+        voiceTranscriber,
+        voiceTranscribers,
+        imageOcr,
+        imageOcrs,
+        documentTextExtractor,
+        documentTextExtractors,
+        intervalMs: telegramUpdateDispatcherIntervalMs,
+        maxJobs: telegramUpdateDispatcherMaxJobs,
+        maxAttempts: telegramUpdateDispatcherMaxAttempts,
+        retryDelayMs: telegramUpdateDispatcherRetryDelayMs,
+      });
+      triggerTelegramUpdateDispatcher = () => telegramUpdateDispatcher?.trigger();
+    });
+    server.on("close", () => {
+      telegramUpdateDispatcher?.stop();
+    });
+  }
+
+  if (supervisorEnabled) {
+    server.on("listening", () => {
+      const supervisorSender = resolveTelegramBackgroundSender({
+        botKey: "owner",
+        telegramSender,
+        telegramSenders,
+        telegramBackgroundSender,
+        telegramBackgroundSenders,
+      });
+      const notifier =
+        supervisorAlertChatId && supervisorSender?.sendMessage
+          ? (text) => supervisorSender.sendMessage({
+              chatId: supervisorAlertChatId,
+              text,
+            })
+          : undefined;
+
+      supervisorLoop = startSupervisorLoop({
+        repositories,
+        notifier,
+        autoHeal: supervisorAutoHeal,
+        intervalMs: supervisorIntervalMs,
+        alertCooldownMs: supervisorAlertCooldownMs,
+        auditOkTicks: supervisorAuditOkTicks,
+        auditDedupMs: supervisorAuditDedupMs,
+      });
+    });
+    server.on("close", () => {
+      supervisorLoop?.stop();
     });
   }
 
@@ -716,10 +1064,12 @@ export function createAppServer(options = {}) {
             telegramBackgroundSender,
             telegramBackgroundSenders,
           });
+          if (!pollingSender?.sendMessage) {
+            throw new Error("Telegram sender is not configured for polling update");
+          }
 
-          sendBackgroundChatAction({ telegramSender: pollingSender, body: update });
-
-          await handleTelegramUpdate(update, {
+          await scheduleTelegramBackgroundUpdate({
+            body: update,
             users,
             repositories,
             orchestrator,
@@ -740,6 +1090,10 @@ export function createAppServer(options = {}) {
               documentTextExtractors,
             }),
             botKey,
+            telegramBackgroundDelayMs,
+            telegramBackgroundUpdates,
+            telegramUpdateQueueEnabled,
+            triggerTelegramUpdateDispatcher,
           });
         },
       });

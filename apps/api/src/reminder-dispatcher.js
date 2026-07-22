@@ -2,7 +2,27 @@ function resolveSender({ botKey, telegramSender, telegramSenders }) {
   return (botKey ? telegramSenders?.[botKey] : null) ?? telegramSender;
 }
 
+function reminderDeliveryKey(payload = {}, job = null) {
+  if (!payload.chatId) {
+    return null;
+  }
+
+  const stablePart = payload.reminderId ?? job?.dedupeKey ?? job?.id;
+  if (!stablePart) {
+    return null;
+  }
+
+  return `telegram-reminder:${payload.botKey ?? "default"}:${stablePart}:${payload.chatId}`;
+}
+
+async function markReminderSent({ payload, repositories, now }) {
+  if (payload.reminderId && repositories.reminders?.markSent) {
+    await repositories.reminders.markSent(payload.reminderId, now);
+  }
+}
+
 async function sendReminderJob({
+  job,
   payload,
   repositories,
   telegramSender,
@@ -23,14 +43,61 @@ async function sendReminderJob({
   }
 
   const title = String(payload.title ?? "Напоминание").trim() || "Напоминание";
-  await sender.sendMessage({
-    chatId: payload.chatId,
-    text: `Напоминание: ${title}`,
-  });
+  const deliveryKey = reminderDeliveryKey(payload, job);
+  if (repositories.telegramDeliveries?.claim && deliveryKey) {
+    const deliveryClaim = await repositories.telegramDeliveries.claim({
+      key: deliveryKey,
+      botKey: payload.botKey ?? null,
+      updateId: payload.reminderId ?? job?.id ?? null,
+      chatId: payload.chatId,
+      now,
+    });
 
-  if (payload.reminderId && repositories.reminders?.markSent) {
-    await repositories.reminders.markSent(payload.reminderId, now);
+    if (!deliveryClaim.claimed) {
+      await markReminderSent({ payload, repositories, now });
+      return {
+        sent: false,
+        skipped: true,
+        reason: "telegram_delivery_already_claimed",
+        chatId: payload.chatId,
+        reminderId: payload.reminderId,
+        deliveryStatus: deliveryClaim.delivery?.status ?? null,
+        deliveryStage: deliveryClaim.delivery?.result?.stage ?? null,
+      };
+    }
+
+    await repositories.telegramDeliveries.markSending?.(deliveryKey, {
+      chatId: payload.chatId,
+      reminderId: payload.reminderId ?? null,
+      botKey: payload.botKey ?? null,
+    }, now);
   }
+
+  try {
+    await sender.sendMessage({
+      chatId: payload.chatId,
+      text: `Напоминание: ${title}`,
+    });
+  } catch (error) {
+    if (deliveryKey) {
+      await repositories.telegramDeliveries?.markFailed?.(deliveryKey, {
+        stage: "send",
+        error: error.message,
+        chatId: payload.chatId,
+        reminderId: payload.reminderId ?? null,
+      }, now);
+    }
+    throw error;
+  }
+
+  if (deliveryKey) {
+    await repositories.telegramDeliveries?.markSent?.(deliveryKey, {
+      stage: "sent",
+      chatId: payload.chatId,
+      reminderId: payload.reminderId ?? null,
+    }, now);
+  }
+  await markReminderSent({ payload, repositories, now });
 
   return {
     sent: true,
@@ -56,6 +123,7 @@ export async function dispatchReminderJobsOnce({
       workerId: "api-reminder-dispatcher",
       now,
       lockMs: 60_000,
+      type: "send_reminder",
       dedupeKey: null,
     });
     if (!job) break;
@@ -71,6 +139,7 @@ export async function dispatchReminderJobsOnce({
 
     try {
       const result = await sendReminderJob({
+        job,
         payload: job.payload ?? {},
         repositories,
         telegramSender,

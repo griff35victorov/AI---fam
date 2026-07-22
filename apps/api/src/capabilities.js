@@ -1003,6 +1003,164 @@ function parseDuckDuckGoHtml(html) {
     .filter(Boolean);
 }
 
+function isLatestDomainContentRequest(query) {
+  return /(?:\u043d\u043e\u0432\u043e\u0441\u0442|\u043f\u043e\u0441\u043b\u0435\u0434\u043d|\u0441\u0432\u0435\u0436|\u043c\u0430\u0442\u0435\u0440\u0438\u0430\u043b|latest|news|posts?|articles?)/i.test(
+    String(query ?? ""),
+  );
+}
+
+function domainFeedCandidates(domain) {
+  return [
+    {
+      url: `https://${domain}/wp-json/wp/v2/posts?per_page=10&_fields=date,link,title,excerpt`,
+      kind: "wordpress",
+      label: "WordPress REST API",
+    },
+    { url: `https://${domain}/rss.xml`, kind: "feed", label: "RSS/Atom feed" },
+    { url: `https://${domain}/feed/`, kind: "feed", label: "RSS/Atom feed" },
+    { url: `https://${domain}/feed.xml`, kind: "feed", label: "RSS/Atom feed" },
+    { url: `https://${domain}/rss/`, kind: "feed", label: "RSS/Atom feed" },
+    { url: `https://${domain}/atom.xml`, kind: "feed", label: "RSS/Atom feed" },
+  ];
+}
+
+function parseWordPressPosts(body, limit) {
+  let posts;
+  try {
+    posts = JSON.parse(body);
+  } catch {
+    return [];
+  }
+
+  if (!Array.isArray(posts)) {
+    return [];
+  }
+
+  return posts
+    .map((post) => ({
+      title: extractReadableText(post?.title?.rendered ?? post?.title ?? "", "text/html"),
+      url: post?.link ?? null,
+      snippet: extractReadableText(post?.excerpt?.rendered ?? post?.excerpt ?? "", "text/html"),
+      date: post?.date ?? null,
+    }))
+    .filter((post) => post.title && post.url)
+    .slice(0, Math.max(1, limit));
+}
+
+function xmlTagText(block, tagName) {
+  const match = String(block ?? "").match(
+    new RegExp(`<${tagName}(?:\\s[^>]*)?>([\\s\\S]*?)<\\/${tagName}>`, "i"),
+  );
+  return (match?.[1] ?? "").replace(/^<!\[CDATA\[/, "").replace(/\]\]>$/, "");
+}
+
+function xmlLink(block) {
+  const hrefMatch = String(block ?? "").match(/<link[^>]+href=["']([^"']+)["'][^>]*>/i);
+  if (hrefMatch?.[1]) return decodeHtmlEntities(hrefMatch[1]).trim();
+  return extractReadableText(xmlTagText(block, "link"), "text/html");
+}
+
+function parseFeedItems(body, limit) {
+  const xml = String(body ?? "");
+  const itemMatches = [
+    ...xml.matchAll(/<item\b[\s\S]*?<\/item>/gi),
+    ...xml.matchAll(/<entry\b[\s\S]*?<\/entry>/gi),
+  ];
+
+  return itemMatches
+    .map((match) => {
+      const block = match[0];
+      return {
+        title: extractReadableText(xmlTagText(block, "title"), "text/html"),
+        url: xmlLink(block),
+        snippet: extractReadableText(
+          xmlTagText(block, "description") ||
+            xmlTagText(block, "summary") ||
+            xmlTagText(block, "content:encoded"),
+          "text/html",
+        ),
+        date:
+          extractReadableText(xmlTagText(block, "pubDate"), "text/html") ||
+          extractReadableText(xmlTagText(block, "updated"), "text/html") ||
+          null,
+      };
+    })
+    .filter((item) => item.title && item.url)
+    .slice(0, Math.max(1, limit));
+}
+
+function formatDomainLatestAnswer({ domain, items, sourceLabel }) {
+  return [
+    `\u041f\u043e\u0441\u043b\u0435\u0434\u043d\u0438\u0435 \u043c\u0430\u0442\u0435\u0440\u0438\u0430\u043b\u044b \u043d\u0430 ${domain}:`,
+    ...items.map((item, index) => [
+      `${index + 1}. ${item.title}`,
+      item.date ? `   ${item.date}` : null,
+      item.snippet ? `   ${item.snippet.slice(0, 180)}` : null,
+      `   ${item.url}`,
+    ].filter(Boolean).join("\n")),
+    `\u0418\u0441\u0442\u043e\u0447\u043d\u0438\u043a: ${sourceLabel}.`,
+  ].join("\n");
+}
+
+async function fetchDomainLatestContent({
+  fetchImpl,
+  dnsLookup,
+  domain,
+  limit,
+  timeoutMs,
+  perCandidateTimeoutMs = 1500,
+} = {}) {
+  if (!domain) return null;
+
+  const startedAt = Date.now();
+  const totalBudgetMs = Math.max(1, Number(timeoutMs) || 7000);
+  for (const candidate of domainFeedCandidates(domain)) {
+    const elapsedMs = Date.now() - startedAt;
+    const remainingMs = totalBudgetMs - elapsedMs;
+    if (remainingMs <= 0) {
+      break;
+    }
+
+    try {
+      const response = await fetchPublicUrl(fetchImpl, candidate.url, {
+        timeoutMs: Math.max(1, Math.min(perCandidateTimeoutMs, remainingMs)),
+        dnsLookup,
+      });
+      if (!response.ok) {
+        continue;
+      }
+
+      const body = await response.text();
+      const items =
+        candidate.kind === "wordpress"
+          ? parseWordPressPosts(body, limit)
+          : parseFeedItems(body, limit);
+      if (items.length === 0) {
+        continue;
+      }
+
+      return {
+        text: formatDomainLatestAnswer({
+          domain,
+          items,
+          sourceLabel: candidate.label,
+        }),
+        source: "web_current_data",
+        metadata: {
+          domain,
+          provider: candidate.label,
+          resultCount: items.length,
+          url: candidate.url,
+        },
+      };
+    } catch {
+      continue;
+    }
+  }
+
+  return null;
+}
+
 function formatWebSearchAnswer({ query, results, providerLabel }) {
   if (results.length === 0) {
     return [
@@ -1024,6 +1182,7 @@ function formatWebSearchAnswer({ query, results, providerLabel }) {
 
 export function createPublicWebSearchProvider({
   fetchImpl = fetch,
+  dnsLookup = lookup,
   timeoutMs = 7000,
   providerLabel = "DuckDuckGo HTML, best-effort public search",
 } = {}) {
@@ -1040,6 +1199,25 @@ export function createPublicWebSearchProvider({
           source: "web_current_data",
           metadata: { requiresClarification: true },
         };
+      }
+
+      if (requestedDomain && isLatestDomainContentRequest(searchQuery)) {
+        const latestContent = await fetchDomainLatestContent({
+          fetchImpl,
+          dnsLookup,
+          domain: requestedDomain,
+          limit,
+          timeoutMs,
+        });
+        if (latestContent) {
+          return {
+            ...latestContent,
+            metadata: {
+              ...latestContent.metadata,
+              query: searchQuery,
+            },
+          };
+        }
       }
 
       const url =

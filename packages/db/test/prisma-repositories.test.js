@@ -13,11 +13,22 @@ function matchesWhere(record, where = {}) {
       return value.some((condition) => matchesWhere(record, condition));
     }
 
+    if (key === "NOT") {
+      return !matchesWhere(record, value);
+    }
+
     if (value && typeof value === "object" && !Array.isArray(value)) {
       if ("in" in value) return value.in.includes(record[key]);
       if ("not" in value) return record[key] !== value.not;
       if ("lte" in value) return new Date(record[key]) <= new Date(value.lte);
       if ("gte" in value) return new Date(record[key]) >= new Date(value.gte);
+      if ("path" in value) {
+        const actual = value.path.reduce(
+          (current, part) => (current == null ? undefined : current[part]),
+          record[key],
+        );
+        if ("equals" in value) return actual === value.equals;
+      }
     }
 
     return record[key] === value;
@@ -498,6 +509,38 @@ describe("Prisma repositories", () => {
     assert.equal(upsertCalled, true);
   });
 
+  it("can claim only jobs matching a type", async () => {
+    const repositories = createPrismaRepositories(createFakePrisma());
+    const runAt = new Date("2026-07-20T12:00:00.000Z");
+
+    const reminder = await repositories.jobs.enqueue({
+      type: "send_reminder",
+      payload: { reminderId: "reminder-1" },
+      runAt,
+      dedupeKey: "send_reminder:reminder-1",
+    });
+    const telegramUpdate = await repositories.jobs.enqueue({
+      type: "telegram-update",
+      payload: { botKey: "owner", update: { update_id: 1000 } },
+      runAt,
+      dedupeKey: "telegram-update:owner:update:1000",
+    });
+
+    const claimedTelegram = await repositories.jobs.claim({
+      workerId: "telegram-worker",
+      now: new Date("2026-07-20T12:01:00.000Z"),
+      type: "telegram-update",
+    });
+    assert.equal(claimedTelegram.id, telegramUpdate.id);
+
+    const claimedReminder = await repositories.jobs.claim({
+      workerId: "reminder-worker",
+      now: new Date("2026-07-20T12:01:00.000Z"),
+      type: "send_reminder",
+    });
+    assert.equal(claimedReminder.id, reminder.id);
+  });
+
   it("reclaims expired processing Telegram deliveries without retrying send-stage entries", async () => {
     const key = "telegram:owner:123:reply";
     const prisma = createFakePrisma({
@@ -547,6 +590,46 @@ describe("Prisma repositories", () => {
     assert.equal(afterSendStarted.delivery.result.stage, "send");
   });
 
+  it("does not reclaim Telegram delivery if it moves to send stage during claim", async () => {
+    const key = "telegram:owner:race:reply";
+    const prisma = createFakePrisma({
+      jobs: [
+        {
+          id: "job-telegram-race",
+          type: "telegram-delivery",
+          payload: { botKey: "owner", updateId: "race", chatId: 777 },
+          status: "running",
+          result: { stage: "processing" },
+          runAt: new Date("2026-07-20T12:00:00.000Z"),
+          attempts: 1,
+          lockedBy: "telegram-delivery",
+          lockedUntil: new Date("2026-07-20T12:05:00.000Z"),
+          dedupeKey: key,
+        },
+      ],
+    });
+    const originalUpdateMany = prisma.job.updateMany;
+    prisma.job.updateMany = async (args) => {
+      const stored = prisma.__data.jobs.find((job) => job.dedupeKey === key);
+      stored.result = { stage: "send" };
+      stored.lockedUntil = new Date("2026-07-20T12:30:00.000Z");
+      return originalUpdateMany(args);
+    };
+    const repositories = createPrismaRepositories(prisma);
+
+    const result = await repositories.telegramDeliveries.claim({
+      key,
+      botKey: "owner",
+      updateId: "race",
+      chatId: 777,
+      now: new Date("2026-07-20T12:06:00.000Z"),
+    });
+
+    assert.equal(result.claimed, false);
+    assert.equal(prisma.__data.jobs[0].result.stage, "send");
+    assert.equal(prisma.__data.jobs[0].attempts, 1);
+  });
+
   it("uses conditional update when claiming jobs", async () => {
     const prisma = createFakePrisma({
       jobs: [
@@ -582,6 +665,84 @@ describe("Prisma repositories", () => {
       { lockedUntil: null },
       { lockedUntil: { lte: new Date("2026-07-20T12:01:00.000Z") } },
     ]);
+  });
+
+  it("lists stale running jobs even when they are older than recent jobs", async () => {
+    const now = new Date("2026-07-22T12:00:00.000Z");
+    const freshJobs = Array.from({ length: 220 }, (_, index) => ({
+      id: `fresh-${index}`,
+      type: "send_reminder",
+      payload: {},
+      status: "completed",
+      runAt: new Date("2026-07-22T11:00:00.000Z"),
+      updatedAt: new Date(now.getTime() - index * 1000),
+    }));
+    const repositories = createPrismaRepositories(
+      createFakePrisma({
+        jobs: [
+          ...freshJobs,
+          {
+            id: "old-stale",
+            type: "telegram-update",
+            payload: {},
+            status: "running",
+            runAt: new Date("2026-07-22T10:00:00.000Z"),
+            lockedUntil: new Date("2026-07-22T10:01:00.000Z"),
+            updatedAt: new Date("2026-07-22T10:01:00.000Z"),
+          },
+        ],
+      }),
+    );
+
+    const recent = await repositories.jobs.listRecent({ limit: 200 });
+    const stale = await repositories.jobs.listStaleRunning({ now, limit: 10 });
+
+    assert.equal(recent.some((job) => job.id === "old-stale"), false);
+    assert.deepEqual(stale.map((job) => job.id), ["old-stale"]);
+  });
+
+  it("reschedules jobs conditionally to avoid racing fresh claims", async () => {
+    const now = new Date("2026-07-22T12:00:00.000Z");
+    const repositories = createPrismaRepositories(
+      createFakePrisma({
+        jobs: [
+          {
+            id: "stale-update",
+            type: "telegram-update",
+            payload: {},
+            status: "running",
+            runAt: new Date("2026-07-22T11:50:00.000Z"),
+            attempts: 0,
+            lockedUntil: new Date("2026-07-22T11:55:00.000Z"),
+            lockedBy: "old-worker",
+          },
+        ],
+      }),
+    );
+    const [stale] = await repositories.jobs.listStaleRunning({ now, limit: 10 });
+    await repositories.jobs.claim({
+      workerId: "fresh-worker",
+      now,
+      type: "telegram-update",
+      lockMs: 60_000,
+    });
+
+    const rescheduled = await repositories.jobs.rescheduleJob(
+      stale,
+      { status: "supervisor_requeued" },
+      now,
+      now,
+      {
+        expectedStatus: "running",
+        expectedType: "telegram-update",
+        requireStaleLockAt: now,
+      },
+    );
+    const jobs = await repositories.jobs.listRecent({ limit: 1 });
+
+    assert.equal(rescheduled, null);
+    assert.equal(jobs[0].status, "running");
+    assert.equal(jobs[0].lockedBy, "fresh-worker");
   });
 
   it("supports worker completion and failure updates", async () => {

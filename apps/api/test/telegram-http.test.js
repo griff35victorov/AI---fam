@@ -670,6 +670,140 @@ test("POST /telegram/owner/webhook does not resend answer for same Telegram mess
   assert.deepEqual(sentMessages, [{ chatId: 777, text: "single answer" }]);
 });
 
+test("POST /telegram/owner/webhook retries queued processing failure without duplicate reply", async () => {
+  const sentMessages = [];
+  const calls = [];
+  const repositories = createInMemoryRepositories({
+    users: [
+      {
+        id: "owner-1",
+        role: "owner",
+        telegramUserId: "100",
+        workspaceId: "workspace-family",
+      },
+    ],
+  });
+
+  await withServer(
+    {
+      repositories,
+      orchestrator: async (request) => {
+        calls.push(request);
+        if (calls.length === 1) {
+          throw new Error("temporary AI failure");
+        }
+        return { answer: { text: "answer after retry" } };
+      },
+      dependencies: {
+        telegramReplyMode: "webhook_response",
+        telegramUpdateDispatcherIntervalMs: 10,
+        telegramUpdateDispatcherMaxAttempts: 2,
+        telegramUpdateDispatcherRetryDelayMs: 10,
+        telegramBackgroundSenders: {
+          owner: {
+            async sendChatAction() {
+              return { ok: true };
+            },
+            async sendMessage(messageToSend) {
+              sentMessages.push(messageToSend);
+              return { ok: true };
+            },
+          },
+        },
+      },
+    },
+    async (baseUrl) => {
+      const response = await postJson(`${baseUrl}/telegram/owner/webhook`, {
+        update_id: 426,
+        message: {
+          message_id: 9101,
+          chat: { id: 777 },
+          from: { id: 100 },
+          text: "answer after temporary error",
+        },
+      });
+
+      assert.equal(response.status, 200);
+      assert.deepEqual(await response.json(), { ok: true });
+
+      await waitFor(
+        () => calls.length === 2 && sentMessages.length === 1,
+        1000,
+        "queued update was not retried exactly once",
+      );
+    },
+  );
+
+  assert.equal(calls.length, 2);
+  assert.deepEqual(sentMessages, [{ chatId: 777, text: "answer after retry" }]);
+});
+
+test("POST /telegram/owner/webhook does not retry after Telegram send was attempted", async () => {
+  const sentMessages = [];
+  const calls = [];
+  const repositories = createInMemoryRepositories({
+    users: [
+      {
+        id: "owner-1",
+        role: "owner",
+        telegramUserId: "100",
+        workspaceId: "workspace-family",
+      },
+    ],
+  });
+
+  await withServer(
+    {
+      repositories,
+      orchestrator: async (request) => {
+        calls.push(request);
+        return { answer: { text: "possibly delivered answer" } };
+      },
+      dependencies: {
+        telegramReplyMode: "webhook_response",
+        telegramUpdateDispatcherIntervalMs: 10,
+        telegramUpdateDispatcherMaxAttempts: 3,
+        telegramUpdateDispatcherRetryDelayMs: 10,
+        telegramBackgroundSenders: {
+          owner: {
+            async sendChatAction() {
+              return { ok: true };
+            },
+            async sendMessage(messageToSend) {
+              sentMessages.push(messageToSend);
+              throw new Error("network failed after send attempt");
+            },
+          },
+        },
+      },
+    },
+    async (baseUrl) => {
+      const response = await postJson(`${baseUrl}/telegram/owner/webhook`, {
+        update_id: 427,
+        message: {
+          message_id: 9102,
+          chat: { id: 777 },
+          from: { id: 100 },
+          text: "answer with ambiguous send result",
+        },
+      });
+
+      assert.equal(response.status, 200);
+      assert.deepEqual(await response.json(), { ok: true });
+
+      await waitFor(
+        () => calls.length === 1 && sentMessages.length === 1,
+        1000,
+        "first send attempt was not reached",
+      );
+      await new Promise((resolve) => setTimeout(resolve, 80));
+    },
+  );
+
+  assert.equal(calls.length, 1);
+  assert.deepEqual(sentMessages, [{ chatId: 777, text: "possibly delivered answer" }]);
+});
+
 test("POST /telegram/owner/webhook stores explicit memory once through background sender", async () => {
   const sentMessages = [];
   const repositories = createInMemoryRepositories({
@@ -1055,6 +1189,69 @@ test("POST /telegram/webhook refuses unknown user through webhook response witho
 
   assert.equal(orchestratorCalled, false);
   assert.deepEqual(sentMessages, []);
+});
+
+test("reminder dispatcher uses background relay senders when configured", async () => {
+  const repositories = createInMemoryRepositories({
+    reminders: [
+      {
+        id: "reminder-1",
+        userId: "owner-1",
+        workspaceId: "workspace-family",
+        title: "buy lamps",
+        runAt: new Date("2026-07-20T12:00:00.000Z"),
+        status: "scheduled",
+      },
+    ],
+    jobs: [
+      {
+        id: "reminder-job-1",
+        type: "send_reminder",
+        payload: {
+          reminderId: "reminder-1",
+          title: "buy lamps",
+          chatId: 777,
+          botKey: "owner",
+        },
+        status: "queued",
+        runAt: new Date("2026-07-20T12:00:00.000Z"),
+        attempts: 0,
+      },
+    ],
+  });
+  const sentMessages = [];
+
+  await withServer(
+    {
+      repositories,
+      dependencies: {
+        reminderDispatcherEnabled: true,
+        reminderDispatcherIntervalMs: 60_000,
+        telegramBackgroundSenders: {
+          owner: {
+            async sendMessage(message) {
+              sentMessages.push(message);
+              return { ok: true };
+            },
+          },
+        },
+      },
+    },
+    async () => {
+      await waitFor(
+        () => sentMessages.length === 1,
+        1000,
+        "background reminder sender was not called",
+      );
+    },
+  );
+
+  assert.deepEqual(sentMessages, [
+    {
+      chatId: 777,
+      text: "Напоминание: buy lamps",
+    },
+  ]);
 });
 
 test("GET /health still works on app server", async () => {

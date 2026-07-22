@@ -295,6 +295,56 @@ test("repository backed orchestrator redacts unsafe Telegram learn fact from con
   assert.match(messages[0].metadata.redacted, /unsafe_learning_command/);
 });
 
+test("repository backed orchestrator does not duplicate Telegram learn fact after retry", async () => {
+  const repositories = createInMemoryRepositories({
+    messages: [
+      {
+        id: "msg-learn-fact",
+        conversationId: "telegram:777:owner-1",
+        role: "user",
+        content: "/learn fact I prefer short answers",
+        metadata: { telegramUpdateId: 1131 },
+        createdAt: new Date("2026-07-22T09:00:00.000Z"),
+      },
+    ],
+    memories: [
+      {
+        id: "memory-existing",
+        workspaceId: "workspace-family",
+        ownerUserId: "owner-1",
+        scope: "family",
+        sensitivity: "normal",
+        subjectType: "user_stated_fact",
+        content: "I prefer short answers",
+        sourceMessageIds: ["msg-learn-fact"],
+      },
+    ],
+  });
+  const orchestrator = createRepositoryBackedOrchestrator({
+    repositories,
+    aiProvider: {
+      async complete() {
+        throw new Error("AI should not be called for duplicate learn fact");
+      },
+    },
+  });
+
+  const response = await orchestrator({
+    chatId: 777,
+    actor: { id: "owner-1", role: "owner" },
+    intent: "household",
+    text: "/learn fact I prefer short answers",
+    telegramUpdateId: 1131,
+  });
+
+  assert.equal(response.answer.source, "learning_memory_duplicate");
+  const memories = await repositories.memories.listForActor({
+    actorUserId: "owner-1",
+    workspaceId: "workspace-family",
+  });
+  assert.equal(memories.length, 1);
+});
+
 test("repository backed orchestrator does not call AI when Telegram learning memory storage is unavailable", async () => {
   const repositories = createInMemoryRepositories();
   const orchestrator = createRepositoryBackedOrchestrator({
@@ -411,6 +461,55 @@ test("repository backed orchestrator stores Russian Telegram learn material form
   });
   assert.equal(materials.length, 1);
   assert.equal(materials[0].title, "Irregular verbs drill");
+});
+
+test("repository backed orchestrator does not duplicate Telegram learn material after retry", async () => {
+  const repositories = createInMemoryRepositories({
+    messages: [
+      {
+        id: "msg-learn-material",
+        conversationId: "telegram:778:teacher-1",
+        role: "user",
+        content: "/learn material Past Simple warm-up\nAsk about yesterday.",
+        metadata: { telegramUpdateId: 1133 },
+        createdAt: new Date("2026-07-22T09:00:00.000Z"),
+      },
+    ],
+    materials: [
+      {
+        id: "material-existing",
+        workspaceId: "workspace-family",
+        ownerUserId: "teacher-1",
+        scope: "teacher_private",
+        sensitivity: "normal",
+        title: "Past Simple warm-up",
+        sourceMessageIds: ["msg-learn-material"],
+      },
+    ],
+  });
+  const orchestrator = createRepositoryBackedOrchestrator({
+    repositories,
+    aiProvider: {
+      async complete() {
+        throw new Error("AI should not be called for duplicate learn material");
+      },
+    },
+  });
+
+  const response = await orchestrator({
+    chatId: 778,
+    actor: { id: "teacher-1", role: "teacher" },
+    intent: "material_search",
+    text: "/learn material Past Simple warm-up\nAsk about yesterday.",
+    telegramUpdateId: 1133,
+  });
+
+  assert.equal(response.answer.source, "learning_material_duplicate");
+  const materials = await repositories.materials.listForActor({
+    actorUserId: "teacher-1",
+    workspaceId: "workspace-family",
+  });
+  assert.equal(materials.length, 1);
 });
 
 test("repository backed orchestrator lists Telegram learning memory and materials", async () => {
@@ -930,14 +1029,106 @@ test("public web search provider adds safe site scope when domain is supplied", 
   });
 
   const result = await provider.search({
-    query: "latest news",
+    query: "wingfoil school",
     domain: "https://www.rksurfmag.club/archive",
     limit: 10,
   });
 
-  assert.equal(result.metadata.query, "site:rksurfmag.club latest news");
+  assert.equal(result.metadata.query, "site:rksurfmag.club wingfoil school");
   assert.equal(result.metadata.domain, "rksurfmag.club");
-  assert.match(decodeURIComponent(requestedUrls[0]), /q=site:rksurfmag\.club latest news/);
+  assert.match(decodeURIComponent(requestedUrls[0]), /q=site:rksurfmag\.club wingfoil school/);
+});
+
+test("public web search provider reads domain WordPress posts for latest news", async () => {
+  const requestedUrls = [];
+  const provider = createPublicWebSearchProvider({
+    fetchImpl: async (url) => {
+      requestedUrls.push(String(url));
+      assert.match(String(url), /rksurfmag\.club\/wp-json\/wp\/v2\/posts/);
+      return new Response(
+        JSON.stringify([
+          {
+            date: "2026-07-22T10:00:00",
+            link: "https://rksurfmag.club/news/one",
+            title: { rendered: "Fresh wind report" },
+            excerpt: { rendered: "<p>Short digest for riders.</p>" },
+          },
+          {
+            date: "2026-07-21T11:00:00",
+            link: "https://rksurfmag.club/news/two",
+            title: { rendered: "New equipment test" },
+            excerpt: { rendered: "<p>Boards and wings.</p>" },
+          },
+        ]),
+        {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        },
+      );
+    },
+  });
+
+  const result = await provider.search({
+    query: "latest news",
+    domain: "rksurfmag.club",
+    limit: 10,
+  });
+
+  assert.equal(requestedUrls.length, 1);
+  assert.equal(result.metadata.provider, "WordPress REST API");
+  assert.equal(result.metadata.resultCount, 2);
+  assert.match(result.text, /Fresh wind report/);
+  assert.match(result.text, /New equipment test/);
+});
+
+test("public web search provider falls back to domain RSS feed for latest news", async () => {
+  const requestedUrls = [];
+  const provider = createPublicWebSearchProvider({
+    fetchImpl: async (url) => {
+      requestedUrls.push(String(url));
+
+      if (String(url).endsWith("/rss.xml")) {
+        return new Response(
+          [
+            '<?xml version="1.0" encoding="UTF-8"?>',
+            "<rss><channel>",
+            "<item>",
+            "<title>Latest kite event</title>",
+            "<link>https://rksurfmag.club/latest-kite-event</link>",
+            "<description><![CDATA[Short event digest.]]></description>",
+            "<pubDate>Wed, 22 Jul 2026 10:00:00 +0300</pubDate>",
+            "</item>",
+            "<item>",
+            "<title>Wingfoil gear review</title>",
+            "<link>https://rksurfmag.club/wingfoil-gear-review</link>",
+            "<description>New boards and wings.</description>",
+            "<pubDate>Tue, 21 Jul 2026 11:00:00 +0300</pubDate>",
+            "</item>",
+            "</channel></rss>",
+          ].join(""),
+          {
+            status: 200,
+            headers: { "content-type": "application/rss+xml" },
+          },
+        );
+      }
+
+      return new Response("not found", { status: 404 });
+    },
+  });
+
+  const result = await provider.search({
+    query: "последние новости",
+    domain: "rksurfmag.club",
+    limit: 10,
+  });
+
+  assert.equal(requestedUrls[0], "https://rksurfmag.club/wp-json/wp/v2/posts?per_page=10&_fields=date,link,title,excerpt");
+  assert.equal(requestedUrls[1], "https://rksurfmag.club/rss.xml");
+  assert.equal(result.metadata.provider, "RSS/Atom feed");
+  assert.equal(result.metadata.resultCount, 2);
+  assert.match(result.text, /Latest kite event/);
+  assert.match(result.text, /Wingfoil gear review/);
 });
 
 test("repository backed orchestrator routes news briefing to web_current_data", async () => {

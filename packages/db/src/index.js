@@ -228,6 +228,7 @@ export function createInMemoryRepositories(seed = {}) {
     now = new Date(),
     lockMs = 60_000,
     dedupeKey = null,
+    type = null,
   } = {}) => {
     const nowDate = new Date(now);
     const nowTime = nowDate.getTime();
@@ -241,7 +242,8 @@ export function createInMemoryRepositories(seed = {}) {
           (job.status === "queued" || job.status === "running") &&
           new Date(job.runAt).getTime() <= nowTime &&
           lockExpired &&
-          (dedupeKey == null || job.dedupeKey === dedupeKey)
+          (dedupeKey == null || job.dedupeKey === dedupeKey) &&
+          (type == null || job.type === type)
         );
       })
       .sort((left, right) => new Date(left.runAt) - new Date(right.runAt))[0];
@@ -268,6 +270,52 @@ export function createInMemoryRepositories(seed = {}) {
 
     updater(stored);
     return cloneRecord(stored);
+  };
+
+  const staleRunningJobs = ({ now = new Date(), type = null, limit = 100 } = {}) => {
+    const nowTime = new Date(now).getTime();
+
+    return jobs
+      .filter((job) => {
+        const staleLock =
+          job.lockedUntil == null ||
+          new Date(job.lockedUntil).getTime() <= nowTime;
+
+        return (
+          job.status === "running" &&
+          staleLock &&
+          (type == null || job.type === type)
+        );
+      })
+      .sort((left, right) => new Date(left.runAt) - new Date(right.runAt))
+      .slice(0, Math.max(0, limit))
+      .map(cloneRecord);
+  };
+
+  const canRescheduleJob = (stored, {
+    expectedStatus = null,
+    expectedType = null,
+    requireStaleLockAt = null,
+  } = {}) => {
+    if (expectedStatus != null && stored.status !== expectedStatus) {
+      return false;
+    }
+
+    if (expectedType != null && stored.type !== expectedType) {
+      return false;
+    }
+
+    if (requireStaleLockAt != null) {
+      const staleAt = new Date(requireStaleLockAt).getTime();
+      const staleLock =
+        stored.lockedUntil == null ||
+        new Date(stored.lockedUntil).getTime() <= staleAt;
+      if (!staleLock) {
+        return false;
+      }
+    }
+
+    return true;
   };
 
   const updateJobByDedupeKey = (dedupeKey, updater) => {
@@ -607,6 +655,21 @@ export function createInMemoryRepositories(seed = {}) {
         return claimJob({ now });
       },
 
+      async listRecent({ type = null, status = null, limit = 100 } = {}) {
+        const statuses = Array.isArray(status) ? status : status == null ? null : [status];
+
+        return jobs
+          .filter((job) => type == null || job.type === type)
+          .filter((job) => statuses == null || statuses.includes(job.status))
+          .sort((left, right) => new Date(right.updatedAt) - new Date(left.updatedAt))
+          .slice(0, Math.max(0, limit))
+          .map(cloneRecord);
+      },
+
+      async listStaleRunning(options = {}) {
+        return staleRunningJobs(options);
+      },
+
       async completeJob(job, result, now = new Date()) {
         const nowDate = new Date(now);
 
@@ -631,6 +694,25 @@ export function createInMemoryRepositories(seed = {}) {
           stored.lockedBy = null;
           stored.lockedUntil = null;
           stored.failedAt = nowDate;
+          stored.updatedAt = nowDate;
+        });
+      },
+
+      async rescheduleJob(job, result = {}, runAt = new Date(), now = new Date(), options = {}) {
+        const nowDate = new Date(now);
+        const stored = jobs.find((candidate) => candidate.id === job.id);
+        if (stored == null || !canRescheduleJob(stored, options)) {
+          return null;
+        }
+
+        return updateJob(job.id, (stored) => {
+          stored.status = "queued";
+          stored.error = result.error ?? null;
+          stored.result = result;
+          stored.runAt = cloneDate(runAt) ?? nowDate;
+          stored.lockedBy = null;
+          stored.lockedUntil = null;
+          stored.failedAt = null;
           stored.updatedAt = nowDate;
         });
       },

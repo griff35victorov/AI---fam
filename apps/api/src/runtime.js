@@ -1,5 +1,9 @@
 import { handleOrchestratorRequest } from "./orchestrator.js";
-import { canStoreMemory } from "../../../packages/domain/src/index.js";
+import {
+  analyzeSupervisorState,
+  canStoreMemory,
+  formatSupervisorReport,
+} from "../../../packages/domain/src/index.js";
 import { buildAllowedMemoryContext } from "./context.js";
 import {
   buildCapabilitiesAnswer,
@@ -157,6 +161,23 @@ function canonicalMemoryContent(content) {
 function memoryAlreadyExists(memories, content) {
   const canonical = canonicalMemoryContent(content);
   return memories.some((memory) => canonicalMemoryContent(memory.content) === canonical);
+}
+
+function recordHasSourceMessageId(record, sourceMessageId) {
+  return (
+    sourceMessageId != null &&
+    Array.isArray(record?.sourceMessageIds) &&
+    record.sourceMessageIds.includes(sourceMessageId)
+  );
+}
+
+function materialAlreadyExists(materials, { title, sourceMessageId } = {}) {
+  const canonicalTitle = canonicalMemoryContent(title);
+  return materials.some(
+    (material) =>
+      recordHasSourceMessageId(material, sourceMessageId) ||
+      (canonicalTitle && canonicalMemoryContent(material.title) === canonicalTitle),
+  );
 }
 
 const journalReferencePattern =
@@ -617,7 +638,12 @@ function recentAssistantDiagnostics(messages) {
     }));
 }
 
-function buildDiagnosticsAnswer({ messages, memories, materialRepositoryAvailable }) {
+function buildDiagnosticsAnswer({
+  messages,
+  memories,
+  materialRepositoryAvailable,
+  supervisorReport = null,
+}) {
   const assistantDiagnostics = recentAssistantDiagnostics(messages);
   const durations = assistantDiagnostics
     .map((diagnostic) => diagnostic.durationMs)
@@ -633,6 +659,8 @@ function buildDiagnosticsAnswer({ messages, memories, materialRepositoryAvailabl
     `- Последний ответ: ${durationLabel(last?.durationMs)}; режим: ${last?.action ?? "нет данных"}.`,
     `- Медленных ответов в последних сообщениях: ${slowCount} (порог ${durationLabel(slowResponseThresholdMs)}).`,
     "Если обычные вопросы отвечают долго, узкое место почти всегда внешний AI-вызов. Быстрые команды, память и библиотека отвечают локально.",
+    supervisorReport ? "" : null,
+    supervisorReport ? formatSupervisorReport(supervisorReport) : null,
   ].join("\n");
 }
 
@@ -800,6 +828,41 @@ export function createRepositoryBackedOrchestrator({
       };
 
       if (repositories.memories?.create && canStoreMemory(request.actor, memory)) {
+        const existingMemories = repositories.memories?.listForActor
+          ? await repositories.memories.listForActor({
+              actorUserId: request.actor.id,
+              workspaceId: requestWorkspaceId,
+              includePrivate: true,
+              limit: 100,
+            })
+          : [];
+        if (
+          existingMemories.some((existing) =>
+            recordHasSourceMessageId(existing, storedUserMessage?.id),
+          ) ||
+          memoryAlreadyExists(existingMemories, learnedContent)
+        ) {
+          const answerText = `Уже сохранено: ${learnedContent}`;
+          await appendAssistantMessage({
+            answerText,
+            action: "learning_memory_duplicate",
+            metadata: {
+              subjectType: memory.subjectType,
+              scope: memory.scope,
+              durationMs: Date.now() - requestStartedMs,
+            },
+          });
+
+          return {
+            accepted: true,
+            answer: {
+              text: answerText,
+              source: "learning_memory_duplicate",
+            },
+            conversationId,
+          };
+        }
+
         await repositories.memories.create(memory);
         const answerText = [
           `Обучение сохранено: ${learnedContent}`,
@@ -872,6 +935,22 @@ export function createRepositoryBackedOrchestrator({
         answerText = "Я не буду сохранять материалы с паролями, токенами, ключами или данными карт.";
         source = "learning_material_rejected";
       } else {
+        const existingMaterials = repositories.materials?.listForActor
+          ? await repositories.materials.listForActor({
+              actorUserId: request.actor.id,
+              workspaceId: requestWorkspaceId,
+              limit: 100,
+            })
+          : [];
+        if (
+          materialAlreadyExists(existingMaterials, {
+            title: learningCommand.title,
+            sourceMessageId: storedUserMessage?.id,
+          })
+        ) {
+          answerText = `Материал уже есть в библиотеке: ${learningCommand.title}`;
+          source = "learning_material_duplicate";
+        } else {
         const storedMaterial = await repositories.materials.create({
           workspaceId: requestWorkspaceId,
           ownerUserId: request.actor.id,
@@ -892,6 +971,7 @@ export function createRepositoryBackedOrchestrator({
           `Фрагментов в RAG-библиотеке: ${metadata.chunkCount}.`,
           "Теперь агент будет использовать его при ответах и подготовке материалов.",
         ].join("\n");
+        }
       }
 
       const durationMs = Date.now() - requestStartedMs;
@@ -944,6 +1024,37 @@ export function createRepositoryBackedOrchestrator({
       };
 
       if (repositories.memories?.create && canStoreMemory(request.actor, memory)) {
+        const existingMemories = repositories.memories?.listForActor
+          ? await repositories.memories.listForActor({
+              actorUserId: request.actor.id,
+              workspaceId: requestWorkspaceId,
+              includePrivate: true,
+              limit: 100,
+            })
+          : [];
+        if (
+          existingMemories.some((existing) =>
+            recordHasSourceMessageId(existing, storedUserMessage?.id),
+          ) ||
+          memoryAlreadyExists(existingMemories, explicitMemory)
+        ) {
+          const answerText = `Уже запомнено: ${explicitMemory}`;
+          await appendAssistantMessage({
+            answerText,
+            action: "memory_duplicate",
+            metadata: { durationMs: Date.now() - requestStartedMs },
+          });
+
+          return {
+            accepted: true,
+            answer: {
+              text: answerText,
+              source: "memory_duplicate",
+            },
+            conversationId,
+          };
+        }
+
         await repositories.memories.create(memory);
         const answerText = `Запомнил: ${explicitMemory}`;
         await appendAssistantMessage({
@@ -996,10 +1107,22 @@ export function createRepositoryBackedOrchestrator({
             limit: diagnosticsLookupLimit,
           })
         : messages;
+      const diagnosticJobs = repositories.jobs?.listRecent
+        ? await repositories.jobs.listRecent({ limit: 200 })
+        : [];
+      const diagnosticAuditLogs = repositories.auditLogs?.listRecent
+        ? await repositories.auditLogs.listRecent({ limit: 100 })
+        : [];
+      const supervisorReport = analyzeSupervisorState({
+        jobs: diagnosticJobs,
+        auditLogs: diagnosticAuditLogs,
+        now: now(),
+      });
       const answerText = buildDiagnosticsAnswer({
         messages: diagnosticMessages,
         memories,
         materialRepositoryAvailable: Boolean(repositories.materials?.search),
+        supervisorReport,
       });
       const durationMs = Date.now() - requestStartedMs;
       await writeAuditLog(repositories, {
@@ -1398,6 +1521,22 @@ export function createRepositoryBackedOrchestrator({
         answerText = "Я не буду сохранять материалы с паролями, токенами, ключами или данными карт.";
         source = "material_rejected";
       } else {
+        const existingMaterials = repositories.materials?.listForActor
+          ? await repositories.materials.listForActor({
+              actorUserId: request.actor.id,
+              workspaceId: requestWorkspaceId,
+              limit: 100,
+            })
+          : [];
+        if (
+          materialAlreadyExists(existingMaterials, {
+            title: materialCommand.title,
+            sourceMessageId: storedUserMessage?.id,
+          })
+        ) {
+          answerText = `Материал уже есть в библиотеке: ${materialCommand.title}`;
+          source = "material_duplicate";
+        } else {
         const storedMaterial = await repositories.materials.create({
           workspaceId: requestWorkspaceId,
           ownerUserId: request.actor.id,
@@ -1417,6 +1556,7 @@ export function createRepositoryBackedOrchestrator({
           `Фрагментов в библиотеке: ${metadata.chunkCount}.`,
           "Теперь я буду искать по нему при подготовке уроков и ответах по материалам.",
         ].join("\n");
+        }
       }
 
       const durationMs = Date.now() - requestStartedMs;

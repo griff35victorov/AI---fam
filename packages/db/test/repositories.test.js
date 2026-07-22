@@ -318,6 +318,38 @@ describe("in-memory repositories", () => {
     );
   });
 
+  it("can claim only jobs matching a type", async () => {
+    const repositories = createInMemoryRepositories();
+    const runAt = new Date("2026-07-20T12:00:00.000Z");
+
+    const reminder = await repositories.jobs.enqueue({
+      type: "send_reminder",
+      payload: { reminderId: "reminder-1" },
+      runAt,
+      dedupeKey: "send_reminder:reminder-1",
+    });
+    const telegramUpdate = await repositories.jobs.enqueue({
+      type: "telegram-update",
+      payload: { botKey: "owner", update: { update_id: 1000 } },
+      runAt,
+      dedupeKey: "telegram-update:owner:update:1000",
+    });
+
+    const claimedTelegram = await repositories.jobs.claim({
+      workerId: "telegram-worker",
+      now: new Date("2026-07-20T12:01:00.000Z"),
+      type: "telegram-update",
+    });
+    assert.equal(claimedTelegram.id, telegramUpdate.id);
+
+    const claimedReminder = await repositories.jobs.claim({
+      workerId: "reminder-worker",
+      now: new Date("2026-07-20T12:01:00.000Z"),
+      type: "send_reminder",
+    });
+    assert.equal(claimedReminder.id, reminder.id);
+  });
+
   it("does not double-count attempts when failing a claimed job", async () => {
     const repositories = createInMemoryRepositories({
       jobs: [
@@ -343,6 +375,79 @@ describe("in-memory repositories", () => {
 
     assert.equal(claimed.attempts, 1);
     assert.equal(failed.attempts, 1);
+  });
+
+  it("lists stale running jobs even when they are older than recent jobs", async () => {
+    const now = new Date("2026-07-22T12:00:00.000Z");
+    const freshJobs = Array.from({ length: 220 }, (_, index) => ({
+      id: `fresh-${index}`,
+      type: "send_reminder",
+      payload: {},
+      status: "completed",
+      runAt: new Date("2026-07-22T11:00:00.000Z"),
+      updatedAt: new Date(now.getTime() - index * 1000),
+    }));
+    const repositories = createInMemoryRepositories({
+      jobs: [
+        ...freshJobs,
+        {
+          id: "old-stale",
+          type: "telegram-update",
+          payload: {},
+          status: "running",
+          runAt: new Date("2026-07-22T10:00:00.000Z"),
+          lockedUntil: new Date("2026-07-22T10:01:00.000Z"),
+          updatedAt: new Date("2026-07-22T10:01:00.000Z"),
+        },
+      ],
+    });
+
+    const recent = await repositories.jobs.listRecent({ limit: 200 });
+    const stale = await repositories.jobs.listStaleRunning({ now, limit: 10 });
+
+    assert.equal(recent.some((job) => job.id === "old-stale"), false);
+    assert.deepEqual(stale.map((job) => job.id), ["old-stale"]);
+  });
+
+  it("reschedules jobs conditionally to avoid racing fresh claims", async () => {
+    const now = new Date("2026-07-22T12:00:00.000Z");
+    const repositories = createInMemoryRepositories({
+      jobs: [
+        {
+          id: "stale-update",
+          type: "telegram-update",
+          payload: {},
+          status: "running",
+          runAt: new Date("2026-07-22T11:50:00.000Z"),
+          lockedUntil: new Date("2026-07-22T11:55:00.000Z"),
+          lockedBy: "old-worker",
+        },
+      ],
+    });
+    const [stale] = await repositories.jobs.listStaleRunning({ now, limit: 10 });
+    await repositories.jobs.claim({
+      workerId: "fresh-worker",
+      now,
+      type: "telegram-update",
+      lockMs: 60_000,
+    });
+
+    const rescheduled = await repositories.jobs.rescheduleJob(
+      stale,
+      { status: "supervisor_requeued" },
+      now,
+      now,
+      {
+        expectedStatus: "running",
+        expectedType: "telegram-update",
+        requireStaleLockAt: now,
+      },
+    );
+    const jobs = await repositories.jobs.listRecent({ limit: 1 });
+
+    assert.equal(rescheduled, null);
+    assert.equal(jobs[0].status, "running");
+    assert.equal(jobs[0].lockedBy, "fresh-worker");
   });
 
   it("claims Telegram delivery once and reclaims only processing failures", async () => {

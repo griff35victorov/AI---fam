@@ -167,7 +167,30 @@ test("production dependencies keep Telegram polling disabled by default in produ
   });
 
   assert.equal(dependencies.telegramPollingEnabled, false);
+  assert.equal(dependencies.telegramUpdateQueueEnabled, true);
+  assert.equal(dependencies.telegramUpdateDispatcherIntervalMs, 1000);
+  assert.equal(dependencies.telegramUpdateDispatcherMaxJobs, 10);
+  assert.equal(dependencies.telegramUpdateDispatcherMaxAttempts, 3);
+  assert.equal(dependencies.telegramUpdateDispatcherRetryDelayMs, 5000);
+  assert.equal(dependencies.supervisorEnabled, true);
+  assert.equal(dependencies.supervisorIntervalMs, 60_000);
+  assert.equal(dependencies.supervisorAlertCooldownMs, 600_000);
+  assert.equal(dependencies.supervisorAutoHeal, true);
+  assert.equal(dependencies.supervisorAuditOkTicks, false);
+  assert.equal(dependencies.supervisorAuditDedupMs, 600_000);
   assert.deepEqual(dependencies.telegramPollingBotTokens, { owner: "owner-token" });
+});
+
+test("production dependencies disable durable queue defaults without repositories", () => {
+  const dependencies = createProductionDependencies({
+    env: {
+      NODE_ENV: "production",
+      TELEGRAM_OWNER_BOT_TOKEN: "owner-token",
+    },
+  });
+
+  assert.equal(dependencies.telegramUpdateQueueEnabled, false);
+  assert.equal(dependencies.supervisorEnabled, false);
 });
 
 test("production dependencies enable Telegram polling only when explicitly requested", () => {
@@ -361,6 +384,7 @@ test("server env factory uses production dependencies for Telegram webhook", asy
       TIMEWEB_AGENT_OWNER_ASSISTANT: "agent-owner",
       TELEGRAM_BOT_TOKEN: "telegram-token",
       TELEGRAM_REPLY_MODE: "send_message",
+      TELEGRAM_UPDATE_QUEUE_ENABLED: "false",
     },
     repositories,
     fetchImpl: async (...args) => {
@@ -460,6 +484,7 @@ test("async server env factory creates Prisma repositories when DATABASE_URL is 
       TIMEWEB_AGENT_OWNER_ASSISTANT: "agent-owner",
       TELEGRAM_BOT_TOKEN: "telegram-token",
       TELEGRAM_REPLY_MODE: "send_message",
+      TELEGRAM_UPDATE_QUEUE_ENABLED: "false",
     },
     importPrismaClient: async () => ({ PrismaClient: FakePrismaClient }),
     fetchImpl: async (...args) => {

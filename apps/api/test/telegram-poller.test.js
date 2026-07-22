@@ -43,11 +43,12 @@ test("pollTelegramBotOnce fetches Telegram updates and advances offset", async (
   assert.deepEqual(result, { nextOffset: 43, updateCount: 2 });
 });
 
-test("pollTelegramBotOnce advances offset even when one update handler fails", async () => {
+test("pollTelegramBotOnce keeps offset when an update handler fails", async () => {
   const errors = [];
 
   const result = await pollTelegramBotOnce({
     botKey: "teacher",
+    offset: 9,
     botToken: "teacher-token",
     fetchImpl: async () => ({
       ok: true,
@@ -69,7 +70,7 @@ test("pollTelegramBotOnce advances offset even when one update handler fails", a
     },
   });
 
-  assert.deepEqual(result, { nextOffset: 10, updateCount: 1 });
+  assert.deepEqual(result, { nextOffset: 9, updateCount: 1 });
   assert.equal(errors.length, 1);
   assert.equal(errors[0].message, "telegram polling update failed");
   assert.equal(errors[0].metadata.botKey, "teacher");

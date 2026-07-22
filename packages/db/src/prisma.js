@@ -147,7 +147,7 @@ function scoreMaterialChunk(chunk, material, queryTerms) {
   }, 0);
 }
 
-function claimWhere(now, { dedupeKey = null } = {}) {
+function claimWhere(now, { dedupeKey = null, type = null } = {}) {
   const where = {
     status: { in: ["queued", "running"] },
     runAt: { lte: now },
@@ -158,16 +158,58 @@ function claimWhere(now, { dedupeKey = null } = {}) {
     where.dedupeKey = dedupeKey;
   }
 
+  if (type != null) {
+    where.type = type;
+  }
+
+  return where;
+}
+
+function staleRunningWhere(now, { type = null } = {}) {
+  const where = {
+    status: "running",
+    OR: [{ lockedUntil: null }, { lockedUntil: { lte: now } }],
+  };
+
+  if (type != null) {
+    where.type = type;
+  }
+
+  return where;
+}
+
+function rescheduleWhere(job, {
+  expectedStatus = null,
+  expectedType = null,
+  requireStaleLockAt = null,
+} = {}) {
+  const where = { id: job.id };
+
+  if (expectedStatus != null) {
+    where.status = expectedStatus;
+  }
+
+  if (expectedType != null) {
+    where.type = expectedType;
+  }
+
+  if (requireStaleLockAt != null) {
+    where.OR = [
+      { lockedUntil: null },
+      { lockedUntil: { lte: new Date(requireStaleLockAt) } },
+    ];
+  }
+
   return where;
 }
 
 async function claimJob(
   prisma,
-  { workerId = null, now = new Date(), lockMs = defaultLockMs, dedupeKey = null } = {},
+  { workerId = null, now = new Date(), lockMs = defaultLockMs, dedupeKey = null, type = null } = {},
 ) {
   const nowDate = new Date(now);
   const lockUntil = new Date(nowDate.getTime() + lockMs);
-  const where = claimWhere(nowDate, { dedupeKey });
+  const where = claimWhere(nowDate, { dedupeKey, type });
 
   return prisma.$transaction(async (tx) => {
     const job = await tx.job.findFirst({
@@ -182,7 +224,7 @@ async function claimJob(
     const claimed = await tx.job.updateMany({
       where: {
         id: job.id,
-        ...claimWhere(nowDate, { dedupeKey }),
+        ...claimWhere(nowDate, { dedupeKey, type }),
       },
       data: {
         status: "running",
@@ -552,9 +594,13 @@ export function createPrismaRepositories(prisma) {
                       OR: [
                         {
                           status: "failed",
+                          NOT: {
+                            result: { path: ["stage"], equals: "send" },
+                          },
                         },
                         {
                           status: "running",
+                          result: { path: ["stage"], equals: "processing" },
                           lockedUntil: { lte: nowDate },
                         },
                       ],
@@ -664,6 +710,31 @@ export function createPrismaRepositories(prisma) {
         return claimJob(prisma, { now });
       },
 
+      async listRecent({ type = null, status = null, limit = 100 } = {}) {
+        const where = {};
+        const statuses = Array.isArray(status) ? status : status == null ? null : [status];
+        if (type != null) {
+          where.type = type;
+        }
+        if (statuses != null) {
+          where.status = { in: statuses };
+        }
+
+        return prisma.job.findMany({
+          where,
+          orderBy: { updatedAt: "desc" },
+          take: Math.max(0, limit),
+        });
+      },
+
+      async listStaleRunning({ type = null, now = new Date(), limit = 100 } = {}) {
+        return prisma.job.findMany({
+          where: staleRunningWhere(new Date(now), { type }),
+          orderBy: { runAt: "asc" },
+          take: Math.max(0, limit),
+        });
+      },
+
       async completeJob(job, result, now = new Date()) {
         const nowDate = new Date(now);
 
@@ -695,6 +766,32 @@ export function createPrismaRepositories(prisma) {
             failedAt: nowDate,
             updatedAt: nowDate,
           },
+        });
+      },
+
+      async rescheduleJob(job, result = {}, runAt = new Date(), now = new Date(), options = {}) {
+        const nowDate = new Date(now);
+
+        const updated = await prisma.job.updateMany({
+          where: rescheduleWhere(job, options),
+          data: {
+            status: "queued",
+            error: result.error ?? null,
+            result,
+            runAt: new Date(runAt),
+            lockedBy: null,
+            lockedUntil: null,
+            failedAt: null,
+            updatedAt: nowDate,
+          },
+        });
+
+        if (updated.count !== 1) {
+          return null;
+        }
+
+        return prisma.job.findUnique({
+          where: { id: job.id },
         });
       },
     },
