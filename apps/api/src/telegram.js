@@ -457,6 +457,14 @@ async function markTelegramReplySent({ repositories, key, chatId, text } = {}) {
   });
 }
 
+async function markTelegramReplySending({ repositories, key, chatId } = {}) {
+  if (!key || typeof repositories?.telegramDeliveries?.markSending !== "function") {
+    return;
+  }
+
+  await repositories.telegramDeliveries.markSending(key, { chatId });
+}
+
 async function markTelegramReplyFailed({ repositories, key, stage, error } = {}) {
   if (!key || typeof repositories?.telegramDeliveries?.markFailed !== "function") {
     return;
@@ -523,6 +531,7 @@ export async function handleTelegramUpdate(
 
   async function finish({ chatId, text }) {
     try {
+      await markTelegramReplySending({ repositories, key: delivery.key, chatId });
       await sendTelegramReply(telegramSender, { chatId, text });
       await markTelegramReplySent({ repositories, key: delivery.key, chatId, text });
     } catch (error) {

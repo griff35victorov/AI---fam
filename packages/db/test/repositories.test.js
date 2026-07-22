@@ -365,6 +365,33 @@ describe("in-memory repositories", () => {
     assert.equal(first.claimed, true);
     assert.equal(duplicate.claimed, false);
 
+    const retryBeforeProcessingLockExpires = await repositories.telegramDeliveries.claim({
+      key,
+      botKey: "owner",
+      updateId: 123,
+      chatId: 777,
+    });
+    assert.equal(retryBeforeProcessingLockExpires.claimed, false);
+
+    const retryAfterProcessingLockExpires = await repositories.telegramDeliveries.claim({
+      key,
+      botKey: "owner",
+      updateId: 123,
+      chatId: 777,
+      now: new Date(Date.now() + 6 * 60_000),
+    });
+    assert.equal(retryAfterProcessingLockExpires.claimed, true);
+
+    await repositories.telegramDeliveries.markSending(key, { chatId: 777 });
+    const retryAfterSendStarts = await repositories.telegramDeliveries.claim({
+      key,
+      botKey: "owner",
+      updateId: 123,
+      chatId: 777,
+      now: new Date(Date.now() + 12 * 60_000),
+    });
+    assert.equal(retryAfterSendStarts.claimed, false);
+
     await repositories.telegramDeliveries.markFailed(key, {
       stage: "processing",
       error: "AI failed",

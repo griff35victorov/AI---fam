@@ -515,6 +515,7 @@ export function createPrismaRepositories(prisma) {
                     type: "telegram-delivery",
                     payload: { botKey, updateId, chatId },
                     status: "running",
+                    result: { stage: "processing" },
                     runAt: nowDate,
                     attempts: 1,
                     lockedBy: "telegram-delivery",
@@ -534,14 +535,34 @@ export function createPrismaRepositories(prisma) {
                 const delivery = await prisma.job.findUnique({
                   where: { dedupeKey: key },
                 });
-                if (delivery?.status === "failed" && delivery.result?.stage !== "send") {
+                const lockExpired =
+                  delivery?.lockedUntil != null &&
+                  new Date(delivery.lockedUntil).getTime() <= nowDate.getTime();
+                const retryableFailure =
+                  delivery?.status === "failed" && delivery.result?.stage !== "send";
+                const retryableExpiredProcessing =
+                  delivery?.status === "running" &&
+                  delivery.result?.stage === "processing" &&
+                  lockExpired;
+
+                if (retryableFailure || retryableExpiredProcessing) {
                   const reclaimed = await prisma.job.updateMany({
                     where: {
                       dedupeKey: key,
-                      status: "failed",
+                      OR: [
+                        {
+                          status: "failed",
+                        },
+                        {
+                          status: "running",
+                          lockedUntil: { lte: nowDate },
+                        },
+                      ],
                     },
                     data: {
                       status: "running",
+                      result: { stage: "processing" },
+                      error: null,
                       attempts: { increment: 1 },
                       lockedBy: "telegram-delivery",
                       lockedUntil,
@@ -574,6 +595,24 @@ export function createPrismaRepositories(prisma) {
                   lockedUntil: null,
                   completedAt: new Date(now),
                   updatedAt: new Date(now),
+                },
+              });
+            },
+
+            async markSending(key, result = {}, now = new Date()) {
+              const nowDate = new Date(now);
+              return prisma.job.update({
+                where: { dedupeKey: key },
+                data: {
+                  status: "running",
+                  result: {
+                    ...result,
+                    stage: "send",
+                  },
+                  error: null,
+                  lockedBy: "telegram-delivery",
+                  lockedUntil: new Date(nowDate.getTime() + 5 * 60_000),
+                  updatedAt: nowDate,
                 },
               });
             },

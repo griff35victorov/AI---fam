@@ -65,6 +65,15 @@ function createDelegate(rows, idPrefix) {
     },
 
     async create({ data }) {
+      if (
+        data.dedupeKey != null &&
+        rows.some((row) => row.dedupeKey === data.dedupeKey)
+      ) {
+        const error = new Error("Unique constraint failed on dedupeKey");
+        error.code = "P2002";
+        throw error;
+      }
+
       const stored = {
         id: data.id ?? `${idPrefix}-${nextId++}`,
         createdAt: data.createdAt ?? new Date(),
@@ -487,6 +496,55 @@ describe("Prisma repositories", () => {
     });
 
     assert.equal(upsertCalled, true);
+  });
+
+  it("reclaims expired processing Telegram deliveries without retrying send-stage entries", async () => {
+    const key = "telegram:owner:123:reply";
+    const prisma = createFakePrisma({
+      jobs: [
+        {
+          id: "job-telegram-1",
+          type: "telegram-delivery",
+          payload: { botKey: "owner", updateId: 123, chatId: 777 },
+          status: "running",
+          result: { stage: "processing" },
+          runAt: new Date("2026-07-20T12:00:00.000Z"),
+          attempts: 1,
+          lockedBy: "telegram-delivery",
+          lockedUntil: new Date("2026-07-20T12:05:00.000Z"),
+          dedupeKey: key,
+          createdAt: new Date("2026-07-20T12:00:00.000Z"),
+          updatedAt: new Date("2026-07-20T12:00:00.000Z"),
+        },
+      ],
+    });
+    const repositories = createPrismaRepositories(prisma);
+
+    const reclaimed = await repositories.telegramDeliveries.claim({
+      key,
+      botKey: "owner",
+      updateId: 123,
+      chatId: 777,
+      now: new Date("2026-07-20T12:06:00.000Z"),
+    });
+    assert.equal(reclaimed.claimed, true);
+    assert.equal(reclaimed.delivery.attempts, 2);
+    assert.equal(reclaimed.delivery.result.stage, "processing");
+
+    await repositories.telegramDeliveries.markSending(
+      key,
+      { chatId: 777 },
+      new Date("2026-07-20T12:07:00.000Z"),
+    );
+    const afterSendStarted = await repositories.telegramDeliveries.claim({
+      key,
+      botKey: "owner",
+      updateId: 123,
+      chatId: 777,
+      now: new Date("2026-07-20T12:20:00.000Z"),
+    });
+    assert.equal(afterSendStarted.claimed, false);
+    assert.equal(afterSendStarted.delivery.result.stage, "send");
   });
 
   it("uses conditional update when claiming jobs", async () => {

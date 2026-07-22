@@ -482,9 +482,24 @@ export function createInMemoryRepositories(seed = {}) {
 
         const existing = jobs.find((candidate) => candidate.dedupeKey === key);
         if (existing != null) {
-          if (existing.status === "failed" && existing.result?.stage !== "send") {
-            const nowDate = cloneDate(now) ?? new Date();
+          const nowDate = cloneDate(now) ?? new Date();
+          const lockExpired =
+            existing.lockedUntil != null &&
+            new Date(existing.lockedUntil).getTime() <= nowDate.getTime();
+          const retryableFailure =
+            existing.status === "failed" && existing.result?.stage !== "send";
+          const retryableExpiredProcessing =
+            existing.status === "running" &&
+            existing.result?.stage === "processing" &&
+            lockExpired;
+
+          if (retryableFailure || retryableExpiredProcessing) {
             existing.status = "running";
+            existing.result = {
+              ...(existing.result ?? {}),
+              stage: "processing",
+            };
+            existing.error = null;
             existing.attempts += 1;
             existing.lockedBy = "telegram-delivery";
             existing.lockedUntil = new Date(nowDate.getTime() + 5 * 60_000);
@@ -500,6 +515,7 @@ export function createInMemoryRepositories(seed = {}) {
           type: "telegram-delivery",
           payload: { botKey, updateId, chatId },
           status: "running",
+          result: { stage: "processing" },
           runAt: nowDate,
           attempts: 1,
           lockedBy: "telegram-delivery",
@@ -523,6 +539,23 @@ export function createInMemoryRepositories(seed = {}) {
           stored.lockedBy = null;
           stored.lockedUntil = null;
           stored.completedAt = nowDate;
+          stored.updatedAt = nowDate;
+        });
+      },
+
+      async markSending(key, result = {}, now = new Date()) {
+        const nowDate = cloneDate(now) ?? new Date();
+
+        return updateJobByDedupeKey(key, (stored) => {
+          stored.status = "running";
+          stored.result = {
+            ...(stored.result ?? {}),
+            ...result,
+            stage: "send",
+          };
+          stored.error = null;
+          stored.lockedBy = "telegram-delivery";
+          stored.lockedUntil = new Date(nowDate.getTime() + 5 * 60_000);
           stored.updatedAt = nowDate;
         });
       },

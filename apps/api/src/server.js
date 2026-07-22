@@ -232,8 +232,17 @@ function telegramReplyDeliveryKey(update, botKey) {
   return `telegram:${botKey ?? "default"}:${update.update_id}:reply`;
 }
 
-function isRetryableTelegramDelivery(delivery) {
-  return delivery?.status === "failed" && delivery?.result?.stage !== "send";
+function isRetryableTelegramDelivery(delivery, now = new Date()) {
+  if (delivery?.status === "failed" && delivery?.result?.stage !== "send") {
+    return true;
+  }
+
+  return (
+    delivery?.status === "running" &&
+    delivery.result?.stage === "processing" &&
+    delivery.lockedUntil != null &&
+    new Date(delivery.lockedUntil).getTime() <= new Date(now).getTime()
+  );
 }
 
 async function isTelegramReplyDeliveryDuplicate({ repositories, update, botKey } = {}) {
