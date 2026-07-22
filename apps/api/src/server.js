@@ -419,6 +419,74 @@ export function createAppServer(options = {}) {
         const routeReplyMode = telegramReplyMode;
 
         if (routeReplyMode === "webhook_response") {
+          const earlyBackgroundSender = resolveTelegramSender({
+            botKey,
+            telegramSender: telegramBackgroundSender,
+            telegramSenders: telegramBackgroundSenders,
+          });
+
+          if (earlyBackgroundSender) {
+            sendJson(response, 200, buildWebhookOkResponse());
+
+            const backgroundKey = telegramBackgroundUpdateKey(body, botKey);
+            Promise.resolve()
+              .then(async () => {
+                let reservedBackgroundKey = false;
+                if (backgroundKey) {
+                  if (telegramBackgroundUpdates.has(backgroundKey)) {
+                    return;
+                  }
+                  telegramBackgroundUpdates.add(backgroundKey);
+                  reservedBackgroundKey = true;
+                }
+
+                if (
+                  await isTelegramReplyDeliveryDuplicate({ repositories, update: body, botKey })
+                ) {
+                  if (reservedBackgroundKey) {
+                    telegramBackgroundUpdates.delete(backgroundKey);
+                  }
+                  return;
+                }
+
+                setTimeout(() => {
+                  runTelegramBackgroundUpdate({
+                    body,
+                    users,
+                    repositories,
+                    orchestrator,
+                    telegramSender: earlyBackgroundSender,
+                    voiceTranscriber: resolveVoiceTranscriber({
+                      botKey,
+                      voiceTranscriber,
+                      voiceTranscribers,
+                    }),
+                    imageOcr: resolveImageOcr({
+                      botKey,
+                      imageOcr,
+                      imageOcrs,
+                    }),
+                    documentTextExtractor: resolveDocumentTextExtractor({
+                      botKey,
+                      documentTextExtractor,
+                      documentTextExtractors,
+                    }),
+                    botKey,
+                    backgroundKey,
+                    telegramBackgroundUpdates,
+                  });
+                }, telegramBackgroundDelayMs);
+              })
+              .catch((error) => {
+                if (backgroundKey) {
+                  telegramBackgroundUpdates.delete(backgroundKey);
+                }
+                logTelegramBackgroundError(error);
+              });
+
+            return;
+          }
+
           const telegramRequest = await buildTelegramWebhookRequest(body, {
             users,
             repositories,
