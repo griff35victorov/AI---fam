@@ -463,22 +463,23 @@ const webChatPage = `<!doctype html>
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Семейный AI - резервный чат</title>
+  <title>Семейный AI - чат-квест</title>
   <style>
     :root {
       color-scheme: light;
-      --bg: #f5f7f3;
+      --bg: #fff7e7;
       --surface: #ffffff;
-      --surface-soft: #eef3ee;
-      --surface-strong: #f8fbf8;
-      --ink: #17211b;
-      --muted: #5b675f;
-      --line: #d7dfd8;
-      --accent: #b9435f;
-      --accent-strong: #8f2540;
-      --accent-soft: #fde8ee;
-      --green: #2f6d4f;
-      --shadow: 0 28px 70px rgba(55, 72, 58, .16);
+      --surface-soft: #fff1cc;
+      --ink: #182016;
+      --muted: #64705f;
+      --line: #eadcba;
+      --accent: #f05d7f;
+      --accent-strong: #b92f54;
+      --accent-soft: #ffe2ea;
+      --mint: #64c995;
+      --sky: #b9e5ff;
+      --sun: #ffb547;
+      --shadow: 0 30px 80px rgba(75, 54, 23, .16);
       --ease: cubic-bezier(.2, .8, .2, 1);
       font-family: "Segoe UI Variable", "Segoe UI", system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
       background: var(--bg);
@@ -490,8 +491,8 @@ const webChatPage = `<!doctype html>
       margin: 0;
       min-height: 100dvh;
       background:
-        linear-gradient(135deg, rgba(255, 255, 255, .92), rgba(236, 243, 235, .88)),
-        linear-gradient(90deg, rgba(185, 67, 95, .08), rgba(47, 109, 79, .1));
+        linear-gradient(135deg, rgba(255, 247, 231, .96), rgba(232, 252, 238, .92)),
+        repeating-linear-gradient(45deg, rgba(240, 93, 127, .08) 0 2px, transparent 2px 18px);
       color: var(--ink);
     }
     body::before {
@@ -500,9 +501,9 @@ const webChatPage = `<!doctype html>
       inset: 0;
       pointer-events: none;
       background-image:
-        linear-gradient(rgba(23, 33, 27, .04) 1px, transparent 1px),
-        linear-gradient(90deg, rgba(23, 33, 27, .04) 1px, transparent 1px);
-      background-size: 44px 44px;
+        linear-gradient(rgba(24, 32, 22, .035) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(24, 32, 22, .035) 1px, transparent 1px);
+      background-size: 38px 38px;
       mask-image: linear-gradient(to bottom, rgba(0, 0, 0, .55), transparent 75%);
     }
     button, input, select, textarea { font: inherit; }
@@ -513,14 +514,14 @@ const webChatPage = `<!doctype html>
       margin: 0 auto;
       padding: 18px;
       display: grid;
-      grid-template-columns: minmax(280px, 360px) minmax(0, 1fr);
+      grid-template-columns: minmax(300px, 390px) minmax(0, 1fr);
       gap: 18px;
     }
     .family-panel, .chat-panel {
       position: relative;
       border: 1px solid rgba(88, 105, 91, .18);
-      border-radius: 22px;
-      background: rgba(255, 255, 255, .86);
+      border-radius: 26px;
+      background: rgba(255, 255, 255, .88);
       box-shadow: var(--shadow);
       overflow: hidden;
     }
@@ -531,8 +532,10 @@ const webChatPage = `<!doctype html>
     .family-card {
       min-height: 100%;
       border: 1px solid rgba(255, 255, 255, .85);
-      border-radius: 16px;
-      background: linear-gradient(180deg, rgba(255, 255, 255, .94), rgba(243, 248, 242, .9));
+      border-radius: 20px;
+      background:
+        linear-gradient(180deg, rgba(255, 255, 255, .96), rgba(255, 241, 204, .9)),
+        repeating-linear-gradient(-8deg, transparent 0 18px, rgba(100, 201, 149, .08) 18px 21px);
       padding: 16px;
       display: grid;
       align-content: start;
@@ -541,7 +544,7 @@ const webChatPage = `<!doctype html>
     .brand-lockup { display: grid; gap: 8px; }
     .eyebrow {
       margin: 0;
-      color: var(--accent-strong);
+      color: #1c6f49;
       font-size: 12px;
       font-weight: 800;
       text-transform: uppercase;
@@ -551,42 +554,15 @@ const webChatPage = `<!doctype html>
     h1 {
       color: var(--ink);
       font-size: clamp(32px, 5vw, 56px);
-      line-height: .98;
+      line-height: .95;
       letter-spacing: 0;
-      max-width: 8ch;
+      max-width: 9ch;
     }
     .lead-copy {
       color: var(--muted);
       font-size: 15px;
       line-height: 1.5;
       max-width: 34ch;
-    }
-    .status-row {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 8px;
-    }
-    .status {
-      min-height: 32px;
-      display: inline-flex;
-      align-items: center;
-      gap: 8px;
-      border: 1px solid rgba(47, 109, 79, .2);
-      border-radius: 999px;
-      background: rgba(255, 255, 255, .78);
-      color: #244536;
-      padding: 7px 10px;
-      font-size: 12px;
-      font-weight: 750;
-      line-height: 1;
-      white-space: nowrap;
-    }
-    .status::before {
-      content: "";
-      width: 7px;
-      height: 7px;
-      border-radius: 999px;
-      background: var(--green);
     }
     .family-gallery {
       display: grid;
@@ -595,30 +571,33 @@ const webChatPage = `<!doctype html>
     .lead-photo {
       margin: 0;
       aspect-ratio: 479 / 671;
-      border-radius: 18px;
+      border-radius: 24px;
       background: #dfe7dd;
       overflow: hidden;
       position: relative;
-      box-shadow: 0 16px 38px rgba(31, 45, 34, .18);
+      border: 7px solid #ffffff;
+      transform: rotate(-1.4deg);
+      box-shadow: 0 20px 42px rgba(75, 54, 23, .18);
     }
     .lead-photo img, .family-avatar img {
       width: 100%;
       height: 100%;
       display: block;
       object-fit: cover;
+      filter: saturate(1.08) contrast(1.03);
     }
     .lead-photo figcaption {
       position: absolute;
       left: 10px;
       bottom: 10px;
       max-width: calc(100% - 20px);
-      border-radius: 999px;
-      background: rgba(255, 255, 255, .86);
+      border-radius: 14px;
+      background: #ffcf5a;
       color: var(--ink);
-      padding: 7px 10px;
+      padding: 8px 11px;
       font-size: 12px;
       font-weight: 800;
-      box-shadow: 0 8px 20px rgba(20, 34, 25, .16);
+      box-shadow: 0 8px 20px rgba(75, 54, 23, .16);
     }
     .avatar-grid {
       display: grid;
@@ -628,36 +607,103 @@ const webChatPage = `<!doctype html>
     .family-avatar {
       margin: 0;
       aspect-ratio: 1;
-      border-radius: 16px;
+      border-radius: 20px;
       background: #edf1ea;
       overflow: hidden;
-      border: 3px solid #ffffff;
-      box-shadow: 0 9px 20px rgba(46, 61, 50, .13);
+      border: 5px solid #ffffff;
+      box-shadow: 0 11px 24px rgba(75, 54, 23, .13);
     }
-    .prompt-stack {
+    .family-avatar:nth-child(1) { transform: rotate(1.8deg); }
+    .family-avatar:nth-child(2) { transform: rotate(-1.2deg); }
+    .family-avatar:nth-child(3) { transform: rotate(1.1deg); }
+    .route-tags {
       display: grid;
-      gap: 8px;
-      padding-top: 2px;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 9px;
     }
-    .prompt-chip {
-      width: 100%;
-      border: 1px solid rgba(185, 67, 95, .16);
-      border-radius: 14px;
+    .route-tag {
+      min-height: 54px;
+      display: grid;
+      align-content: center;
+      border: 2px solid rgba(24, 32, 22, .1);
+      border-radius: 18px;
+      padding: 10px 12px;
+      background: var(--surface);
+      color: var(--ink);
+      font-size: 13px;
+      font-weight: 850;
+      box-shadow: 0 10px 22px rgba(75, 54, 23, .08);
+    }
+    .route-tag:nth-child(1) { background: #dff8df; }
+    .route-tag:nth-child(2) { background: #e0f2ff; }
+    .route-tag:nth-child(3) { background: #ffe0e9; }
+    .route-tag:nth-child(4) { background: #fff0bd; }
+    .quest-board {
+      border: 2px solid rgba(24, 32, 22, .12);
+      border-radius: 22px;
+      background: #ffffff;
+      padding: 13px;
+      display: grid;
+      gap: 11px;
+      box-shadow: 0 16px 32px rgba(75, 54, 23, .1);
+    }
+    .quest-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 10px;
+    }
+    .quest-head strong {
+      font-size: 15px;
+      line-height: 1.1;
+    }
+    .mission-score {
+      min-width: 68px;
+      border-radius: 999px;
       background: var(--accent-soft);
       color: var(--accent-strong);
-      padding: 11px 12px;
-      text-align: left;
-      font-size: 13px;
-      font-weight: 760;
-      transition: transform 360ms var(--ease), border-color 360ms var(--ease), background 360ms var(--ease);
+      padding: 7px 10px;
+      text-align: center;
+      font-size: 12px;
+      font-weight: 900;
     }
-    .prompt-chip:hover { transform: translateY(-1px); border-color: rgba(185, 67, 95, .32); }
-    .system-note {
-      border-top: 1px solid var(--line);
-      padding-top: 13px;
+    .level-meter {
+      height: 12px;
+      overflow: hidden;
+      border-radius: 999px;
+      background: #f2ead6;
+    }
+    .level-fill {
+      width: 0%;
+      height: 100%;
+      border-radius: inherit;
+      background: linear-gradient(90deg, var(--mint), var(--sun), var(--accent));
+      transition: width 360ms var(--ease);
+    }
+    .level-caption {
       color: var(--muted);
-      font-size: 13px;
-      line-height: 1.45;
+      font-size: 12px;
+      font-weight: 750;
+    }
+    .badge-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 7px;
+    }
+    .badge {
+      border-radius: 999px;
+      border: 1px solid rgba(24, 32, 22, .1);
+      background: #f4f0e4;
+      color: #7b786f;
+      padding: 6px 9px;
+      font-size: 12px;
+      font-weight: 850;
+      transition: background 260ms var(--ease), color 260ms var(--ease), transform 260ms var(--ease);
+    }
+    .badge.is-on {
+      background: #182016;
+      color: #ffffff;
+      transform: translateY(-1px);
     }
     .chat-panel {
       min-height: calc(100dvh - 36px);
@@ -667,8 +713,8 @@ const webChatPage = `<!doctype html>
     .chat-core {
       min-height: 100%;
       border: 1px solid rgba(255, 255, 255, .88);
-      border-radius: 16px;
-      background: rgba(248, 251, 248, .92);
+      border-radius: 20px;
+      background: rgba(255, 253, 247, .94);
       display: grid;
       grid-template-rows: auto minmax(280px, 1fr) auto;
       overflow: hidden;
@@ -680,7 +726,9 @@ const webChatPage = `<!doctype html>
       align-items: end;
       padding: 16px;
       border-bottom: 1px solid var(--line);
-      background: rgba(255, 255, 255, .72);
+      background:
+        linear-gradient(90deg, rgba(255, 207, 90, .26), rgba(255, 255, 255, .72)),
+        rgba(255, 255, 255, .82);
     }
     .chat-title { display: grid; gap: 5px; }
     h2 {
@@ -709,7 +757,7 @@ const webChatPage = `<!doctype html>
       min-width: 0;
       width: 100%;
       border: 1px solid rgba(88, 105, 91, .25);
-      border-radius: 14px;
+      border-radius: 18px;
       background: rgba(255, 255, 255, .94);
       color: var(--ink);
       padding: 12px 13px;
@@ -735,13 +783,13 @@ const webChatPage = `<!doctype html>
       padding: 18px;
       scroll-behavior: smooth;
       background:
-        linear-gradient(rgba(248, 251, 248, .94), rgba(248, 251, 248, .94)),
-        linear-gradient(120deg, rgba(47, 109, 79, .06), rgba(185, 67, 95, .06));
+        linear-gradient(rgba(255, 253, 247, .94), rgba(255, 253, 247, .94)),
+        repeating-linear-gradient(-35deg, rgba(255, 181, 71, .12) 0 3px, transparent 3px 24px);
     }
     .message {
       width: min(76%, 68ch);
       border: 1px solid rgba(88, 105, 91, .16);
-      border-radius: 16px;
+      border-radius: 20px;
       background: var(--surface);
       color: var(--ink);
       padding: 11px 13px 12px;
@@ -749,13 +797,13 @@ const webChatPage = `<!doctype html>
       gap: 5px;
       white-space: pre-wrap;
       line-height: 1.45;
-      box-shadow: 0 10px 24px rgba(44, 57, 47, .08);
+      box-shadow: 0 12px 24px rgba(75, 54, 23, .08);
       animation: message-in 420ms var(--ease) both;
     }
     .message.user {
       justify-self: end;
       border-color: rgba(185, 67, 95, .22);
-      background: #fff0f4;
+      background: #ffe6ef;
     }
     .message.assistant { justify-self: start; }
     .message.error {
@@ -785,7 +833,7 @@ const webChatPage = `<!doctype html>
     .composer {
       padding: 14px 16px 16px;
       border-top: 1px solid var(--line);
-      background: rgba(255, 255, 255, .72);
+      background: rgba(255, 255, 255, .84);
       display: grid;
       gap: 10px;
     }
@@ -807,7 +855,7 @@ const webChatPage = `<!doctype html>
       align-items: center;
       justify-content: center;
       border: 1px solid rgba(88, 105, 91, .24);
-      border-radius: 14px;
+      border-radius: 18px;
       background: #ffffff;
       color: var(--ink);
       padding: 0 14px;
@@ -827,7 +875,7 @@ const webChatPage = `<!doctype html>
       min-height: 48px;
       min-width: 132px;
       border: 1px solid var(--accent-strong);
-      border-radius: 14px;
+      border-radius: 18px;
       background: var(--accent);
       color: #ffffff;
       padding: 0 18px;
@@ -845,11 +893,6 @@ const webChatPage = `<!doctype html>
     }
     .file-meta {
       min-height: 18px;
-      color: var(--muted);
-      font-size: 12px;
-      line-height: 1.35;
-    }
-    .hint {
       color: var(--muted);
       font-size: 12px;
       line-height: 1.35;
@@ -873,7 +916,7 @@ const webChatPage = `<!doctype html>
         grid-template-columns: minmax(0, 1.2fr) minmax(220px, .8fr);
         align-items: start;
       }
-      .brand-lockup, .prompt-stack, .system-note { grid-column: 1; }
+      .brand-lockup, .route-tags, .quest-board { grid-column: 1; }
       .family-gallery { grid-column: 2; grid-row: 1 / span 3; }
       .lead-photo { aspect-ratio: 4 / 3; }
       h1 { max-width: 11ch; }
@@ -888,7 +931,6 @@ const webChatPage = `<!doctype html>
       }
       .family-gallery { grid-column: auto; grid-row: auto; }
       .lead-photo { aspect-ratio: 16 / 9; }
-      .prompt-stack { display: none; }
       h1 { font-size: 32px; max-width: none; }
       .lead-copy { max-width: none; }
       .chat-core { min-height: calc(100dvh - 18px); grid-template-rows: auto minmax(46dvh, 1fr) auto; }
@@ -916,19 +958,14 @@ const webChatPage = `<!doctype html>
     <aside class="family-panel" aria-label="Семейный контекст">
       <section class="family-card">
         <div class="brand-lockup">
-          <p class="eyebrow">Family workspace</p>
-          <h1>Семейный AI</h1>
-          <p class="lead-copy">Один вход для дома, учебы, английского и рабочих задач. Telegram остается основным каналом.</p>
-        </div>
-        <div class="status-row" aria-label="Статус каналов">
-          <span class="status">Telegram основной</span>
-          <span class="status">Веб резервный</span>
-          <span class="status">Общая память</span>
+          <p class="eyebrow">Family AI Camp</p>
+          <h1>Семейный маршрут</h1>
+          <p class="lead-copy">Дом, учеба, английский, планы и файлы в одном живом чате.</p>
         </div>
         <div class="family-gallery" aria-label="Семейная галерея">
           <figure class="lead-photo">
             <img src="/assets/family/family-ski.jpg" width="479" height="671" alt="Семья на зимнем отдыхе" loading="eager">
-            <figcaption>Семейный контур</figcaption>
+            <figcaption>Команда на старте</figcaption>
           </figure>
           <div class="avatar-grid">
             <figure class="family-avatar"><img src="/assets/family/daughter.jpg" width="640" height="640" alt="Профиль Милы" loading="lazy"></figure>
@@ -936,20 +973,33 @@ const webChatPage = `<!doctype html>
             <figure class="family-avatar"><img src="/assets/family/teacher-home.jpg" width="640" height="640" alt="Профиль семейного преподавателя" loading="lazy"></figure>
           </div>
         </div>
-        <div class="prompt-stack" aria-label="Быстрые задачи">
-          <button class="prompt-chip" type="button" data-prompt="Сделай краткую семейную сводку на сегодня">Семейная сводка</button>
-          <button class="prompt-chip" type="button" data-prompt="Помоги разобрать файл или картинку">Разбор файла</button>
-          <button class="prompt-chip" type="button" data-prompt="Подготовь план занятия по английскому">Английский и учеба</button>
+        <div class="route-tags" aria-label="Зоны маршрута">
+          <span class="route-tag">Дом</span>
+          <span class="route-tag">Школа</span>
+          <span class="route-tag">English</span>
+          <span class="route-tag">Проекты</span>
         </div>
-        <p class="system-note">Веб-чат использует тот же оркестр, память и инструменты. Он нужен как запасной вход, когда Telegram тормозит или нужно удобно приложить файл.</p>
+        <section class="quest-board" aria-label="Игровой прогресс">
+          <div class="quest-head">
+            <strong>Квест дня</strong>
+            <span class="mission-score"><span id="quest-points">0</span> XP</span>
+          </div>
+          <div class="level-meter" aria-hidden="true"><div id="level-fill" class="level-fill"></div></div>
+          <p id="quest-level" class="level-caption">Уровень 1. До следующего уровня 4 задания.</p>
+          <div class="badge-row" aria-label="Награды">
+            <span class="badge is-on" data-badge="starter">Старт</span>
+            <span class="badge" data-badge="helper">Помощник</span>
+            <span class="badge" data-badge="maker">Мастер</span>
+          </div>
+        </section>
       </section>
     </aside>
     <section class="chat-panel" aria-label="Чат с семейным AI">
       <div class="chat-core">
         <header class="chat-top">
           <div class="chat-title">
-            <h2>Резервный чат</h2>
-            <p>Пишите задачу, выбирайте профиль и прикладывайте материалы. Ответ сохраняется в семейной истории.</p>
+            <h2>Чат-квест</h2>
+            <p>Каждая отправленная задача продвигает семейный маршрут.</p>
           </div>
           <div class="settings">
             <label for="code">Код доступа<input id="code" name="code" type="password" autocomplete="current-password" required></label>
@@ -963,7 +1013,7 @@ const webChatPage = `<!doctype html>
         <div id="messages" aria-live="polite">
           <div class="message assistant">
             <span class="message-role">Family AI</span>
-            <span class="message-text">Я на связи. Напишите задачу или приложите файл.</span>
+            <span class="message-text">Я на связи. Выберите профиль и отправьте задачу.</span>
           </div>
         </div>
         <form id="chat-form" class="composer">
@@ -976,7 +1026,6 @@ const webChatPage = `<!doctype html>
             </div>
           </div>
           <div id="file-name" class="file-meta">Файл не выбран</div>
-          <p class="hint">Можно приложить .txt, .md, .csv, .json или изображение. Для картинок оркестр использует OCR, если он настроен в окружении.</p>
         </form>
       </div>
     </section>
@@ -988,9 +1037,51 @@ const webChatPage = `<!doctype html>
     const role = document.getElementById("role");
     const attachment = document.getElementById("attachment");
     const fileName = document.getElementById("file-name");
-    const promptButtons = document.querySelectorAll("[data-prompt]");
+    const questPoints = document.getElementById("quest-points");
+    const questLevel = document.getElementById("quest-level");
+    const levelFill = document.getElementById("level-fill");
+    const badges = document.querySelectorAll("[data-badge]");
     const savedRole = sessionStorage.getItem("family-ai-role");
     if (savedRole) role.value = savedRole;
+
+    function storedQuestScore() {
+      try {
+        return Number(localStorage.getItem("family-ai-quest-score") || "0") || 0;
+      } catch {
+        return 0;
+      }
+    }
+
+    function saveQuestScore(score) {
+      try {
+        localStorage.setItem("family-ai-quest-score", String(score));
+      } catch {}
+    }
+
+    function renderQuest(score) {
+      const level = Math.floor(score / 4) + 1;
+      const completedInLevel = score % 4;
+      const progress = completedInLevel * 25;
+      const left = 4 - completedInLevel;
+      const taskWord = left === 1 ? "задание" : "задания";
+      questPoints.textContent = String(score);
+      levelFill.style.width = progress + "%";
+      questLevel.textContent = "Уровень " + level + ". До следующего уровня " + left + " " + taskWord + ".";
+      badges.forEach((badge) => {
+        const key = badge.dataset.badge;
+        const unlocked =
+          key === "starter" ||
+          (key === "helper" && score >= 3) ||
+          (key === "maker" && score >= 8);
+        badge.classList.toggle("is-on", unlocked);
+      });
+    }
+
+    function addQuestPoint() {
+      const nextScore = storedQuestScore() + 1;
+      saveQuestScore(nextScore);
+      renderQuest(nextScore);
+    }
 
     function setFileName() {
       const file = attachment.files && attachment.files.length > 0 ? attachment.files[0] : null;
@@ -1016,14 +1107,7 @@ const webChatPage = `<!doctype html>
     }
 
     attachment.addEventListener("change", setFileName);
-
-    promptButtons.forEach((button) => {
-      button.addEventListener("click", () => {
-        const message = document.getElementById("message");
-        message.value = button.dataset.prompt || "";
-        message.focus();
-      });
-    });
+    renderQuest(storedQuestScore());
 
     form.addEventListener("submit", async (event) => {
       event.preventDefault();
@@ -1071,6 +1155,7 @@ const webChatPage = `<!doctype html>
         if (response.ok) {
           attachment.value = "";
           setFileName();
+          addQuestPoint();
         }
       } catch (error) {
         pending.className = "message error";
