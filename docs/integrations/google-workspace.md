@@ -40,6 +40,24 @@ https://www.googleapis.com/auth/calendar.readonly
 https://www.googleapis.com/auth/gmail.readonly
 ```
 
+## Getting the Refresh Token
+
+Create an OAuth client in Google Cloud and add this redirect URI to it:
+
+```text
+http://127.0.0.1:53682/oauth2callback
+```
+
+Then run locally from the repository:
+
+```powershell
+$env:GOOGLE_CLIENT_ID="your-client-id"
+$env:GOOGLE_CLIENT_SECRET="your-client-secret"
+npm run google:oauth
+```
+
+Open the printed URL, grant access, and copy the printed `GOOGLE_REFRESH_TOKEN` into Timeweb App Platform environment variables.
+
 ## Telegram Checks
 
 After the variables are set and the app is restarted, test from the owner bot:

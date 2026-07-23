@@ -16,6 +16,7 @@
     "telegram:webhooks:delete": "node scripts/telegram-webhook.js delete all",
     "telegram:webhook:info": "node scripts/telegram-webhook.js info",
     "telegram:webhooks:info": "node scripts/telegram-webhook.js info all",
+    "google:oauth": "node scripts/google-oauth.js",
     "production:health": "node scripts/production-health.js",
     "relay:start": "node apps/telegram-relay/src/node-server.js",
     "test": "node --test",
