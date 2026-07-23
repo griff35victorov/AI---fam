@@ -5,6 +5,7 @@ import {
   createPublicWebSearchProvider,
   createWebShoppingProvider,
 } from "./capabilities.js";
+import { createGoogleWorkspaceProviders } from "./google-workspace.js";
 import { LocalTesseractTelegramImageOcr } from "./ocr.js";
 import { createLocalTasksProvider } from "./tasks.js";
 import { TelegramTextDocumentExtractor } from "./telegram-documents.js";
@@ -362,6 +363,11 @@ export function createProductionDependencies({
     ? createWebShoppingProvider({ webSearch: webSearchProvider })
     : undefined;
   const automationProvider = createLocalAutomationProvider({ tasksProvider });
+  const googleWorkspaceProviders = createGoogleWorkspaceProviders({
+    env,
+    fetchImpl,
+    clock: () => new Date(),
+  });
   const telegramPollingBotTokens = parseTelegramBotTokens(env);
   const telegramRelayUrl =
     envValue(env.TELEGRAM_RELAY_URL) ?? envValue(env.TELEGRAM_RELAY_BASE_URL);
@@ -383,6 +389,8 @@ export function createProductionDependencies({
     weatherTimeoutMs: parseNumber(env.WEATHER_TIMEOUT_MS, 6000),
     voiceTranscriber: Object.values(voiceTranscribers)[0],
     webSearch: webSearchProvider,
+    calendarProvider: googleWorkspaceProviders.calendarProvider,
+    emailProvider: googleWorkspaceProviders.emailProvider,
     tasksProvider,
     ocrProvider: Object.values(imageOcrs)[0],
     shoppingProvider,

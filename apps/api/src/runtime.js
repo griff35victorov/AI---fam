@@ -1699,6 +1699,8 @@ export function createRepositoryBackedOrchestrator({
       : null;
     const directlyRunnableCapabilities = new Set([
       "web_current_data",
+      "calendar_scheduling",
+      "email_triage",
       "tasks_reminders",
       "daily_briefing",
       "shopping_orders",

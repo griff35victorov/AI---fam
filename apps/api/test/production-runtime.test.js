@@ -113,6 +113,57 @@ test("production dependencies expose configured web chat url", () => {
   assert.equal(fromAppUrl.webChatUrl, "https://family.example/chat");
 });
 
+test("production dependencies connect Google Workspace providers from env", async () => {
+  const calls = [];
+  const dependencies = createProductionDependencies({
+    env: {
+      GOOGLE_CLIENT_ID: "client-id",
+      GOOGLE_CLIENT_SECRET: "client-secret",
+      GOOGLE_REFRESH_TOKEN: "refresh-token",
+      TELEGRAM_BOT_TOKEN: "telegram-token",
+    },
+    repositories: createInMemoryRepositories(),
+    fetchImpl: async (url, options) => {
+      calls.push({ url: String(url), options });
+
+      if (String(url).includes("oauth2.googleapis.com/token")) {
+        return jsonResponse({ access_token: "google-access", expires_in: 3600 });
+      }
+
+      if (String(url).includes("googleapis.com/calendar/")) {
+        return jsonResponse({ items: [] });
+      }
+
+      if (String(url).includes("gmail.googleapis.com/")) {
+        return jsonResponse({ messages: [] });
+      }
+
+      throw new Error(`Unexpected fetch: ${url}`);
+    },
+  });
+
+  assert.equal(dependencies.capabilityRegistry.has("calendar_scheduling"), true);
+  assert.equal(dependencies.capabilityRegistry.has("email_triage"), true);
+
+  const calendar = await dependencies.capabilityRegistry.run("calendar_scheduling", {
+    actor: { role: "owner" },
+    text: "Что у меня в календаре завтра?",
+    now: new Date("2026-07-23T10:15:00.000Z"),
+  });
+  const email = await dependencies.capabilityRegistry.run("email_triage", {
+    actor: { role: "owner" },
+    text: "Покажи непрочитанные письма",
+  });
+
+  assert.equal(calendar.source, "calendar_scheduling");
+  assert.equal(email.source, "email_triage");
+  assert.match(calendar.text, /Google Calendar/);
+  assert.match(email.text, /Gmail/);
+  assert.ok(calls.some((call) => call.url.includes("oauth2.googleapis.com/token")));
+  assert.ok(calls.some((call) => call.url.includes("googleapis.com/calendar/")));
+  assert.ok(calls.some((call) => call.url.includes("gmail.googleapis.com/")));
+});
+
 test("production dependencies also read individual Timeweb agent id env vars", async () => {
   const calls = [];
   const dependencies = createProductionDependencies({

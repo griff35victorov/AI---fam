@@ -1626,6 +1626,82 @@ test("repository backed orchestrator composes daily briefing before AI", async (
   assert.equal(calls.length, 1);
 });
 
+test("repository backed orchestrator reads calendar capability before AI", async () => {
+  const repositories = createInMemoryRepositories();
+  const calls = [];
+  const orchestrator = createRepositoryBackedOrchestrator({
+    repositories,
+    capabilityRegistry: {
+      has(capabilityId) {
+        return capabilityId === "calendar_scheduling";
+      },
+      async run(capabilityId, args) {
+        calls.push({ capabilityId, args });
+        return {
+          text: "Календарь завтра:\n- 09:30: встреча\nИсточник: Google Calendar.",
+          source: "calendar_scheduling",
+        };
+      },
+    },
+    aiProvider: {
+      async complete() {
+        throw new Error("AI should not be called for connected calendar requests");
+      },
+    },
+  });
+
+  const response = await orchestrator({
+    chatId: 777,
+    actor: { id: "owner-1", role: "owner" },
+    intent: "household",
+    text: "Что у меня в календаре завтра?",
+    telegramUpdateId: 813,
+  });
+
+  assert.equal(response.answer.source, "calendar_scheduling");
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].capabilityId, "calendar_scheduling");
+  assert.equal(calls[0].args.actor.role, "owner");
+});
+
+test("repository backed orchestrator reads email capability before AI", async () => {
+  const repositories = createInMemoryRepositories();
+  const calls = [];
+  const orchestrator = createRepositoryBackedOrchestrator({
+    repositories,
+    capabilityRegistry: {
+      has(capabilityId) {
+        return capabilityId === "email_triage";
+      },
+      async run(capabilityId, args) {
+        calls.push({ capabilityId, args });
+        return {
+          text: "Почта Gmail: последние письма:\n- school@example.com: расписание",
+          source: "email_triage",
+        };
+      },
+    },
+    aiProvider: {
+      async complete() {
+        throw new Error("AI should not be called for connected email requests");
+      },
+    },
+  });
+
+  const response = await orchestrator({
+    chatId: 777,
+    actor: { id: "owner-1", role: "owner" },
+    intent: "household",
+    text: "Покажи непрочитанные письма из почты",
+    telegramUpdateId: 814,
+  });
+
+  assert.equal(response.answer.source, "email_triage");
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].capabilityId, "email_triage");
+  assert.equal(calls[0].args.actor.role, "owner");
+});
+
 test("repository backed orchestrator lists expanded capability registry", async () => {
   const repositories = createInMemoryRepositories();
   const orchestrator = createRepositoryBackedOrchestrator({

@@ -43,6 +43,7 @@ This repository is built locally and deployed to Timeweb Cloud from GitHub. Tele
 - `docs/product/mvp-spec.md` - product and system specification.
 - `docs/architecture/overview.md` - architecture overview.
 - `docs/deployment/timeweb.md` - target Timeweb deployment model.
+- `docs/integrations/google-workspace.md` - Gmail and Google Calendar setup.
 - `docs/security/privacy.md` - privacy and access boundaries.
 - `docs/status/current-status.md` - current local implementation status.
 - `docs/superpowers/plans/2026-07-20-family-ai-orchestrator-mvp.md` - implementation plan.

@@ -51,7 +51,7 @@ export const capabilityCatalog = [
     id: "calendar_scheduling",
     title: "Calendar scheduling",
     category: "P1",
-    description: "Reads and writes calendar events.",
+    description: "Reads Google Calendar events. Creating or changing events requires a separate confirmed write provider.",
     access: "oauth",
     missingAccess: "Нужен доступ к Google Calendar, CalDAV или Microsoft Calendar.",
   },
@@ -59,7 +59,7 @@ export const capabilityCatalog = [
     id: "email_triage",
     title: "Email triage",
     category: "P1",
-    description: "Reads, summarizes and drafts email.",
+    description: "Reads Gmail metadata and summaries. Drafting or sending email requires a separate confirmed write provider.",
     access: "oauth",
     missingAccess: "Нужен доступ к Gmail, Outlook или IMAP.",
   },
@@ -399,6 +399,14 @@ export function createCapabilityRegistry({
         return browserAutomation.run(args);
       }
 
+      if (capabilityId === "calendar_scheduling" && calendarProvider) {
+        return calendarProvider.listEvents(args);
+      }
+
+      if (capabilityId === "email_triage" && emailProvider) {
+        return emailProvider.listMessages(args);
+      }
+
       if (capabilityId === "tasks_reminders" && tasksProvider) {
         return tasksProvider.createReminder(args);
       }
@@ -688,12 +696,12 @@ export function buildCapabilitiesAnswer(registry) {
 function capabilityAccessSteps(capabilityId) {
   const steps = {
     calendar_scheduling: [
-      "Google Calendar OAuth: чтение событий и создание событий.",
-      "Минимальные scopes: calendar.events и calendar.readonly.",
+      "Google Calendar OAuth: чтение ближайших событий.",
+      "Минимальный scope для безопасного старта: https://www.googleapis.com/auth/calendar.readonly.",
     ],
     email_triage: [
-      "Gmail/Outlook/IMAP OAuth: чтение входящих, поиск писем и черновики.",
-      "Для безопасного старта достаточно Gmail readonly; отправку писем лучше включать отдельным подтверждением.",
+      "Gmail OAuth: чтение входящих и поиск писем без отправки.",
+      "Минимальный scope для безопасного старта: https://www.googleapis.com/auth/gmail.readonly.",
     ],
     docs_drive: [
       "Google Drive/Docs/Sheets/Slides OAuth: чтение файлов и загрузка материалов жены в библиотеку.",
@@ -1440,16 +1448,40 @@ export async function buildDailyBriefing({
     sections.push("Ближайшие напоминания: локальный tasks_reminders пока не подключен.");
   }
 
-  sections.push(
-    calendarProvider?.listEvents
-      ? "Календарь: Google/CalDAV provider подключен, события можно добавить в следующем шаге."
-      : "Календарь: нужен доступ Google Calendar/CalDAV, чтобы включить события в сводку.",
-  );
-  sections.push(
-    emailProvider?.listMessages
-      ? "Почта: email provider подключен, письма можно добавить в следующем шаге."
-      : "Почта: нужен доступ Gmail/Outlook/IMAP, чтобы включить письма в сводку.",
-  );
+  if (calendarProvider?.listEvents) {
+    try {
+      const calendar = await calendarProvider.listEvents({
+        actor,
+        workspaceId,
+        text: "Календарь для ежедневной сводки",
+        now,
+        limit: 5,
+      });
+      sections.push(calendar.text);
+    } catch (error) {
+      sections.push(
+        `Календарь: источник не ответил (${String(error.message ?? "").slice(0, 120)}).`,
+      );
+    }
+  } else {
+    sections.push("Календарь: нужен доступ Google Calendar/CalDAV, чтобы включить события в сводку.");
+  }
+
+  if (emailProvider?.listMessages) {
+    try {
+      const email = await emailProvider.listMessages({
+        actor,
+        workspaceId,
+        text: "Почта для ежедневной сводки",
+        limit: 5,
+      });
+      sections.push(email.text);
+    } catch (error) {
+      sections.push(`Почта: источник не ответил (${String(error.message ?? "").slice(0, 120)}).`);
+    }
+  } else {
+    sections.push("Почта: нужен доступ Gmail/Outlook/IMAP, чтобы включить письма в сводку.");
+  }
 
   return {
     text: sections.join("\n\n"),
