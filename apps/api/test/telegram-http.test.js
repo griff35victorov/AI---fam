@@ -165,15 +165,22 @@ test("GET /chat serves the family styled chat with local photo assets", async ()
     const html = await response.text();
 
     assert.equal(response.status, 200);
-    assert.match(html, /Семейный AI/);
+    assert.match(html, /Семейный чат/);
     assert.match(html, /family-gallery/);
-    assert.match(html, /quest-board/);
-    assert.match(html, /mission-score/);
-    assert.match(html, /level-meter/);
     assert.match(html, /\/assets\/family\/family-ski\.jpg/);
     assert.match(html, /\/assets\/family\/daughter\.jpg/);
     assert.match(html, /\/assets\/family\/teacher-forest\.jpg/);
     assert.doesNotMatch(html, /https:\/\/[^"']+\.(?:jpg|jpeg|png|webp)/i);
+    assert.doesNotMatch(html, /route-tags/);
+    assert.doesNotMatch(html, /route-tag/);
+    assert.doesNotMatch(html, /quest-board/);
+    assert.doesNotMatch(html, /mission-score/);
+    assert.doesNotMatch(html, /level-meter/);
+    assert.doesNotMatch(html, /badge-row/);
+    assert.doesNotMatch(html, /family-ai-quest-score/);
+    assert.doesNotMatch(html, /Чат-квест/);
+    assert.doesNotMatch(html, /Квест дня/);
+    assert.doesNotMatch(html, /XP/);
     assert.doesNotMatch(html, /Telegram остается основным каналом/);
     assert.doesNotMatch(html, /Telegram основной/);
     assert.doesNotMatch(html, /Веб резервный/);
