@@ -53,17 +53,19 @@ Redis/BullMQ can be introduced when throughput or reliability requires it.
 
 ## Telegram Transport
 
-For Timeweb App Platform the recommended MVP transport is Telegram polling
-inside the public `web` service. It avoids App Platform webhook timeouts and
-removes the need to keep Telegram webhook secrets synchronized between Telegram,
-relay, and the application.
+For Timeweb App Platform the recommended production transport is the dedicated
+Telegram relay on Cloud Server:
 
-- Production enables polling by default when Telegram bot tokens are configured.
-- While polling is active, the app deletes Telegram webhooks for the same bots
-  on startup with `drop_pending_updates=false`; pending Telegram updates are not
-  intentionally discarded.
-- Set `TELEGRAM_POLLING_ENABLED=false` only when a dedicated webhook ingress is
-  intentionally configured and verified.
+- Telegram sends webhooks to the relay.
+- The relay forwards webhooks to the App Platform API.
+- App Platform routes AI/orchestrator work and sends final Telegram answers
+  through the relay send endpoint.
+
+This avoids the unstable direct App Platform -> Telegram Bot API path observed
+in production. Keep `TELEGRAM_POLLING_ENABLED=false` while relay ingress is
+active. Polling remains available only for runtimes that can reliably reach
+`api.telegram.org`; when polling is explicitly enabled, the app deletes Telegram
+webhooks on startup with `drop_pending_updates=false`.
 
 ## PostgreSQL Integration
 

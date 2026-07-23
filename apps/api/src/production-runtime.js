@@ -345,6 +345,17 @@ export function createProductionDependencies({
     : undefined;
   const automationProvider = createLocalAutomationProvider({ tasksProvider });
   const telegramPollingBotTokens = parseTelegramBotTokens(env);
+  const telegramRelayUrl =
+    envValue(env.TELEGRAM_RELAY_URL) ?? envValue(env.TELEGRAM_RELAY_BASE_URL);
+  const telegramWebhookIngressMode =
+    envValue(env.TELEGRAM_WEBHOOK_INGRESS) ?? (telegramRelayUrl ? "relay" : "direct_or_relay");
+  const telegramPollingEnabled = parseBoolean(
+    env.TELEGRAM_POLLING_ENABLED,
+    env.NODE_ENV === "production" &&
+      Object.keys(telegramPollingBotTokens).length > 0 &&
+      !telegramRelayUrl &&
+      telegramWebhookIngressMode !== "relay",
+  );
   const capabilityRegistry = createCapabilityRegistry({
     fetchImpl,
     weatherTimeoutMs: parseNumber(env.WEATHER_TIMEOUT_MS, 6000),
@@ -367,20 +378,16 @@ export function createProductionDependencies({
     telegramWebhookSecret: envValue(env.TELEGRAM_WEBHOOK_SECRET),
     telegramWebhookSecrets: parseTelegramWebhookSecrets(env),
     telegramRelayWebhookSecret: envValue(env.TELEGRAM_RELAY_UPSTREAM_SECRET),
-    telegramWebhookIngressMode:
-      envValue(env.TELEGRAM_WEBHOOK_INGRESS) ?? "direct_or_relay",
+    telegramWebhookIngressMode,
     telegramRequireWebhookSecret: parseBoolean(
       env.TELEGRAM_REQUIRE_WEBHOOK_SECRET,
       env.NODE_ENV === "production",
     ),
     telegramReplyMode: envValue(env.TELEGRAM_REPLY_MODE) ?? "webhook_response",
-    telegramPollingEnabled: parseBoolean(
-      env.TELEGRAM_POLLING_ENABLED,
-      env.NODE_ENV === "production" && Object.keys(telegramPollingBotTokens).length > 0,
-    ),
+    telegramPollingEnabled,
     telegramPollingClearWebhookEnabled: parseBoolean(
       env.TELEGRAM_POLLING_CLEAR_WEBHOOK_ENABLED,
-      env.NODE_ENV === "production" && Object.keys(telegramPollingBotTokens).length > 0,
+      telegramPollingEnabled,
     ),
     telegramPollingIntervalMs: parseNumber(env.TELEGRAM_POLLING_INTERVAL_MS, 1000),
     telegramPollingErrorDelayMs: parseNumber(env.TELEGRAM_POLLING_ERROR_DELAY_MS, 5000),
