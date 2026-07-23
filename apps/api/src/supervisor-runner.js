@@ -1,5 +1,6 @@
 import {
   analyzeSupervisorState,
+  failedTelegramUpdateJobsForSupervisorRequeue,
   formatSupervisorReport,
   staleJobsForSupervisorRequeue,
 } from "../../../packages/domain/src/index.js";
@@ -14,6 +15,7 @@ export async function runSupervisorTick({
   auditOkTicks = false,
   auditDedupMs = 10 * 60_000,
   staleJobLimit = 100,
+  healFailedTelegramUpdates = false,
 } = {}) {
   const jobs = await loadSupervisorJobs({
     repositories,
@@ -26,28 +28,48 @@ export async function runSupervisorTick({
     : [];
   const nowDate = new Date(now);
 
-  const healableJobs =
+  const staleHealableJobs =
     autoHeal && repositories?.jobs?.rescheduleJob
       ? staleJobsForSupervisorRequeue(jobs, nowDate)
       : [];
+  const failedTelegramUpdateHealableJobs =
+    autoHeal && healFailedTelegramUpdates && repositories?.jobs?.rescheduleJob
+      ? failedTelegramUpdateJobsForSupervisorRequeue(jobs)
+      : [];
+  const healableJobs = [
+    ...staleHealableJobs.map((job) => ({
+      job,
+      reason: "stale_running_job",
+      options: {
+        expectedStatus: "running",
+        expectedType: job.type,
+        requireStaleLockAt: nowDate,
+      },
+    })),
+    ...failedTelegramUpdateHealableJobs.map((job) => ({
+      job,
+      reason: "failed_telegram_update",
+      options: {
+        expectedStatus: "failed",
+        expectedType: "telegram-update",
+      },
+    })),
+  ];
   const healedJobs = [];
-  for (const job of healableJobs) {
+  for (const { job, reason, options } of healableJobs) {
     const healed = await repositories.jobs.rescheduleJob(
       job,
       {
         status: "supervisor_requeued",
-        reason: "stale_running_job",
+        reason,
         previousStatus: job.status,
+        previousError: job.error ?? job.result?.error ?? null,
         previousLockedBy: job.lockedBy ?? null,
         previousLockedUntil: job.lockedUntil ?? null,
       },
       nowDate,
       nowDate,
-      {
-        expectedStatus: "running",
-        expectedType: job.type,
-        requireStaleLockAt: nowDate,
-      },
+      options,
     );
     if (healed) {
       healedJobs.push(healed);

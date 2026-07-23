@@ -1211,6 +1211,7 @@ export function createRepositoryBackedOrchestrator({
             repositories,
             now: now(),
             autoHeal: true,
+            healFailedTelegramUpdates: true,
             notifier: undefined,
           });
           answerText = buildSupervisorRepairAnswer(result);

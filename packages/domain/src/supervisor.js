@@ -267,3 +267,11 @@ export function staleJobsForSupervisorRequeue(jobs = [], now = new Date()) {
     return job.result?.stage !== "send";
   });
 }
+
+export function failedTelegramUpdateJobsForSupervisorRequeue(jobs = []) {
+  return jobs.filter((job) => {
+    if (job.type !== "telegram-update") return false;
+    if (job.status !== "failed") return false;
+    return job.result?.sendWasAttempted !== true;
+  });
+}

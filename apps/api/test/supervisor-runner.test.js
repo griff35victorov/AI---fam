@@ -45,6 +45,55 @@ test("runSupervisorTick requeues stale Telegram updates only", async () => {
   assert.equal(jobs.find((job) => job.id === "reminder-stale").status, "running");
 });
 
+test("runSupervisorTick can requeue failed Telegram updates during repair", async () => {
+  const now = new Date("2026-07-22T12:00:00.000Z");
+  const repositories = createInMemoryRepositories({
+    jobs: [
+      {
+        id: "failed-update",
+        type: "telegram-update",
+        payload: { update: { update_id: 1 } },
+        status: "failed",
+        runAt: new Date("2026-07-22T11:50:00.000Z"),
+        error: "Temporary upstream failure",
+        result: { sendWasAttempted: false },
+      },
+      {
+        id: "failed-update-after-send",
+        type: "telegram-update",
+        payload: { update: { update_id: 2 } },
+        status: "failed",
+        runAt: new Date("2026-07-22T11:50:00.000Z"),
+        error: "Ambiguous Telegram send",
+        result: { sendWasAttempted: true },
+      },
+      {
+        id: "failed-delivery",
+        type: "telegram-delivery",
+        payload: { updateId: 3 },
+        status: "failed",
+        runAt: new Date("2026-07-22T11:50:00.000Z"),
+        error: "Telegram send failed",
+        result: { stage: "send" },
+      },
+    ],
+  });
+
+  const result = await runSupervisorTick({
+    repositories,
+    now,
+    healFailedTelegramUpdates: true,
+  });
+
+  assert.equal(result.autoHealedJobs, 1);
+
+  const jobs = await repositories.jobs.listRecent({ limit: 10 });
+  assert.equal(jobs.find((job) => job.id === "failed-update").status, "queued");
+  assert.equal(jobs.find((job) => job.id === "failed-update").result.reason, "failed_telegram_update");
+  assert.equal(jobs.find((job) => job.id === "failed-update-after-send").status, "failed");
+  assert.equal(jobs.find((job) => job.id === "failed-delivery").status, "failed");
+});
+
 test("runSupervisorTick does not write OK audit logs by default", async () => {
   const repositories = createInMemoryRepositories();
 
