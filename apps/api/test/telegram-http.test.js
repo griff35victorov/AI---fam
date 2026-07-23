@@ -159,6 +159,47 @@ test("GET /chat exposes a file attachment control", async () => {
   });
 });
 
+test("GET /chat serves the family styled chat with local photo assets", async () => {
+  await withServer({}, async (baseUrl) => {
+    const response = await fetch(`${baseUrl}/chat`);
+    const html = await response.text();
+
+    assert.equal(response.status, 200);
+    assert.match(html, /Семейный AI/);
+    assert.match(html, /family-gallery/);
+    assert.match(html, /\/assets\/family\/family-ski\.jpg/);
+    assert.match(html, /\/assets\/family\/daughter\.jpg/);
+    assert.match(html, /\/assets\/family\/teacher-forest\.jpg/);
+    assert.doesNotMatch(html, /https:\/\/[^"']+\.(?:jpg|jpeg|png|webp)/i);
+    assert.doesNotMatch(html, /—|–/);
+  });
+});
+
+test("GET /assets/family serves bundled family photos", async () => {
+  await withServer({}, async (baseUrl) => {
+    const response = await fetch(`${baseUrl}/assets/family/family-ski.jpg`);
+    const buffer = Buffer.from(await response.arrayBuffer());
+
+    assert.equal(response.status, 200);
+    assert.match(response.headers.get("content-type"), /image\/jpeg/);
+    assert.match(response.headers.get("cache-control"), /public/);
+    assert.equal(response.headers.get("x-content-type-options"), "nosniff");
+    assert.ok(buffer.length > 10_000);
+  });
+});
+
+test("GET /assets/family rejects unknown and traversal file names", async () => {
+  await withServer({}, async (baseUrl) => {
+    const missing = await fetch(`${baseUrl}/assets/family/missing.jpg`);
+    const traversal = await fetch(`${baseUrl}/assets/family/%2e%2e%2fserver.js`);
+    const privateFile = await fetch(`${baseUrl}/assets/family/package.json`);
+
+    assert.equal(missing.status, 404);
+    assert.equal(traversal.status, 404);
+    assert.equal(privateFile.status, 404);
+  });
+});
+
 test("POST /web/chat fails closed when access code is missing or wrong", async () => {
   let orchestratorCalled = false;
 

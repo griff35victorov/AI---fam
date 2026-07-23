@@ -1,6 +1,6 @@
 import { createServer } from "node:http";
 import { randomUUID, timingSafeEqual } from "node:crypto";
-import { mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { extname, join } from "node:path";
 
@@ -62,6 +62,58 @@ function sendHtml(response, statusCode, body) {
     "connection": "close",
   });
   response.end(body);
+}
+
+function sendBinary(
+  response,
+  statusCode,
+  body,
+  contentType,
+  cacheControl = "public, max-age=31536000, immutable",
+) {
+  response.writeHead(statusCode, {
+    "content-type": contentType,
+    "content-length": body.length,
+    "cache-control": cacheControl,
+    "x-content-type-options": "nosniff",
+    "connection": "close",
+  });
+  response.end(body);
+}
+
+const familyAssetRoot = join(process.cwd(), "apps", "api", "public", "assets", "family");
+const familyAssetContentTypes = new Map([
+  [".gif", "image/gif"],
+  [".jpg", "image/jpeg"],
+  [".jpeg", "image/jpeg"],
+  [".png", "image/png"],
+  [".webp", "image/webp"],
+]);
+const familyAssetFiles = new Set([
+  "daughter.jpg",
+  "family-ski.jpg",
+  "teacher-forest.jpg",
+  "teacher-home.jpg",
+]);
+
+function familyAssetFromPathname(pathname) {
+  const prefix = "/assets/family/";
+  if (!pathname.startsWith(prefix)) return null;
+
+  let fileName;
+  try {
+    fileName = decodeURIComponent(pathname.slice(prefix.length));
+  } catch {
+    return null;
+  }
+  if (!familyAssetFiles.has(fileName)) return null;
+
+  return {
+    path: join(familyAssetRoot, fileName),
+    contentType:
+      familyAssetContentTypes.get(extname(fileName).toLowerCase()) ??
+      "application/octet-stream",
+  };
 }
 
 async function readRequestBuffer(request, { maxBytes } = {}) {
@@ -411,151 +463,522 @@ const webChatPage = `<!doctype html>
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Family AI - резервный чат</title>
+  <title>Семейный AI - резервный чат</title>
   <style>
     :root {
       color-scheme: light;
-      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-      background: #f3f5f8;
-      color: #111827;
+      --bg: #f5f7f3;
+      --surface: #ffffff;
+      --surface-soft: #eef3ee;
+      --surface-strong: #f8fbf8;
+      --ink: #17211b;
+      --muted: #5b675f;
+      --line: #d7dfd8;
+      --accent: #b9435f;
+      --accent-strong: #8f2540;
+      --accent-soft: #fde8ee;
+      --green: #2f6d4f;
+      --shadow: 0 28px 70px rgba(55, 72, 58, .16);
+      --ease: cubic-bezier(.2, .8, .2, 1);
+      font-family: "Segoe UI Variable", "Segoe UI", system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+      background: var(--bg);
+      color: var(--ink);
     }
     * { box-sizing: border-box; }
-    body { margin: 0; min-height: 100dvh; background: #f3f5f8; color: #111827; }
-    main { width: min(960px, 100%); margin: 0 auto; padding: 20px 14px; }
-    header { display: grid; gap: 10px; padding: 4px 0 16px; }
-    h1 { margin: 0; font-size: clamp(22px, 3vw, 30px); line-height: 1.15; letter-spacing: 0; }
-    .status-row { display: flex; flex-wrap: wrap; gap: 8px; }
-    .status {
-      border: 1px solid #cfd7e3;
-      border-radius: 999px;
-      background: #ffffff;
-      color: #314158;
-      padding: 7px 10px;
-      font-size: 13px;
-      line-height: 1;
+    html { min-height: 100%; }
+    body {
+      margin: 0;
+      min-height: 100dvh;
+      background:
+        linear-gradient(135deg, rgba(255, 255, 255, .92), rgba(236, 243, 235, .88)),
+        linear-gradient(90deg, rgba(185, 67, 95, .08), rgba(47, 109, 79, .1));
+      color: var(--ink);
     }
-    .panel {
+    body::before {
+      content: "";
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      background-image:
+        linear-gradient(rgba(23, 33, 27, .04) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(23, 33, 27, .04) 1px, transparent 1px);
+      background-size: 44px 44px;
+      mask-image: linear-gradient(to bottom, rgba(0, 0, 0, .55), transparent 75%);
+    }
+    button, input, select, textarea { font: inherit; }
+    button { cursor: pointer; }
+    .app-shell {
+      width: min(1440px, 100%);
+      min-height: 100dvh;
+      margin: 0 auto;
+      padding: 18px;
+      display: grid;
+      grid-template-columns: minmax(280px, 360px) minmax(0, 1fr);
+      gap: 18px;
+    }
+    .family-panel, .chat-panel {
+      position: relative;
+      border: 1px solid rgba(88, 105, 91, .18);
+      border-radius: 22px;
+      background: rgba(255, 255, 255, .86);
+      box-shadow: var(--shadow);
+      overflow: hidden;
+    }
+    .family-panel {
+      min-height: calc(100dvh - 36px);
+      padding: 10px;
+    }
+    .family-card {
+      min-height: 100%;
+      border: 1px solid rgba(255, 255, 255, .85);
+      border-radius: 16px;
+      background: linear-gradient(180deg, rgba(255, 255, 255, .94), rgba(243, 248, 242, .9));
+      padding: 16px;
+      display: grid;
+      align-content: start;
+      gap: 16px;
+    }
+    .brand-lockup { display: grid; gap: 8px; }
+    .eyebrow {
+      margin: 0;
+      color: var(--accent-strong);
+      font-size: 12px;
+      font-weight: 800;
+      text-transform: uppercase;
+      letter-spacing: .11em;
+    }
+    h1, h2, p { margin: 0; }
+    h1 {
+      color: var(--ink);
+      font-size: clamp(32px, 5vw, 56px);
+      line-height: .98;
+      letter-spacing: 0;
+      max-width: 8ch;
+    }
+    .lead-copy {
+      color: var(--muted);
+      font-size: 15px;
+      line-height: 1.5;
+      max-width: 34ch;
+    }
+    .status-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+    .status {
+      min-height: 32px;
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      border: 1px solid rgba(47, 109, 79, .2);
+      border-radius: 999px;
+      background: rgba(255, 255, 255, .78);
+      color: #244536;
+      padding: 7px 10px;
+      font-size: 12px;
+      font-weight: 750;
+      line-height: 1;
+      white-space: nowrap;
+    }
+    .status::before {
+      content: "";
+      width: 7px;
+      height: 7px;
+      border-radius: 999px;
+      background: var(--green);
+    }
+    .family-gallery {
       display: grid;
       gap: 12px;
-      border: 1px solid #d7dee9;
-      border-radius: 8px;
-      background: #ffffff;
-      padding: 14px;
+    }
+    .lead-photo {
+      margin: 0;
+      aspect-ratio: 479 / 671;
+      border-radius: 18px;
+      background: #dfe7dd;
+      overflow: hidden;
+      position: relative;
+      box-shadow: 0 16px 38px rgba(31, 45, 34, .18);
+    }
+    .lead-photo img, .family-avatar img {
+      width: 100%;
+      height: 100%;
+      display: block;
+      object-fit: cover;
+    }
+    .lead-photo figcaption {
+      position: absolute;
+      left: 10px;
+      bottom: 10px;
+      max-width: calc(100% - 20px);
+      border-radius: 999px;
+      background: rgba(255, 255, 255, .86);
+      color: var(--ink);
+      padding: 7px 10px;
+      font-size: 12px;
+      font-weight: 800;
+      box-shadow: 0 8px 20px rgba(20, 34, 25, .16);
+    }
+    .avatar-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 9px;
+    }
+    .family-avatar {
+      margin: 0;
+      aspect-ratio: 1;
+      border-radius: 16px;
+      background: #edf1ea;
+      overflow: hidden;
+      border: 3px solid #ffffff;
+      box-shadow: 0 9px 20px rgba(46, 61, 50, .13);
+    }
+    .prompt-stack {
+      display: grid;
+      gap: 8px;
+      padding-top: 2px;
+    }
+    .prompt-chip {
+      width: 100%;
+      border: 1px solid rgba(185, 67, 95, .16);
+      border-radius: 14px;
+      background: var(--accent-soft);
+      color: var(--accent-strong);
+      padding: 11px 12px;
+      text-align: left;
+      font-size: 13px;
+      font-weight: 760;
+      transition: transform 360ms var(--ease), border-color 360ms var(--ease), background 360ms var(--ease);
+    }
+    .prompt-chip:hover { transform: translateY(-1px); border-color: rgba(185, 67, 95, .32); }
+    .system-note {
+      border-top: 1px solid var(--line);
+      padding-top: 13px;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.45;
+    }
+    .chat-panel {
+      min-height: calc(100dvh - 36px);
+      padding: 10px;
+      display: grid;
+    }
+    .chat-core {
+      min-height: 100%;
+      border: 1px solid rgba(255, 255, 255, .88);
+      border-radius: 16px;
+      background: rgba(248, 251, 248, .92);
+      display: grid;
+      grid-template-rows: auto minmax(280px, 1fr) auto;
+      overflow: hidden;
+    }
+    .chat-top {
+      display: grid;
+      grid-template-columns: minmax(210px, 1fr) minmax(280px, 520px);
+      gap: 14px;
+      align-items: end;
+      padding: 16px;
+      border-bottom: 1px solid var(--line);
+      background: rgba(255, 255, 255, .72);
+    }
+    .chat-title { display: grid; gap: 5px; }
+    h2 {
+      font-size: clamp(22px, 3vw, 32px);
+      line-height: 1.05;
+      letter-spacing: 0;
+    }
+    .chat-title p {
+      color: var(--muted);
+      font-size: 14px;
+      line-height: 1.42;
     }
     .settings {
       display: grid;
-      grid-template-columns: minmax(160px, 1fr) minmax(150px, 220px);
+      grid-template-columns: minmax(170px, 1fr) minmax(150px, 190px);
       gap: 10px;
     }
-    label { display: grid; gap: 6px; font-size: 13px; font-weight: 650; color: #314158; }
-    input, select, textarea, button {
+    label {
+      display: grid;
+      gap: 6px;
+      color: #2d3e34;
+      font-size: 12px;
+      font-weight: 780;
+    }
+    input, select, textarea {
       min-width: 0;
-      font: inherit;
-      border: 1px solid #bdc7d6;
-      border-radius: 7px;
-      padding: 10px 11px;
+      width: 100%;
+      border: 1px solid rgba(88, 105, 91, .25);
+      border-radius: 14px;
+      background: rgba(255, 255, 255, .94);
+      color: var(--ink);
+      padding: 12px 13px;
+      transition: border-color 240ms var(--ease), box-shadow 240ms var(--ease), background 240ms var(--ease);
     }
-    input, select, textarea { background: #ffffff; color: #111827; }
-    textarea { min-height: 92px; resize: vertical; line-height: 1.4; }
-    input:focus, select:focus, textarea:focus {
-      outline: 2px solid #2563eb;
-      outline-offset: 1px;
-      border-color: #2563eb;
+    input:focus-visible, select:focus-visible, textarea:focus-visible, button:focus-visible {
+      outline: 3px solid rgba(185, 67, 95, .22);
+      outline-offset: 2px;
+      border-color: var(--accent);
+      box-shadow: 0 0 0 4px rgba(185, 67, 95, .12);
     }
-    button {
-      border-color: #2563eb;
-      background: #2563eb;
-      color: #ffffff;
-      cursor: pointer;
-      font-weight: 700;
+    textarea {
+      min-height: 84px;
+      max-height: 180px;
+      resize: vertical;
+      line-height: 1.45;
     }
-    button:disabled { opacity: .68; cursor: wait; }
-    button:active:not(:disabled) { transform: translateY(1px); }
     #messages {
       display: grid;
       align-content: start;
-      gap: 10px;
-      min-height: 360px;
-      max-height: min(58dvh, 620px);
+      gap: 12px;
       overflow: auto;
-      border: 1px solid #d7dee9;
-      border-radius: 8px;
-      background: #f8fafc;
-      padding: 12px;
+      padding: 18px;
       scroll-behavior: smooth;
+      background:
+        linear-gradient(rgba(248, 251, 248, .94), rgba(248, 251, 248, .94)),
+        linear-gradient(120deg, rgba(47, 109, 79, .06), rgba(185, 67, 95, .06));
     }
     .message {
-      width: min(82%, 720px);
-      border: 1px solid #d7dee9;
-      border-radius: 8px;
-      background: #ffffff;
-      padding: 10px 12px;
+      width: min(76%, 68ch);
+      border: 1px solid rgba(88, 105, 91, .16);
+      border-radius: 16px;
+      background: var(--surface);
+      color: var(--ink);
+      padding: 11px 13px 12px;
+      display: grid;
+      gap: 5px;
       white-space: pre-wrap;
-      line-height: 1.42;
+      line-height: 1.45;
+      box-shadow: 0 10px 24px rgba(44, 57, 47, .08);
+      animation: message-in 420ms var(--ease) both;
     }
     .message.user {
       justify-self: end;
-      border-color: #a8c7ff;
-      background: #eaf2ff;
+      border-color: rgba(185, 67, 95, .22);
+      background: #fff0f4;
     }
     .message.assistant { justify-self: start; }
     .message.error {
-      border-color: #f3b5b5;
+      justify-self: start;
+      border-color: rgba(185, 67, 67, .28);
       background: #fff1f1;
       color: #7f1d1d;
     }
+    .message-role {
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 820;
+      text-transform: uppercase;
+      letter-spacing: .08em;
+    }
+    .message-text { overflow-wrap: anywhere; }
+    .message.pending .message-text::after {
+      content: "";
+      display: inline-block;
+      width: 22px;
+      height: 8px;
+      margin-left: 8px;
+      border-radius: 999px;
+      background: linear-gradient(90deg, rgba(185, 67, 95, .25), rgba(185, 67, 95, .75), rgba(185, 67, 95, .25));
+      animation: pulse 1s var(--ease) infinite;
+    }
     .composer {
+      padding: 14px 16px 16px;
+      border-top: 1px solid var(--line);
+      background: rgba(255, 255, 255, .72);
       display: grid;
-      grid-template-columns: minmax(0, 1fr) minmax(160px, 230px) 132px;
+      gap: 10px;
+    }
+    .composer-bar {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
       gap: 10px;
       align-items: end;
     }
-    .file-input input { padding: 9px 10px; }
-    .hint { margin: 0; color: #667085; font-size: 13px; line-height: 1.35; }
-    @media (max-width: 700px) {
-      main { padding: 12px 10px; }
-      .settings, .composer { grid-template-columns: 1fr; }
-      #messages { min-height: 45dvh; max-height: 56dvh; }
-      .message { width: min(94%, 720px); }
+    .composer-actions {
+      display: grid;
+      grid-template-columns: auto auto;
+      gap: 8px;
+      align-items: center;
     }
-    @media (prefers-color-scheme: dark) {
-      :root { color-scheme: dark; background: #111827; color: #eef2f7; }
-      body { background: #111827; color: #eef2f7; }
-      .panel, .status, input, select, textarea, .message { background: #172033; color: #eef2f7; border-color: #334155; }
-      #messages { background: #0f172a; border-color: #334155; }
-      .message.user { background: #14315d; border-color: #2f63b4; }
-      .message.error { background: #3b1717; border-color: #7f1d1d; color: #fecaca; }
-      .hint, label, .status { color: #cbd5e1; }
+    .attach-button {
+      min-height: 48px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      border: 1px solid rgba(88, 105, 91, .24);
+      border-radius: 14px;
+      background: #ffffff;
+      color: var(--ink);
+      padding: 0 14px;
+      font-size: 13px;
+      font-weight: 800;
+      transition: transform 260ms var(--ease), border-color 260ms var(--ease), background 260ms var(--ease);
+    }
+    .attach-button:hover { transform: translateY(-1px); border-color: rgba(185, 67, 95, .32); background: #fff8fa; }
+    .attach-button input {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      opacity: 0;
+      pointer-events: none;
+    }
+    #send {
+      min-height: 48px;
+      min-width: 132px;
+      border: 1px solid var(--accent-strong);
+      border-radius: 14px;
+      background: var(--accent);
+      color: #ffffff;
+      padding: 0 18px;
+      font-weight: 850;
+      box-shadow: 0 12px 24px rgba(185, 67, 95, .25);
+      transition: transform 260ms var(--ease), box-shadow 260ms var(--ease), background 260ms var(--ease);
+    }
+    #send:hover:not(:disabled) { transform: translateY(-1px); background: var(--accent-strong); box-shadow: 0 16px 30px rgba(185, 67, 95, .28); }
+    #send:active:not(:disabled) { transform: translateY(1px) scale(.99); }
+    #send:disabled {
+      cursor: wait;
+      background: #8e8f8a;
+      border-color: #7c7d78;
+      box-shadow: none;
+    }
+    .file-meta {
+      min-height: 18px;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.35;
+    }
+    .hint {
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.35;
+    }
+    @keyframes message-in {
+      from { opacity: 0; transform: translateY(10px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+    @keyframes pulse {
+      0%, 100% { opacity: .38; transform: translateY(0); }
+      50% { opacity: 1; transform: translateY(-1px); }
+    }
+    @media (max-width: 980px) {
+      .app-shell {
+        min-height: auto;
+        grid-template-columns: 1fr;
+        padding: 10px;
+      }
+      .family-panel, .chat-panel { min-height: auto; }
+      .family-card {
+        grid-template-columns: minmax(0, 1.2fr) minmax(220px, .8fr);
+        align-items: start;
+      }
+      .brand-lockup, .prompt-stack, .system-note { grid-column: 1; }
+      .family-gallery { grid-column: 2; grid-row: 1 / span 3; }
+      .lead-photo { aspect-ratio: 4 / 3; }
+      h1 { max-width: 11ch; }
+    }
+    @media (max-width: 760px) {
+      .app-shell { padding: 8px; gap: 8px; }
+      .family-panel, .chat-panel { border-radius: 18px; }
+      .family-card {
+        grid-template-columns: 1fr;
+        padding: 12px;
+        gap: 12px;
+      }
+      .family-gallery { grid-column: auto; grid-row: auto; }
+      .lead-photo { aspect-ratio: 16 / 9; }
+      .prompt-stack { display: none; }
+      h1 { font-size: 32px; max-width: none; }
+      .lead-copy { max-width: none; }
+      .chat-core { min-height: calc(100dvh - 18px); grid-template-rows: auto minmax(46dvh, 1fr) auto; }
+      .chat-top { grid-template-columns: 1fr; padding: 12px; }
+      .settings { grid-template-columns: 1fr; }
+      #messages { padding: 12px; }
+      .message { width: min(96%, 68ch); }
+      .composer { padding: 12px; }
+      .composer-bar { grid-template-columns: 1fr; }
+      .composer-actions { grid-template-columns: 1fr 1fr; }
+      #send, .attach-button { width: 100%; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after {
+        animation-duration: 1ms !important;
+        animation-iteration-count: 1 !important;
+        scroll-behavior: auto !important;
+        transition-duration: 1ms !important;
+      }
     }
   </style>
 </head>
 <body>
-  <main>
-    <header>
-      <h1>Family AI - резервный чат</h1>
-      <div class="status-row" aria-label="Статус каналов">
-        <span class="status">Telegram остается основным каналом</span>
-        <span class="status">Web идет в тот же оркестр и память</span>
+  <main class="app-shell">
+    <aside class="family-panel" aria-label="Семейный контекст">
+      <section class="family-card">
+        <div class="brand-lockup">
+          <p class="eyebrow">Family workspace</p>
+          <h1>Семейный AI</h1>
+          <p class="lead-copy">Один вход для дома, учебы, английского и рабочих задач. Telegram остается основным каналом.</p>
+        </div>
+        <div class="status-row" aria-label="Статус каналов">
+          <span class="status">Telegram основной</span>
+          <span class="status">Веб резервный</span>
+          <span class="status">Общая память</span>
+        </div>
+        <div class="family-gallery" aria-label="Семейная галерея">
+          <figure class="lead-photo">
+            <img src="/assets/family/family-ski.jpg" width="479" height="671" alt="Семья на зимнем отдыхе" loading="eager">
+            <figcaption>Семейный контур</figcaption>
+          </figure>
+          <div class="avatar-grid">
+            <figure class="family-avatar"><img src="/assets/family/daughter.jpg" width="640" height="640" alt="Профиль Милы" loading="lazy"></figure>
+            <figure class="family-avatar"><img src="/assets/family/teacher-forest.jpg" width="640" height="640" alt="Профиль учителя английского" loading="lazy"></figure>
+            <figure class="family-avatar"><img src="/assets/family/teacher-home.jpg" width="640" height="640" alt="Профиль семейного преподавателя" loading="lazy"></figure>
+          </div>
+        </div>
+        <div class="prompt-stack" aria-label="Быстрые задачи">
+          <button class="prompt-chip" type="button" data-prompt="Сделай краткую семейную сводку на сегодня">Семейная сводка</button>
+          <button class="prompt-chip" type="button" data-prompt="Помоги разобрать файл или картинку">Разбор файла</button>
+          <button class="prompt-chip" type="button" data-prompt="Подготовь план занятия по английскому">Английский и учеба</button>
+        </div>
+        <p class="system-note">Веб-чат использует тот же оркестр, память и инструменты. Он нужен как запасной вход, когда Telegram тормозит или нужно удобно приложить файл.</p>
+      </section>
+    </aside>
+    <section class="chat-panel" aria-label="Чат с семейным AI">
+      <div class="chat-core">
+        <header class="chat-top">
+          <div class="chat-title">
+            <h2>Резервный чат</h2>
+            <p>Пишите задачу, выбирайте профиль и прикладывайте материалы. Ответ сохраняется в семейной истории.</p>
+          </div>
+          <div class="settings">
+            <label for="code">Код доступа<input id="code" name="code" type="password" autocomplete="current-password" required></label>
+            <label for="role">Профиль<select id="role" name="role">
+              <option value="owner">Григорий</option>
+              <option value="daughter">Мила</option>
+              <option value="teacher">English Teacher AI</option>
+            </select></label>
+          </div>
+        </header>
+        <div id="messages" aria-live="polite">
+          <div class="message assistant">
+            <span class="message-role">Family AI</span>
+            <span class="message-text">Я на связи. Напишите задачу или приложите файл.</span>
+          </div>
+        </div>
+        <form id="chat-form" class="composer">
+          <label for="message">Сообщение</label>
+          <div class="composer-bar">
+            <textarea id="message" name="message" placeholder="Напишите бытовую задачу, вопрос по учебе, просьбу к секретарю или комментарий к файлу"></textarea>
+            <div class="composer-actions">
+              <label class="attach-button" for="attachment">Файл<input id="attachment" name="attachment" type="file" accept=".txt,.md,.markdown,.csv,.json,image/*"></label>
+              <button id="send" type="submit">Отправить</button>
+            </div>
+          </div>
+          <div id="file-name" class="file-meta">Файл не выбран</div>
+          <p class="hint">Можно приложить .txt, .md, .csv, .json или изображение. Для картинок оркестр использует OCR, если он настроен в окружении.</p>
+        </form>
       </div>
-    </header>
-    <section class="panel">
-      <div class="settings">
-        <label>Код доступа<input id="code" name="code" type="password" autocomplete="current-password" required></label>
-        <label>Профиль<select id="role" name="role">
-          <option value="owner">Григорий</option>
-          <option value="daughter">Мила</option>
-          <option value="teacher">English Teacher AI</option>
-        </select></label>
-      </div>
-      <div id="messages" aria-live="polite">
-        <div class="message assistant">Напишите сообщение. Ответ появится здесь и сохранится в той же семейной памяти.</div>
-      </div>
-      <form id="chat-form" class="composer">
-        <label>Сообщение<textarea id="message" name="message"></textarea></label>
-        <label class="file-input">Файл или картинка<input id="attachment" name="attachment" type="file" accept=".txt,.md,.markdown,.csv,.json,image/*"></label>
-        <button id="send" type="submit">Отправить</button>
-      </form>
-      <p class="hint">Можно приложить .txt, .md, .csv, .json или изображение. Telegram временно не отвечает - этот чат использует тот же backend напрямую.</p>
     </section>
   </main>
   <script>
@@ -563,23 +986,49 @@ const webChatPage = `<!doctype html>
     const messages = document.getElementById("messages");
     const send = document.getElementById("send");
     const role = document.getElementById("role");
+    const attachment = document.getElementById("attachment");
+    const fileName = document.getElementById("file-name");
+    const promptButtons = document.querySelectorAll("[data-prompt]");
     const savedRole = sessionStorage.getItem("family-ai-role");
     if (savedRole) role.value = savedRole;
+
+    function setFileName() {
+      const file = attachment.files && attachment.files.length > 0 ? attachment.files[0] : null;
+      fileName.textContent = file ? "Выбран файл: " + file.name : "Файл не выбран";
+    }
 
     function appendMessage(kind, text) {
       const item = document.createElement("div");
       item.className = "message " + kind;
-      item.textContent = text;
+
+      const label = document.createElement("span");
+      label.className = "message-role";
+      label.textContent = kind.includes("user") ? "Вы" : "Family AI";
+
+      const content = document.createElement("span");
+      content.className = "message-text";
+      content.textContent = text;
+
+      item.append(label, content);
       messages.appendChild(item);
       messages.scrollTop = messages.scrollHeight;
       return item;
     }
 
+    attachment.addEventListener("change", setFileName);
+
+    promptButtons.forEach((button) => {
+      button.addEventListener("click", () => {
+        const message = document.getElementById("message");
+        message.value = button.dataset.prompt || "";
+        message.focus();
+      });
+    });
+
     form.addEventListener("submit", async (event) => {
       event.preventDefault();
       const message = document.getElementById("message");
       const code = document.getElementById("code");
-      const attachment = document.getElementById("attachment");
       const text = message.value.trim();
       const file = attachment.files && attachment.files.length > 0 ? attachment.files[0] : null;
       if (!text && !file) return;
@@ -587,7 +1036,7 @@ const webChatPage = `<!doctype html>
       sessionStorage.setItem("family-ai-role", role.value);
       appendMessage("user", file ? [text || "Вложение без текста", "Файл: " + file.name].join("\\n") : text);
       message.value = "";
-      const pending = appendMessage("assistant", "Готовлю ответ...");
+      const pending = appendMessage("assistant pending", "Готовлю ответ...");
       send.disabled = true;
 
       try {
@@ -615,13 +1064,18 @@ const webChatPage = `<!doctype html>
         }
         const body = await response.json();
         pending.className = response.ok ? "message assistant" : "message error";
-        pending.textContent = response.ok
+        pending.querySelector(".message-role").textContent = response.ok ? "Family AI" : "Ошибка";
+        pending.querySelector(".message-text").textContent = response.ok
           ? (body.answer && body.answer.text ? body.answer.text : "Пустой ответ")
           : ("Ошибка: " + (body.error || "request_failed"));
-        if (response.ok) attachment.value = "";
+        if (response.ok) {
+          attachment.value = "";
+          setFileName();
+        }
       } catch (error) {
         pending.className = "message error";
-        pending.textContent = "Ошибка связи с backend.";
+        pending.querySelector(".message-role").textContent = "Ошибка";
+        pending.querySelector(".message-text").textContent = "Ошибка связи с backend.";
       } finally {
         send.disabled = false;
         message.focus();
@@ -1477,6 +1931,16 @@ export function createAppServer(options = {}) {
 
       if (request.method === "GET" && requestPathname === "/health") {
         sendJson(response, 200, createHealthResponse());
+        return;
+      }
+
+      const familyAsset = familyAssetFromPathname(requestPathname);
+      if (request.method === "GET" && familyAsset) {
+        try {
+          sendBinary(response, 200, await readFile(familyAsset.path), familyAsset.contentType);
+        } catch {
+          sendJson(response, 404, { error: "asset_not_found" });
+        }
         return;
       }
 
