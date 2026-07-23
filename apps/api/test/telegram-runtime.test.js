@@ -6,6 +6,7 @@ import { createAppServer } from "../src/server.js";
 import {
   createCapabilityRegistry,
   createPublicWebSearchProvider,
+  parseWeatherRequest,
 } from "../src/capabilities.js";
 import { createRepositoryBackedOrchestrator } from "../src/runtime.js";
 
@@ -996,6 +997,84 @@ test("repository backed orchestrator uses weather capability before AI", async (
 
   assert.equal(response.answer.source, "weather_forecast");
   assert.equal(response.answer.text, "Погода: без осадков.");
+});
+
+test("weather request parser keeps Moscow district and evening intent separate", () => {
+  assert.deepEqual(parseWeatherRequest("Сегодня в Митино вечером будет дождь?"), {
+    location: "Москва",
+    displayLocation: "Митино, Москва",
+    target: "today",
+    partOfDay: "evening",
+  });
+});
+
+test("Open-Meteo weather capability answers Moscow district evening forecast", async () => {
+  const capabilityRegistry = createCapabilityRegistry({
+    fetchImpl: async (url) => {
+      if (url.includes("geocoding-api.open-meteo.com")) {
+        assert.match(url, /name=%D0%9C%D0%BE%D1%81%D0%BA%D0%B2%D0%B0/);
+        return {
+          ok: true,
+          json: async () => ({
+            results: [
+              {
+                name: "Москва",
+                admin1: "Москва",
+                country: "Россия",
+                latitude: 55.7512,
+                longitude: 37.6184,
+              },
+            ],
+          }),
+        };
+      }
+
+      if (url.includes("api.open-meteo.com")) {
+        assert.match(url, /hourly=/);
+        return {
+          ok: true,
+          json: async () => ({
+            daily: {
+              time: ["2026-07-23", "2026-07-24", "2026-07-25"],
+              weather_code: [61, 3, 2],
+              temperature_2m_max: [24, 22, 25],
+              temperature_2m_min: [16, 14, 15],
+              precipitation_probability_max: [55, 20, 10],
+              precipitation_sum: [0.8, 0, 0],
+              wind_speed_10m_max: [10, 9, 8],
+            },
+            hourly: {
+              time: [
+                "2026-07-23T17:00",
+                "2026-07-23T18:00",
+                "2026-07-23T19:00",
+                "2026-07-23T20:00",
+                "2026-07-23T23:00",
+              ],
+              weather_code: [3, 61, 61, 3, 3],
+              temperature_2m: [23, 22, 21, 20, 18],
+              precipitation_probability: [20, 60, 55, 35, 10],
+              precipitation: [0, 0.3, 0.2, 0, 0],
+              wind_speed_10m: [7, 8, 9, 7, 5],
+            },
+          }),
+        };
+      }
+
+      throw new Error(`unexpected url ${url}`);
+    },
+  });
+
+  const result = await capabilityRegistry.run(
+    "weather_forecast",
+    parseWeatherRequest("Сегодня в Митино вечером будет дождь?"),
+  );
+
+  assert.equal(result.source, "weather_forecast");
+  assert.match(result.text, /Митино, Москва/);
+  assert.match(result.text, /вечером/);
+  assert.match(result.text, /вероятность до 60%/);
+  assert.doesNotMatch(result.text, /Не нашел город/);
 });
 
 test("repository backed orchestrator returns missing capability instead of dead end", async () => {

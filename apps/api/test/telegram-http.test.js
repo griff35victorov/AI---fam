@@ -137,6 +137,147 @@ test("POST /orchestrator/handle uses injected orchestrator", async () => {
   assert.equal(calls.length, 1);
 });
 
+test("GET /chat serves the fallback web chat page", async () => {
+  await withServer({}, async (baseUrl) => {
+    const response = await fetch(`${baseUrl}/chat`);
+
+    assert.equal(response.status, 200);
+    assert.match(response.headers.get("content-type"), /text\/html/);
+    assert.match(await response.text(), /\/web\/chat/);
+  });
+});
+
+test("POST /web/chat fails closed when access code is missing or wrong", async () => {
+  let orchestratorCalled = false;
+
+  await withServer(
+    {
+      users: [{ id: "owner-1", role: "owner", workspaceId: "workspace-family" }],
+      orchestrator: async () => {
+        orchestratorCalled = true;
+        return { answer: { text: "should not happen" } };
+      },
+    },
+    async (baseUrl) => {
+      const missingConfig = await postJson(`${baseUrl}/web/chat`, {
+        role: "owner",
+        accessCode: "test-code",
+        message: "hello",
+      });
+      assert.equal(missingConfig.status, 503);
+      assert.deepEqual(await missingConfig.json(), {
+        error: "web_chat_access_code_not_configured",
+      });
+    },
+  );
+
+  await withServer(
+    {
+      users: [{ id: "owner-1", role: "owner", workspaceId: "workspace-family" }],
+      webChatAccessCode: "test-code",
+      orchestrator: async () => {
+        orchestratorCalled = true;
+        return { answer: { text: "should not happen" } };
+      },
+    },
+    async (baseUrl) => {
+      const wrongCode = await postJson(`${baseUrl}/web/chat`, {
+        role: "owner",
+        accessCode: "wrong",
+        message: "hello",
+      });
+      assert.equal(wrongCode.status, 401);
+      assert.deepEqual(await wrongCode.json(), {
+        error: "web_chat_access_code_invalid",
+      });
+    },
+  );
+
+  assert.equal(orchestratorCalled, false);
+});
+
+test("POST /web/chat maps family role to existing DB user and calls orchestrator", async () => {
+  const calls = [];
+  const repositories = createInMemoryRepositories({
+    users: [
+      {
+        id: "daughter-1",
+        role: "family_child",
+        workspaceId: "workspace-family",
+      },
+    ],
+  });
+
+  await withServer(
+    {
+      repositories,
+      webChatAccessCode: "test-code",
+      orchestrator: async (request) => {
+        calls.push(request);
+        return { accepted: true, answer: { text: "Web answer" } };
+      },
+    },
+    async (baseUrl) => {
+      const response = await postJson(`${baseUrl}/web/chat`, {
+        role: "daughter",
+        accessCode: "test-code",
+        message: "english practice",
+      });
+
+      assert.equal(response.status, 200);
+      assert.deepEqual(await response.json(), {
+        accepted: true,
+        answer: { text: "Web answer" },
+      });
+    },
+  );
+
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].actor.id, "daughter-1");
+  assert.equal(calls[0].actor.role, "family_child");
+  assert.equal(calls[0].intent, "english_practice");
+  assert.equal(calls[0].conversationId, "web:daughter:daughter-1");
+});
+
+test("POST /web/chat uses repository-backed orchestrator storage", async () => {
+  const repositories = createInMemoryRepositories({
+    users: [
+      {
+        id: "owner-1",
+        role: "owner",
+        workspaceId: "workspace-family",
+      },
+    ],
+  });
+
+  await withServer(
+    {
+      repositories,
+      webChatAccessCode: "test-code",
+    },
+    async (baseUrl) => {
+      const response = await postJson(`${baseUrl}/web/chat`, {
+        role: "owner",
+        accessCode: "test-code",
+        message: "hello from web",
+      });
+
+      assert.equal(response.status, 200);
+      assert.equal((await response.json()).conversationId, "web:owner:owner-1");
+    },
+  );
+
+  const messages = await repositories.conversations.listMessages("web:owner:owner-1");
+  assert.deepEqual(messages.map((message) => message.role), ["user", "assistant"]);
+  assert.equal(messages[0].content, "hello from web");
+  assert.equal(messages[0].metadata.source, "web_chat");
+  assert.equal(messages[0].metadata.telegramUpdateId, undefined);
+  assert.equal(messages[1].metadata.source, "web_chat");
+  assert.equal(messages[1].metadata.replyToTelegramUpdateId, undefined);
+  assert.equal(typeof messages[1].content, "string");
+  assert.ok(messages[1].content.length > 0);
+});
+
 test("POST /telegram/webhook sends Telegram message when sender is configured", async () => {
   const sentMessages = [];
 

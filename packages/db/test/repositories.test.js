@@ -7,8 +7,8 @@ describe("in-memory repositories", () => {
   it("finds users by Telegram user id", async () => {
     const repositories = createInMemoryRepositories({
       users: [
-        { id: "user-owner", displayName: "Owner", telegramUserId: "101" },
-        { id: "user-teacher", displayName: "Teacher", telegramUserId: "202" },
+        { id: "user-owner", role: "owner", displayName: "Owner", telegramUserId: "101" },
+        { id: "user-teacher", role: "teacher", displayName: "Teacher", telegramUserId: "202" },
       ],
     });
 
@@ -17,6 +17,8 @@ describe("in-memory repositories", () => {
       "user-teacher",
     );
     assert.equal(await repositories.users.findByTelegramUserId("missing"), null);
+    assert.equal((await repositories.users.findFirstByRole("owner")).id, "user-owner");
+    assert.equal(await repositories.users.findFirstByRole("missing"), null);
   });
 
   it("lists raw memories visible for an actor", async () => {

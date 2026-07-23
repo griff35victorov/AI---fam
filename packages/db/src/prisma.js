@@ -274,6 +274,13 @@ export function createPrismaRepositories(prisma) {
           where: { telegramUserId: String(telegramUserId) },
         });
       },
+
+      async findFirstByRole(role) {
+        return prisma.user.findFirst({
+          where: { role },
+          orderBy: { createdAt: "asc" },
+        });
+      },
     },
 
     memories: {

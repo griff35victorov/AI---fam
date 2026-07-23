@@ -240,6 +240,8 @@ describe("Prisma repositories", () => {
       "teacher-1",
     );
     assert.equal(await repositories.users.findByTelegramUserId("missing"), null);
+    assert.equal((await repositories.users.findFirstByRole("owner")).id, "owner-1");
+    assert.equal(await repositories.users.findFirstByRole("missing"), null);
   });
 
   it("loads memories for actor and workspace", async () => {

@@ -1,4 +1,5 @@
 import { createServer } from "node:http";
+import { timingSafeEqual } from "node:crypto";
 
 import {
   bootstrapUsersFromEnv,
@@ -20,6 +21,7 @@ import {
   buildTelegramRequest,
   buildTelegramRequestFromRepositories,
   handleTelegramUpdate,
+  inferIntentFromText,
   startCommandText,
   telegramUpdateDedupeKeyPart,
 } from "./telegram.js";
@@ -40,12 +42,272 @@ function sendJson(response, statusCode, body) {
   response.end(payload);
 }
 
+function sendHtml(response, statusCode, body) {
+  response.writeHead(statusCode, {
+    "content-type": "text/html; charset=utf-8",
+    "content-length": Buffer.byteLength(body),
+    "connection": "close",
+  });
+  response.end(body);
+}
+
 async function readJson(request) {
   const chunks = [];
   for await (const chunk of request) chunks.push(chunk);
   if (chunks.length === 0) return {};
   return JSON.parse(Buffer.concat(chunks).toString("utf8"));
 }
+
+function accessCodeMatches(received, expected) {
+  if (!expected || typeof received !== "string") {
+    return false;
+  }
+
+  const receivedBuffer = Buffer.from(received);
+  const expectedBuffer = Buffer.from(expected);
+  return (
+    receivedBuffer.length === expectedBuffer.length &&
+    timingSafeEqual(receivedBuffer, expectedBuffer)
+  );
+}
+
+const webChatRoleMap = {
+  owner: "owner",
+  daughter: "family_child",
+  teacher: "teacher",
+};
+
+function normalizeWebChatRole(role) {
+  return webChatRoleMap[String(role ?? "").trim().toLowerCase()] ?? null;
+}
+
+async function resolveWebChatActor({ role, repositories, users = [] }) {
+  const dbRole = normalizeWebChatRole(role);
+  if (!dbRole) {
+    return null;
+  }
+
+  if (typeof repositories?.users?.findFirstByRole === "function") {
+    return repositories.users.findFirstByRole(dbRole);
+  }
+
+  return users.find((user) => user.role === dbRole) ?? null;
+}
+
+function buildWebChatRequest({ body, actor, workspaceId }) {
+  const text = String(body.message ?? body.text ?? "").trim();
+  const role = String(body.role ?? "").trim().toLowerCase();
+  return {
+    actor,
+    intent: inferIntentFromText(actor, text),
+    text,
+    conversationId: `web:${role}:${actor.id}`,
+    workspaceId: actor.workspaceId ?? workspaceId,
+    source: "web_chat",
+  };
+}
+
+const webChatPage = `<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Family AI - резервный чат</title>
+  <style>
+    :root {
+      color-scheme: light;
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: #f3f5f8;
+      color: #111827;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; min-height: 100dvh; background: #f3f5f8; color: #111827; }
+    main { width: min(960px, 100%); margin: 0 auto; padding: 20px 14px; }
+    header { display: grid; gap: 10px; padding: 4px 0 16px; }
+    h1 { margin: 0; font-size: clamp(22px, 3vw, 30px); line-height: 1.15; letter-spacing: 0; }
+    .status-row { display: flex; flex-wrap: wrap; gap: 8px; }
+    .status {
+      border: 1px solid #cfd7e3;
+      border-radius: 999px;
+      background: #ffffff;
+      color: #314158;
+      padding: 7px 10px;
+      font-size: 13px;
+      line-height: 1;
+    }
+    .panel {
+      display: grid;
+      gap: 12px;
+      border: 1px solid #d7dee9;
+      border-radius: 8px;
+      background: #ffffff;
+      padding: 14px;
+    }
+    .settings {
+      display: grid;
+      grid-template-columns: minmax(160px, 1fr) minmax(150px, 220px);
+      gap: 10px;
+    }
+    label { display: grid; gap: 6px; font-size: 13px; font-weight: 650; color: #314158; }
+    input, select, textarea, button {
+      min-width: 0;
+      font: inherit;
+      border: 1px solid #bdc7d6;
+      border-radius: 7px;
+      padding: 10px 11px;
+    }
+    input, select, textarea { background: #ffffff; color: #111827; }
+    textarea { min-height: 92px; resize: vertical; line-height: 1.4; }
+    input:focus, select:focus, textarea:focus {
+      outline: 2px solid #2563eb;
+      outline-offset: 1px;
+      border-color: #2563eb;
+    }
+    button {
+      border-color: #2563eb;
+      background: #2563eb;
+      color: #ffffff;
+      cursor: pointer;
+      font-weight: 700;
+    }
+    button:disabled { opacity: .68; cursor: wait; }
+    button:active:not(:disabled) { transform: translateY(1px); }
+    #messages {
+      display: grid;
+      align-content: start;
+      gap: 10px;
+      min-height: 360px;
+      max-height: min(58dvh, 620px);
+      overflow: auto;
+      border: 1px solid #d7dee9;
+      border-radius: 8px;
+      background: #f8fafc;
+      padding: 12px;
+      scroll-behavior: smooth;
+    }
+    .message {
+      width: min(82%, 720px);
+      border: 1px solid #d7dee9;
+      border-radius: 8px;
+      background: #ffffff;
+      padding: 10px 12px;
+      white-space: pre-wrap;
+      line-height: 1.42;
+    }
+    .message.user {
+      justify-self: end;
+      border-color: #a8c7ff;
+      background: #eaf2ff;
+    }
+    .message.assistant { justify-self: start; }
+    .message.error {
+      border-color: #f3b5b5;
+      background: #fff1f1;
+      color: #7f1d1d;
+    }
+    .composer { display: grid; grid-template-columns: 1fr 132px; gap: 10px; align-items: end; }
+    .hint { margin: 0; color: #667085; font-size: 13px; line-height: 1.35; }
+    @media (max-width: 700px) {
+      main { padding: 12px 10px; }
+      .settings, .composer { grid-template-columns: 1fr; }
+      #messages { min-height: 45dvh; max-height: 56dvh; }
+      .message { width: min(94%, 720px); }
+    }
+    @media (prefers-color-scheme: dark) {
+      :root { color-scheme: dark; background: #111827; color: #eef2f7; }
+      body { background: #111827; color: #eef2f7; }
+      .panel, .status, input, select, textarea, .message { background: #172033; color: #eef2f7; border-color: #334155; }
+      #messages { background: #0f172a; border-color: #334155; }
+      .message.user { background: #14315d; border-color: #2f63b4; }
+      .message.error { background: #3b1717; border-color: #7f1d1d; color: #fecaca; }
+      .hint, label, .status { color: #cbd5e1; }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <h1>Family AI - резервный чат</h1>
+      <div class="status-row" aria-label="Статус каналов">
+        <span class="status">Telegram остается основным каналом</span>
+        <span class="status">Web идет в тот же оркестр и память</span>
+      </div>
+    </header>
+    <section class="panel">
+      <div class="settings">
+        <label>Код доступа<input id="code" name="code" type="password" autocomplete="current-password" required></label>
+        <label>Профиль<select id="role" name="role">
+          <option value="owner">Григорий</option>
+          <option value="daughter">Мила</option>
+          <option value="teacher">English Teacher AI</option>
+        </select></label>
+      </div>
+      <div id="messages" aria-live="polite">
+        <div class="message assistant">Напишите сообщение. Ответ появится здесь и сохранится в той же семейной памяти.</div>
+      </div>
+      <form id="chat-form" class="composer">
+        <label>Сообщение<textarea id="message" name="message" required></textarea></label>
+        <button id="send" type="submit">Отправить</button>
+      </form>
+      <p class="hint">Если Telegram временно не отвечает, этот чат использует тот же backend напрямую.</p>
+    </section>
+  </main>
+  <script>
+    const form = document.getElementById("chat-form");
+    const messages = document.getElementById("messages");
+    const send = document.getElementById("send");
+    const role = document.getElementById("role");
+    const savedRole = sessionStorage.getItem("family-ai-role");
+    if (savedRole) role.value = savedRole;
+
+    function appendMessage(kind, text) {
+      const item = document.createElement("div");
+      item.className = "message " + kind;
+      item.textContent = text;
+      messages.appendChild(item);
+      messages.scrollTop = messages.scrollHeight;
+      return item;
+    }
+
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const message = document.getElementById("message");
+      const code = document.getElementById("code");
+      const text = message.value.trim();
+      if (!text) return;
+
+      sessionStorage.setItem("family-ai-role", role.value);
+      appendMessage("user", text);
+      message.value = "";
+      const pending = appendMessage("assistant", "Готовлю ответ...");
+      send.disabled = true;
+
+      try {
+        const response = await fetch("/web/chat", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            accessCode: code.value,
+            role: role.value,
+            message: text,
+          }),
+        });
+        const body = await response.json();
+        pending.className = response.ok ? "message assistant" : "message error";
+        pending.textContent = response.ok
+          ? (body.answer && body.answer.text ? body.answer.text : "Пустой ответ")
+          : ("Ошибка: " + (body.error || "request_failed"));
+      } catch (error) {
+        pending.className = "message error";
+        pending.textContent = "Ошибка связи с backend.";
+      } finally {
+        send.disabled = false;
+        message.focus();
+      }
+    });
+  </script>
+</body>
+</html>`;
 
 function authorizeTelegramWebhookRequest({
   request,
@@ -868,6 +1130,8 @@ export function createAppServer(options = {}) {
     options.supervisorAuditDedupMs ??
     dependencies.supervisorAuditDedupMs ??
     10 * 60_000;
+  const webChatAccessCode =
+    options.webChatAccessCode ?? dependencies.webChatAccessCode;
   const users = options.users ?? dependencies.users ?? [];
   const orchestrator =
     options.orchestrator ??
@@ -889,19 +1153,70 @@ export function createAppServer(options = {}) {
 
   const server = createServer(async (request, response) => {
     try {
-      if (request.method === "GET" && request.url === "/health") {
+      const requestPathname = new URL(request.url ?? "/", "http://localhost").pathname;
+
+      if (request.method === "GET" && requestPathname === "/health") {
         sendJson(response, 200, createHealthResponse());
         return;
       }
 
-      if (request.method === "POST" && request.url === "/orchestrator/handle") {
+      if (
+        request.method === "GET" &&
+        (requestPathname === "/" || requestPathname === "/chat")
+      ) {
+        sendHtml(response, 200, webChatPage);
+        return;
+      }
+
+      if (request.method === "POST" && requestPathname === "/orchestrator/handle") {
         const body = await readJson(request);
         sendJson(response, 200, await orchestrator(body));
         return;
       }
 
+      if (request.method === "POST" && requestPathname === "/web/chat") {
+        if (!webChatAccessCode) {
+          sendJson(response, 503, { error: "web_chat_access_code_not_configured" });
+          return;
+        }
+
+        const body = await readJson(request);
+        const receivedAccessCode =
+          body.accessCode ?? body.code ?? request.headers["x-family-ai-web-code"];
+        if (!accessCodeMatches(receivedAccessCode, webChatAccessCode)) {
+          sendJson(response, 401, { error: "web_chat_access_code_invalid" });
+          return;
+        }
+
+        const actor = await resolveWebChatActor({
+          role: body.role,
+          repositories,
+          users,
+        });
+        if (!actor) {
+          sendJson(response, 403, { error: "web_chat_role_not_allowed" });
+          return;
+        }
+
+        const text = String(body.message ?? body.text ?? "").trim();
+        if (!text) {
+          sendJson(response, 400, { error: "message_required" });
+          return;
+        }
+
+        const result = await orchestrator(
+          buildWebChatRequest({
+            body,
+            actor,
+            workspaceId: dependencies.workspaceId,
+          }),
+        );
+        sendJson(response, 200, result);
+        return;
+      }
+
       const telegramWebhookRoute =
-        request.method === "POST" ? parseTelegramWebhookRoute(request.url) : null;
+        request.method === "POST" ? parseTelegramWebhookRoute(requestPathname) : null;
 
       if (telegramWebhookRoute) {
         const botKey = telegramWebhookRoute.botKey;

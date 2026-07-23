@@ -813,6 +813,7 @@ export function createRepositoryBackedOrchestrator({
     const requestStartedMs = Date.now();
     const conversationId = conversationIdForRequest(request);
     const requestWorkspaceId = workspaceIdForRequest(request, workspaceId);
+    const requestSource = request.source ?? "telegram";
     const createdAt = now();
     const learningCommand = parseLearningCommand(request.text);
     const unsafeLearningCommand = isUnsafeLearningCommand(learningCommand);
@@ -837,8 +838,10 @@ export function createRepositoryBackedOrchestrator({
         role: "assistant",
         content: answerText,
         metadata: {
-          source: "telegram",
-          replyToTelegramUpdateId: request.telegramUpdateId,
+          source: requestSource,
+          ...(request.telegramUpdateId != null
+            ? { replyToTelegramUpdateId: request.telegramUpdateId }
+            : {}),
           action,
           ...metadata,
         },
@@ -853,9 +856,11 @@ export function createRepositoryBackedOrchestrator({
         role: "user",
         content: unsafeLearningCommand ? "[unsafe learning command redacted]" : request.text ?? "",
         metadata: {
-          source: "telegram",
+          source: requestSource,
           intent: request.intent,
-          telegramUpdateId: request.telegramUpdateId,
+          ...(request.telegramUpdateId != null
+            ? { telegramUpdateId: request.telegramUpdateId }
+            : {}),
           ...(unsafeLearningCommand ? { redacted: "unsafe_learning_command" } : {}),
         },
         userId: request.actor.id,
@@ -1269,7 +1274,13 @@ export function createRepositoryBackedOrchestrator({
         actorId: request.actor.id,
         action: "bot_diagnostics_requested",
         resource: conversationId,
-        metadata: { durationMs, telegramUpdateId: request.telegramUpdateId },
+        metadata: {
+          durationMs,
+          source: requestSource,
+          ...(request.telegramUpdateId != null
+            ? { telegramUpdateId: request.telegramUpdateId }
+            : {}),
+        },
         createdAt: now(),
       });
       await appendAssistantMessage({
@@ -1807,7 +1818,9 @@ export function createRepositoryBackedOrchestrator({
           durationMs,
           errorName: error.name,
           errorMessage: String(error.message ?? "").slice(0, 240),
-          telegramUpdateId: request.telegramUpdateId,
+          ...(request.telegramUpdateId != null
+            ? { telegramUpdateId: request.telegramUpdateId }
+            : {}),
         },
         createdAt: now(),
       });
@@ -1845,7 +1858,9 @@ export function createRepositoryBackedOrchestrator({
           action,
           materialContextCount: materialChunks.length,
           automaticMemoryCount: automaticMemories.length,
-          telegramUpdateId: request.telegramUpdateId,
+          ...(request.telegramUpdateId != null
+            ? { telegramUpdateId: request.telegramUpdateId }
+            : {}),
         },
         createdAt: now(),
       });
@@ -1855,8 +1870,10 @@ export function createRepositoryBackedOrchestrator({
       role: "assistant",
       content: answerText,
       metadata: {
-        source: "telegram",
-        replyToTelegramUpdateId: request.telegramUpdateId,
+        source: requestSource,
+        ...(request.telegramUpdateId != null
+          ? { replyToTelegramUpdateId: request.telegramUpdateId }
+          : {}),
         action,
         agentProfile: response.agentProfile,
         modelProfile: response.modelProfile,

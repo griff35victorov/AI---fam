@@ -352,6 +352,12 @@ export function createInMemoryRepositories(seed = {}) {
           users.find((user) => user.telegramUserId === telegramUserId) ?? null,
         );
       },
+
+      async findFirstByRole(role) {
+        return cloneRecord(
+          users.find((user) => user.role === role) ?? null,
+        );
+      },
     },
 
     memories: {

@@ -199,6 +199,12 @@ const cityAliases = new Map([
   ["спб", "Санкт-Петербург"],
 ]);
 
+const weatherLocalAreaAliases = new Map([
+  ["митино", { location: "Москва", displayLocation: "Митино, Москва" }],
+  ["митине", { location: "Москва", displayLocation: "Митино, Москва" }],
+  ["митин", { location: "Москва", displayLocation: "Митино, Москва" }],
+]);
+
 const timezoneAliases = new Map([
   ["москва", "Europe/Moscow"],
   ["москве", "Europe/Moscow"],
@@ -233,6 +239,57 @@ const weatherCodeLabels = new Map([
   [96, "гроза с градом"],
   [99, "сильная гроза с градом"],
 ]);
+
+function resolveWeatherLocalArea(lowerText) {
+  for (const [alias, location] of weatherLocalAreaAliases.entries()) {
+    if (lowerText.includes(alias)) {
+      return location;
+    }
+  }
+
+  return null;
+}
+
+function parseWeatherTarget(lowerText) {
+  if (lowerText.includes("выходн") || lowerText.includes("weekend")) return "weekend";
+  if (lowerText.includes("послезавтра")) return "day_after_tomorrow";
+  if (lowerText.includes("завтра") || lowerText.includes("tomorrow")) return "tomorrow";
+  if (
+    lowerText.includes("сегодня") ||
+    lowerText.includes("tonight") ||
+    lowerText.includes("today")
+  ) {
+    return "today";
+  }
+
+  return "daily";
+}
+
+function parseWeatherDayPart(lowerText) {
+  if (lowerText.includes("вечер") || lowerText.includes("вечером") || lowerText.includes("tonight") || lowerText.includes("evening")) {
+    return "evening";
+  }
+  if (lowerText.includes("утро") || lowerText.includes("утром") || lowerText.includes("morning")) {
+    return "morning";
+  }
+  if (lowerText.includes("днем") || lowerText.includes("днём") || lowerText.includes("afternoon")) {
+    return "afternoon";
+  }
+  if (lowerText.includes("ноч") || lowerText.includes("night")) {
+    return "night";
+  }
+
+  return null;
+}
+
+function cleanWeatherLocationCandidate(candidate) {
+  const cleaned = String(candidate ?? "")
+    .replace(/\s+(?:на|завтра|сегодня|вечером|вечер|утром|днем|днём|ночью|будет|ожидается|дожд|снег|погода|температур|ветер|выходн).*/i, "")
+    .replace(/^(?:район(?:е)?|город(?:е)?|г\.)\s+/i, "")
+    .trim();
+
+  return cleaned.length >= 2 ? cleaned : null;
+}
 
 export function createCapabilityRegistry({
   fetchImpl = fetch,
@@ -446,25 +503,33 @@ export function isWeatherRequest(text) {
 export function parseWeatherRequest(text) {
   const normalized = String(text ?? "").trim();
   const lower = normalized.toLowerCase();
-  let location = null;
+  const localArea = resolveWeatherLocalArea(lower);
+  let location = localArea?.location ?? null;
+  let displayLocation = localArea?.displayLocation ?? null;
 
-  for (const [alias, city] of cityAliases.entries()) {
-    if (lower.includes(alias)) {
-      location = city;
-      break;
+  if (!location) {
+    for (const [alias, city] of cityAliases.entries()) {
+      if (lower.includes(alias)) {
+        location = city;
+        break;
+      }
     }
   }
 
   if (!location) {
     const locationMatch =
-      normalized.match(/(?:в|во|для)\s+([A-Za-zА-Яа-яЁё -]{3,40})(?:\s+(?:на|завтра|сегодня|будет|ожидается)|[?.!,]|$)/i) ??
+      normalized.match(/(?:в|во|для|по)\s+([A-Za-zА-Яа-яЁё -]{2,50}?)(?=\s+(?:на|завтра|сегодня|вечером|вечер|утром|днем|днём|ночью|будет|ожидается|дожд|снег|погода|температур|ветер|выходн)|[?.!,]|$)/i) ??
       normalized.match(/weather\s+in\s+([A-Za-zА-Яа-яЁё -]{3,40})/i);
-    location = locationMatch?.[1]?.trim() ?? null;
+    location = cleanWeatherLocationCandidate(locationMatch?.[1]) ?? null;
   }
+
+  const partOfDay = parseWeatherDayPart(lower);
 
   return {
     location: location ?? "Москва",
-    target: lower.includes("выходн") || lower.includes("weekend") ? "weekend" : "daily",
+    ...(displayLocation ? { displayLocation } : {}),
+    target: parseWeatherTarget(lower),
+    ...(partOfDay ? { partOfDay } : {}),
   };
 }
 
@@ -680,7 +745,9 @@ export function buildMissingCurrentDataCapabilityAnswer(text) {
 
 export async function fetchWeatherForecast({
   location,
+  displayLocation,
   target = "daily",
+  partOfDay,
   fetchImpl = fetch,
   timeoutMs = 6000,
   forecastDays = 10,
@@ -709,6 +776,7 @@ export async function fetchWeatherForecast({
     "https://api.open-meteo.com/v1/forecast" +
     `?latitude=${place.latitude}&longitude=${place.longitude}` +
     "&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max,precipitation_sum,wind_speed_10m_max" +
+    "&hourly=weather_code,temperature_2m,precipitation_probability,precipitation,wind_speed_10m" +
     `&forecast_days=${forecastDays}&timezone=auto`;
   const forecastResponse = await fetchWithTimeout(fetchImpl, forecastUrl, {
     timeoutMs,
@@ -719,18 +787,52 @@ export async function fetchWeatherForecast({
 
   const forecast = await forecastResponse.json();
   const days = dailyRows(forecast.daily);
-  const selectedDays = target === "weekend" ? nextWeekendRows(days) : days.slice(0, 3);
+  const selectedDays = selectedDailyRows(days, target);
   const placeLabel = [place.name, place.admin1, place.country]
     .filter(Boolean)
     .join(", ");
+  const answerPlaceLabel = displayWeatherPlaceLabel(displayLocation, placeLabel);
+
+  if (partOfDay) {
+    const rows = hourlyRows(forecast.hourly);
+    const dayPartRows = selectedDays
+      .map((day) => ({
+        date: day.date,
+        rows: hourlyRowsForDayPart(rows, day.date, partOfDay),
+      }))
+      .filter((day) => day.rows.length > 0);
+
+    if (dayPartRows.length > 0) {
+      return {
+        text: formatWeatherDayPartAnswer({
+          placeLabel: answerPlaceLabel,
+          dayPartRows,
+          partOfDay,
+          sourceLabel: "Open-Meteo",
+        }),
+        source: "weather_forecast",
+        metadata: {
+          location: placeLabel,
+          displayLocation: displayLocation ?? null,
+          latitude: place.latitude,
+          longitude: place.longitude,
+          target,
+          partOfDay,
+        },
+      };
+    }
+  }
 
   return {
-    text: formatWeatherAnswer({ placeLabel, days: selectedDays, target, sourceLabel: "Open-Meteo" }),
+    text: formatWeatherAnswer({ placeLabel: answerPlaceLabel, days: selectedDays, target, sourceLabel: "Open-Meteo" }),
     source: "weather_forecast",
     metadata: {
       location: placeLabel,
+      displayLocation: displayLocation ?? null,
       latitude: place.latitude,
       longitude: place.longitude,
+      target,
+      partOfDay: partOfDay ?? null,
     },
   };
 }
@@ -762,7 +864,7 @@ export async function fetchWttrWeatherForecast({
     precipitationSum: Number(day.totalSnow_cm ?? 0),
     windSpeedMax: Number(day.hourly?.[4]?.windspeedKmph ?? 0),
   }));
-  const selectedDays = target === "weekend" ? nextWeekendRows(days) : days.slice(0, 3);
+  const selectedDays = selectedDailyRows(days, target);
 
   return {
     text: formatWeatherAnswer({
@@ -1521,6 +1623,22 @@ function dailyRows(daily = {}) {
   }));
 }
 
+function hourlyRows(hourly = {}) {
+  return (hourly.time ?? []).map((time, index) => {
+    const [, hourText] = String(time).match(/T(\d{2})/) ?? [];
+    return {
+      time,
+      date: String(time).slice(0, 10),
+      hour: Number(hourText),
+      weatherCode: hourly.weather_code?.[index],
+      temperature: hourly.temperature_2m?.[index],
+      precipitationProbability: hourly.precipitation_probability?.[index],
+      precipitation: hourly.precipitation?.[index],
+      windSpeed: hourly.wind_speed_10m?.[index],
+    };
+  });
+}
+
 function nextWeekendRows(days) {
   const weekend = days.filter((day) => {
     const dayOfWeek = new Date(`${day.date}T12:00:00`).getDay();
@@ -1528,6 +1646,81 @@ function nextWeekendRows(days) {
   });
 
   return weekend.slice(0, 2);
+}
+
+function selectedDailyRows(days, target) {
+  if (target === "weekend") return nextWeekendRows(days);
+  if (target === "tomorrow") return days.slice(1, 2);
+  if (target === "day_after_tomorrow") return days.slice(2, 3);
+  if (target === "today") return days.slice(0, 1);
+  return days.slice(0, 3);
+}
+
+function dayPartHourRange(partOfDay) {
+  if (partOfDay === "morning") return [6, 11];
+  if (partOfDay === "afternoon") return [12, 17];
+  if (partOfDay === "evening") return [18, 23];
+  if (partOfDay === "night") return [0, 5];
+  return null;
+}
+
+function dayPartLabel(partOfDay) {
+  return {
+    morning: "утром",
+    afternoon: "днем",
+    evening: "вечером",
+    night: "ночью",
+  }[partOfDay] ?? "в выбранный период";
+}
+
+function hourlyRowsForDayPart(rows, date, partOfDay) {
+  const range = dayPartHourRange(partOfDay);
+  if (!range) return [];
+  const [fromHour, toHour] = range;
+
+  return rows.filter(
+    (row) =>
+      row.date === date &&
+      Number.isFinite(row.hour) &&
+      row.hour >= fromHour &&
+      row.hour <= toHour,
+  );
+}
+
+function numberValues(values) {
+  return values.map((value) => Number(value)).filter((value) => Number.isFinite(value));
+}
+
+function maxNumber(values, fallback = 0) {
+  const parsed = numberValues(values);
+  return parsed.length > 0 ? Math.max(...parsed) : fallback;
+}
+
+function minNumber(values, fallback = 0) {
+  const parsed = numberValues(values);
+  return parsed.length > 0 ? Math.min(...parsed) : fallback;
+}
+
+function sumNumbers(values) {
+  return numberValues(values).reduce((sum, value) => sum + value, 0);
+}
+
+function formatMm(value) {
+  return Number(value).toFixed(1).replace(/\.0$/, "");
+}
+
+function isWetWeatherCode(code) {
+  return [51, 53, 55, 56, 57, 61, 63, 65, 66, 67, 80, 81, 82, 95, 96, 99].includes(
+    Number(code),
+  );
+}
+
+function displayWeatherPlaceLabel(displayLocation, placeLabel) {
+  if (!displayLocation || displayLocation === placeLabel) {
+    return placeLabel;
+  }
+
+  return `${displayLocation} (прогноз по ближайшей точке: ${placeLabel})`;
 }
 
 function formatWeatherAnswer({ placeLabel, days, target, sourceLabel }) {
@@ -1552,6 +1745,45 @@ function formatWeatherAnswer({ placeLabel, days, target, sourceLabel }) {
         `ветер до ${Math.round(day.windSpeedMax ?? 0)} км/ч`,
       ].join(", ");
     }),
+    `Источник: ${sourceLabel}.`,
+  ].join("\n");
+}
+
+function formatWeatherDayPartAnswer({
+  placeLabel,
+  dayPartRows,
+  partOfDay,
+  sourceLabel,
+}) {
+  if (dayPartRows.length === 0) {
+    return `Для ${placeLabel} почасовой прогноз пока не найден в доступном диапазоне.`;
+  }
+
+  const label = dayPartLabel(partOfDay);
+  const lines = dayPartRows.map(({ date, rows }) => {
+    const precipitationProbability = maxNumber(
+      rows.map((row) => row.precipitationProbability),
+    );
+    const precipitationSum = sumNumbers(rows.map((row) => row.precipitation));
+    const temperatureMin = minNumber(rows.map((row) => row.temperature));
+    const temperatureMax = maxNumber(rows.map((row) => row.temperature));
+    const windSpeedMax = maxNumber(rows.map((row) => row.windSpeed));
+    const wetCode = rows.some((row) => isWetWeatherCode(row.weatherCode));
+    const precipitationLikely =
+      wetCode || precipitationProbability >= 45 || precipitationSum >= 0.2;
+
+    return [
+      `- ${date} ${label}: ${precipitationLikely ? "осадки вероятны" : "значимых осадков не видно"}`,
+      `вероятность до ${Math.round(precipitationProbability)}%`,
+      `осадки ${formatMm(precipitationSum)} мм`,
+      `${Math.round(temperatureMin)}...${Math.round(temperatureMax)} °C`,
+      `ветер до ${Math.round(windSpeedMax)} км/ч`,
+    ].join(", ");
+  });
+
+  return [
+    `Погода ${label}: ${placeLabel}`,
+    ...lines,
     `Источник: ${sourceLabel}.`,
   ].join("\n");
 }

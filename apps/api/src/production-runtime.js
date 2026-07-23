@@ -374,6 +374,7 @@ export function createProductionDependencies({
   return {
     repositories: resolvedRepositories,
     workspaceId: envValue(env.APP_DEFAULT_WORKSPACE_ID) ?? defaultWorkspaceId,
+    webChatAccessCode: envValue(env.WEB_CHAT_ACCESS_CODE),
     capabilityRegistry,
     telegramWebhookSecret: envValue(env.TELEGRAM_WEBHOOK_SECRET),
     telegramWebhookSecrets: parseTelegramWebhookSecrets(env),
