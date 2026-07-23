@@ -157,7 +157,7 @@ test("production dependencies create dedicated Telegram bot senders and secrets"
   ]);
 });
 
-test("production dependencies keep Telegram polling disabled by default in production", () => {
+test("production dependencies enable Telegram polling by default in production when bot tokens exist", () => {
   const dependencies = createProductionDependencies({
     env: {
       NODE_ENV: "production",
@@ -166,7 +166,7 @@ test("production dependencies keep Telegram polling disabled by default in produ
     repositories: createInMemoryRepositories(),
   });
 
-  assert.equal(dependencies.telegramPollingEnabled, false);
+  assert.equal(dependencies.telegramPollingEnabled, true);
   assert.equal(dependencies.telegramUpdateQueueEnabled, true);
   assert.equal(dependencies.telegramWebhookIngressMode, "direct_or_relay");
   assert.equal(dependencies.telegramUpdateDispatcherIntervalMs, 1000);
@@ -222,17 +222,17 @@ test("production dependencies disable durable queue defaults without repositorie
   assert.equal(dependencies.supervisorEnabled, false);
 });
 
-test("production dependencies enable Telegram polling only when explicitly requested", () => {
+test("production dependencies can explicitly disable Telegram polling", () => {
   const dependencies = createProductionDependencies({
     env: {
       NODE_ENV: "production",
-      TELEGRAM_POLLING_ENABLED: "true",
+      TELEGRAM_POLLING_ENABLED: "false",
       TELEGRAM_OWNER_BOT_TOKEN: "owner-token",
     },
     repositories: createInMemoryRepositories(),
   });
 
-  assert.equal(dependencies.telegramPollingEnabled, true);
+  assert.equal(dependencies.telegramPollingEnabled, false);
   assert.deepEqual(dependencies.telegramPollingBotTokens, { owner: "owner-token" });
 });
 

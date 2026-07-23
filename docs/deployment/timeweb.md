@@ -51,6 +51,18 @@ MVP can use PostgreSQL job tables and a polling worker:
 
 Redis/BullMQ can be introduced when throughput or reliability requires it.
 
+## Telegram Transport
+
+For Timeweb App Platform the recommended MVP transport is Telegram polling
+inside the public `web` service. It avoids App Platform webhook timeouts and
+removes the need to keep Telegram webhook secrets synchronized between Telegram,
+relay, and the application.
+
+- Production enables polling by default when Telegram bot tokens are configured.
+- Telegram webhooks should be deleted for the same bots while polling is active.
+- Set `TELEGRAM_POLLING_ENABLED=false` only when a dedicated webhook ingress is
+  intentionally configured and verified.
+
 ## PostgreSQL Integration
 
 The DB package contains a Prisma schema and an initial migration under `packages/db/prisma/migrations`. The runtime repository contract has both in-memory and Prisma-backed adapters; production startup can create Prisma-backed repositories when `DATABASE_URL` is set.

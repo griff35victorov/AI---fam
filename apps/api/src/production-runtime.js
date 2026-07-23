@@ -344,6 +344,7 @@ export function createProductionDependencies({
     ? createWebShoppingProvider({ webSearch: webSearchProvider })
     : undefined;
   const automationProvider = createLocalAutomationProvider({ tasksProvider });
+  const telegramPollingBotTokens = parseTelegramBotTokens(env);
   const capabilityRegistry = createCapabilityRegistry({
     fetchImpl,
     weatherTimeoutMs: parseNumber(env.WEATHER_TIMEOUT_MS, 6000),
@@ -375,12 +376,12 @@ export function createProductionDependencies({
     telegramReplyMode: envValue(env.TELEGRAM_REPLY_MODE) ?? "webhook_response",
     telegramPollingEnabled: parseBoolean(
       env.TELEGRAM_POLLING_ENABLED,
-      false,
+      env.NODE_ENV === "production" && Object.keys(telegramPollingBotTokens).length > 0,
     ),
     telegramPollingIntervalMs: parseNumber(env.TELEGRAM_POLLING_INTERVAL_MS, 1000),
     telegramPollingErrorDelayMs: parseNumber(env.TELEGRAM_POLLING_ERROR_DELAY_MS, 5000),
     telegramPollingTimeoutSeconds: parseNumber(env.TELEGRAM_POLLING_TIMEOUT_SECONDS, 20),
-    telegramPollingBotTokens: parseTelegramBotTokens(env),
+    telegramPollingBotTokens,
     telegramPollingFetchImpl: fetchImpl,
     telegramAcceptedAckThrottleMs: parseNumber(
       env.TELEGRAM_ACCEPTED_ACK_THROTTLE_MS,
