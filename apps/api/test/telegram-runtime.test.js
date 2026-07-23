@@ -859,6 +859,22 @@ test("repository backed orchestrator answers diagnostics without calling AI", as
         },
         error: "relay timeout",
       },
+      {
+        id: "failed-telegram-delivery",
+        type: "telegram-delivery",
+        payload: {
+          botKey: "owner",
+          updateId: 797,
+          chatId: 777,
+        },
+        status: "failed",
+        attempts: 1,
+        result: {
+          stage: "send",
+          error: "relay returned 502",
+        },
+        error: "relay returned 502",
+      },
     ],
   });
   await repositories.telegramPollingStates.updateOffset({
@@ -891,8 +907,10 @@ test("repository backed orchestrator answers diagnostics without calling AI", as
   assert.match(response.answer.text, /Failed jobs/);
   assert.match(response.answer.text, /id failed-t/);
   assert.match(response.answer.text, /type telegram-update/);
+  assert.match(response.answer.text, /type telegram-delivery/);
   assert.match(response.answer.text, /sendWasAttempted yes/);
   assert.match(response.answer.text, /relay timeout/);
+  assert.match(response.answer.text, /relay returned 502/);
 });
 
 test("repository backed orchestrator diagnostics include stale jobs outside recent window", async () => {

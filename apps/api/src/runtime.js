@@ -717,6 +717,11 @@ function buildFailedJobsDiagnostics(jobs = []) {
       const update = payload.update ?? {};
       const message = update.message ?? {};
       const result = job.result ?? {};
+      const sendWasAttempted =
+        result.sendWasAttempted === true ||
+        result.stage === "send" ||
+        result.stage === "sent" ||
+        job.status === "completed";
       const parts = [
         `id ${shortDiagnosticJobId(job.id)}`,
         `type ${job.type}`,
@@ -726,7 +731,7 @@ function buildFailedJobsDiagnostics(jobs = []) {
         `chat ${payload.chatId ?? message.chat?.id ?? result.chatId ?? "unknown"}`,
         `attempts ${job.attempts ?? "unknown"}`,
         `stage ${result.stage ?? "unknown"}`,
-        `sendWasAttempted ${result.sendWasAttempted === true ? "yes" : "no"}`,
+        `sendWasAttempted ${sendWasAttempted ? "yes" : "no"}`,
       ];
       const error = truncateDiagnosticText(job.error ?? result.error);
       if (error) {
