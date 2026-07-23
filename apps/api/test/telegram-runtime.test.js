@@ -835,7 +835,32 @@ test("repository backed orchestrator stores teacher materials and uses them as R
 });
 
 test("repository backed orchestrator answers diagnostics without calling AI", async () => {
-  const repositories = createInMemoryRepositories();
+  const repositories = createInMemoryRepositories({
+    jobs: [
+      {
+        id: "failed-telegram-update",
+        type: "telegram-update",
+        payload: {
+          botKey: "owner",
+          update: {
+            update_id: 796,
+            message: {
+              message_id: 9601,
+              chat: { id: 777 },
+            },
+          },
+        },
+        status: "failed",
+        attempts: 2,
+        result: {
+          stage: "send",
+          sendWasAttempted: true,
+          error: "relay timeout",
+        },
+        error: "relay timeout",
+      },
+    ],
+  });
   await repositories.telegramPollingStates.updateOffset({
     botKey: "owner",
     offset: 42,
@@ -863,6 +888,11 @@ test("repository backed orchestrator answers diagnostics without calling AI", as
   assert.match(response.answer.text, /Самодиагностика/);
   assert.match(response.answer.text, /Telegram polling/);
   assert.match(response.answer.text, /offset 42/);
+  assert.match(response.answer.text, /Failed jobs/);
+  assert.match(response.answer.text, /id failed-t/);
+  assert.match(response.answer.text, /type telegram-update/);
+  assert.match(response.answer.text, /sendWasAttempted yes/);
+  assert.match(response.answer.text, /relay timeout/);
 });
 
 test("repository backed orchestrator diagnostics include stale jobs outside recent window", async () => {

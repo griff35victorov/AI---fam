@@ -765,7 +765,7 @@ test("POST /telegram/owner/webhook queues valid updates before slow user lookup"
   assert.deepEqual(sentMessages, [{ chatId: 777, text: "final answer 900" }]);
 });
 
-test("POST /telegram/owner/webhook answers before slow durable enqueue", async () => {
+test("POST /telegram/owner/webhook waits for durable enqueue before ack", async () => {
   const sentMessages = [];
   const repositories = createInMemoryRepositories({
     users: [
@@ -821,17 +821,24 @@ test("POST /telegram/owner/webhook answers before slow durable enqueue", async (
         },
       });
 
+      let responseResolved = false;
+      responsePromise.then(() => {
+        responseResolved = true;
+      });
+      await new Promise((resolve) => setTimeout(resolve, 50));
+
+      assert.equal(responseResolved, false);
+
+      releaseEnqueue();
+
       const response = await resolveWithin(
         responsePromise,
-        100,
-        "webhook response waited for durable enqueue",
+        1000,
+        "webhook response did not resume after durable enqueue",
       );
 
       assert.equal(response.status, 200);
       await assertAcceptedWebhookMessage(response);
-      assert.equal(sentMessages.length, 0);
-
-      releaseEnqueue();
 
       await waitFor(
         () => sentMessages.length === 1,
@@ -842,6 +849,57 @@ test("POST /telegram/owner/webhook answers before slow durable enqueue", async (
   );
 
   assert.deepEqual(sentMessages, [{ chatId: 777, text: "final answer 901" }]);
+});
+
+test("POST /telegram/owner/webhook returns retryable error when durable enqueue fails", async () => {
+  const repositories = createInMemoryRepositories({
+    users: [
+      {
+        id: "owner-1",
+        role: "owner",
+        telegramUserId: "100",
+        workspaceId: "workspace-family",
+      },
+    ],
+  });
+  repositories.jobs.enqueue = async () => {
+    throw new Error("database temporarily unavailable");
+  };
+
+  await withServer(
+    {
+      repositories,
+      orchestrator: async () => {
+        throw new Error("orchestrator should not run before queue accepts update");
+      },
+      dependencies: {
+        telegramReplyMode: "webhook_response",
+        telegramBackgroundSenders: {
+          owner: {
+            async sendMessage() {
+              throw new Error("telegram sender should not run before queue accepts update");
+            },
+          },
+        },
+      },
+    },
+    async (baseUrl) => {
+      const response = await postJson(`${baseUrl}/telegram/owner/webhook`, {
+        update_id: 902,
+        message: {
+          message_id: 9302,
+          chat: { id: 777 },
+          from: { id: 100 },
+          text: "weather tonight",
+        },
+      });
+
+      assert.equal(response.status, 503);
+      assert.deepEqual(await response.json(), {
+        error: "telegram_update_queue_failed",
+      });
+    },
+  );
 });
 
 test("POST /telegram/owner/webhook answers connectivity check immediately without AI", async () => {

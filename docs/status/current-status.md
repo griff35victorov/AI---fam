@@ -24,7 +24,7 @@ Date: 2026-07-21
 - Telegram replies use webhook-response mode for the first visible answer because outbound Telegram `sendMessage` from Timeweb App Platform can time out.
 - Telegram `/start` and fast acknowledgements are returned through Telegram-compatible webhook response after the Telegram user and bot role are authorized.
 - Unknown Telegram users and wrong-role bot routes receive an immediate webhook-response refusal instead of a connected/start message.
-- Normal Telegram messages in webhook-response mode return a fast visible acknowledgement before AI routing. Background AI processing can run without calling Telegram `sendMessage` from Timeweb.
+- Normal Telegram messages in webhook-response mode return a visible acknowledgement only after the update is durably queued. Background AI processing sends final answers through the Telegram relay.
 - In-memory repositories for users, memories, conversations, reminders, and jobs.
 - Prisma/PostgreSQL repository adapter for users, memories, conversations, reminders, and jobs.
 - Async production startup hook that can create Prisma repositories when `DATABASE_URL` is set.
@@ -46,7 +46,7 @@ Date: 2026-07-21
 - Timeweb Agent API adapter verified against `agent.timeweb.cloud` OpenAI-compatible endpoint.
 - App Platform env updated with S3 credentials, Agent API base URL, AI token, and agent Access ID mappings.
 - Prisma schema and initial migration artifact for users, conversations, memory, students, lessons, materials, reminders, jobs, usage, and audit logs.
-- Local automated test suite: 124 passing tests.
+- Local automated test suite: 280 passing tests.
 
 ## Not Implemented Yet
 
@@ -65,7 +65,7 @@ Date: 2026-07-21
 - Git source: `griff35victorov/AI---fam`, branch `main`.
 - Deployed app commit: `5ad8ca8be505ceb6ebbdc036faed8f93eab6c347`.
 - Latest production checks: `/health` returned 200 OK; protected owner webhook replay returned Telegram-compatible `sendMessage` acknowledgement in 953 ms with `Content-Length`; owner, daughter, and teacher Telegram webhook pending queues are all `0`; all three webhooks use `max_connections=1`.
-- Known production limitation: Timeweb App Platform logs showed outbound Telegram `sendMessage` can fail with `Telegram sendMessage network failed: fetch failed`, so the first visible bot reply is intentionally delivered via webhook response and background processing no longer calls Telegram sender from Timeweb. A durable Telegram relay or alternate delivery path is still needed for reliable final AI answers.
+- Known production limitation: direct outbound Telegram `sendMessage` from Timeweb App Platform can time out. Production final answers therefore use the dedicated Telegram relay, while polling remains an explicit emergency mode only.
 - Current monthly infrastructure estimate: PostgreSQL 970 RUB/month + App Platform 510 RUB/month + S3 Hot 10 GB 79 RUB/month + Timeweb AI agents/token package usage. Practical MVP estimate after agent creation is about 2060-2065 RUB/month before variable overage.
 - Timeweb AI agents: 5 private active agents created on GPT 4.1 mini.
 - Timeweb S3: private bucket `family-ai-prod-dq508761`, Hot 10 GB.

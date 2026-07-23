@@ -179,6 +179,7 @@ test("production dependencies enable Telegram polling by default in production w
   assert.equal(dependencies.supervisorIntervalMs, 60_000);
   assert.equal(dependencies.supervisorAlertCooldownMs, 600_000);
   assert.equal(dependencies.supervisorAutoHeal, true);
+  assert.equal(dependencies.supervisorHealFailedTelegramUpdates, true);
   assert.equal(dependencies.supervisorAuditOkTicks, false);
   assert.equal(dependencies.supervisorAuditDedupMs, 600_000);
   assert.deepEqual(dependencies.telegramPollingBotTokens, { owner: "owner-token" });
@@ -191,6 +192,7 @@ test("production dependencies keep polling disabled by default when relay ingres
       TELEGRAM_OWNER_BOT_TOKEN: "owner-token",
       TELEGRAM_RELAY_URL: "https://relay.example",
       TELEGRAM_RELAY_SECRET: "relay-secret",
+      TELEGRAM_POLLING_ENABLED: "true",
     },
     repositories: createInMemoryRepositories(),
   });
@@ -198,6 +200,36 @@ test("production dependencies keep polling disabled by default when relay ingres
   assert.equal(dependencies.telegramWebhookIngressMode, "relay");
   assert.equal(dependencies.telegramPollingEnabled, false);
   assert.equal(dependencies.telegramPollingClearWebhookEnabled, false);
+});
+
+test("production dependencies allow polling with relay only in emergency mode", () => {
+  const dependencies = createProductionDependencies({
+    env: {
+      NODE_ENV: "production",
+      TELEGRAM_OWNER_BOT_TOKEN: "owner-token",
+      TELEGRAM_RELAY_URL: "https://relay.example",
+      TELEGRAM_RELAY_SECRET: "relay-secret",
+      TELEGRAM_POLLING_ENABLED: "true",
+      TELEGRAM_POLLING_EMERGENCY_ENABLED: "true",
+    },
+    repositories: createInMemoryRepositories(),
+  });
+
+  assert.equal(dependencies.telegramWebhookIngressMode, "relay");
+  assert.equal(dependencies.telegramPollingEnabled, true);
+});
+
+test("production dependencies can disable failed Telegram update healing", () => {
+  const dependencies = createProductionDependencies({
+    env: {
+      NODE_ENV: "production",
+      TELEGRAM_OWNER_BOT_TOKEN: "owner-token",
+      SUPERVISOR_HEAL_FAILED_TELEGRAM_UPDATES: "false",
+    },
+    repositories: createInMemoryRepositories(),
+  });
+
+  assert.equal(dependencies.supervisorHealFailedTelegramUpdates, false);
 });
 
 test("production dependencies allow direct Telegram ingress even when relay upstream secret is configured", () => {

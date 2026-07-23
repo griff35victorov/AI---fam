@@ -349,13 +349,17 @@ export function createProductionDependencies({
     envValue(env.TELEGRAM_RELAY_URL) ?? envValue(env.TELEGRAM_RELAY_BASE_URL);
   const telegramWebhookIngressMode =
     envValue(env.TELEGRAM_WEBHOOK_INGRESS) ?? (telegramRelayUrl ? "relay" : "direct_or_relay");
+  const telegramPollingEmergencyEnabled = parseBoolean(
+    env.TELEGRAM_POLLING_EMERGENCY_ENABLED,
+    false,
+  );
   const telegramPollingEnabled = parseBoolean(
     env.TELEGRAM_POLLING_ENABLED,
     env.NODE_ENV === "production" &&
       Object.keys(telegramPollingBotTokens).length > 0 &&
       !telegramRelayUrl &&
       telegramWebhookIngressMode !== "relay",
-  );
+  ) && (telegramWebhookIngressMode !== "relay" || telegramPollingEmergencyEnabled);
   const capabilityRegistry = createCapabilityRegistry({
     fetchImpl,
     weatherTimeoutMs: parseNumber(env.WEATHER_TIMEOUT_MS, 6000),
@@ -434,6 +438,10 @@ export function createProductionDependencies({
       10 * 60_000,
     ),
     supervisorAutoHeal: parseBoolean(env.SUPERVISOR_AUTO_HEAL, true),
+    supervisorHealFailedTelegramUpdates: parseBoolean(
+      env.SUPERVISOR_HEAL_FAILED_TELEGRAM_UPDATES,
+      true,
+    ),
     supervisorAuditOkTicks: parseBoolean(env.SUPERVISOR_AUDIT_OK_TICKS, false),
     supervisorAuditDedupMs: parseNumber(
       env.SUPERVISOR_AUDIT_DEDUP_MS,

@@ -67,6 +67,13 @@ active. Polling remains available only for runtimes that can reliably reach
 `api.telegram.org`; when polling is explicitly enabled, the app deletes Telegram
 webhooks on startup with `drop_pending_updates=false`.
 
+When relay ingress is active, the app ignores accidental
+`TELEGRAM_POLLING_ENABLED=true` values unless
+`TELEGRAM_POLLING_EMERGENCY_ENABLED=true` is also set. This keeps polling as an
+explicit emergency recovery mode instead of a second production transport. Keep
+`SUPERVISOR_HEAL_FAILED_TELEGRAM_UPDATES=true` so the supervisor can safely
+requeue failed Telegram update jobs that did not reach the final send step.
+
 ## PostgreSQL Integration
 
 The DB package contains a Prisma schema and an initial migration under `packages/db/prisma/migrations`. The runtime repository contract has both in-memory and Prisma-backed adapters; production startup can create Prisma-backed repositories when `DATABASE_URL` is set.

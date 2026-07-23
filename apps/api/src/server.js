@@ -783,22 +783,6 @@ async function enqueueTelegramUpdateJob({ repositories, update, botKey, now = ne
   return job;
 }
 
-function enqueueTelegramUpdateJobInBackground({
-  repositories,
-  update,
-  botKey,
-  triggerTelegramUpdateDispatcher,
-}) {
-  Promise.resolve()
-    .then(() => enqueueTelegramUpdateJob({ repositories, update, botKey }))
-    .then((job) => {
-      if (job) {
-        triggerTelegramUpdateDispatcher?.();
-      }
-    })
-    .catch(logTelegramBackgroundError);
-}
-
 async function scheduleTelegramBackgroundUpdate({
   body,
   users,
@@ -1122,6 +1106,10 @@ export function createAppServer(options = {}) {
     10 * 60_000;
   const supervisorAutoHeal =
     options.supervisorAutoHeal ?? dependencies.supervisorAutoHeal ?? true;
+  const supervisorHealFailedTelegramUpdates =
+    options.supervisorHealFailedTelegramUpdates ??
+    dependencies.supervisorHealFailedTelegramUpdates ??
+    true;
   const supervisorAlertChatId =
     options.supervisorAlertChatId ?? dependencies.supervisorAlertChatId;
   const supervisorAuditOkTicks =
@@ -1272,12 +1260,23 @@ export function createAppServer(options = {}) {
               return;
             }
 
-            enqueueTelegramUpdateJobInBackground({
-              repositories,
-              update: body,
-              botKey,
-              triggerTelegramUpdateDispatcher,
-            });
+            let queuedJob;
+            try {
+              queuedJob = await enqueueTelegramUpdateJob({
+                repositories,
+                update: body,
+                botKey,
+              });
+            } catch (error) {
+              console.error("telegram update enqueue failed", error);
+              sendJson(response, 503, { error: "telegram_update_queue_failed" });
+              return;
+            }
+            if (!queuedJob) {
+              sendJson(response, 503, { error: "telegram_update_queue_unavailable" });
+              return;
+            }
+            triggerTelegramUpdateDispatcher?.();
 
             sendJson(
               response,
@@ -1597,6 +1596,7 @@ export function createAppServer(options = {}) {
         repositories,
         notifier,
         autoHeal: supervisorAutoHeal,
+        healFailedTelegramUpdates: supervisorHealFailedTelegramUpdates,
         intervalMs: supervisorIntervalMs,
         alertCooldownMs: supervisorAlertCooldownMs,
         auditOkTicks: supervisorAuditOkTicks,

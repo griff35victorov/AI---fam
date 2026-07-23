@@ -694,10 +694,54 @@ function buildPollingStatesDiagnostics(pollingStates = [], now = new Date()) {
   ].join("\n");
 }
 
+function shortDiagnosticJobId(id) {
+  return String(id ?? "unknown").slice(0, 8);
+}
+
+function truncateDiagnosticText(text, maxLength = 120) {
+  const value = String(text ?? "").replace(/\s+/g, " ").trim();
+  if (!value) return "";
+  return value.length <= maxLength ? value : `${value.slice(0, maxLength - 1)}...`;
+}
+
+function buildFailedJobsDiagnostics(jobs = []) {
+  const failedJobs = jobs.filter((job) => job.status === "failed").slice(0, 5);
+  if (failedJobs.length === 0) {
+    return null;
+  }
+
+  return [
+    "- Failed jobs:",
+    ...failedJobs.map((job) => {
+      const payload = job.payload ?? {};
+      const update = payload.update ?? {};
+      const message = update.message ?? {};
+      const result = job.result ?? {};
+      const parts = [
+        `id ${shortDiagnosticJobId(job.id)}`,
+        `type ${job.type}`,
+        `bot ${payload.botKey ?? result.botKey ?? "unknown"}`,
+        `update ${payload.updateId ?? update.update_id ?? result.updateId ?? "unknown"}`,
+        `message ${message.message_id ?? "unknown"}`,
+        `chat ${payload.chatId ?? message.chat?.id ?? result.chatId ?? "unknown"}`,
+        `attempts ${job.attempts ?? "unknown"}`,
+        `stage ${result.stage ?? "unknown"}`,
+        `sendWasAttempted ${result.sendWasAttempted === true ? "yes" : "no"}`,
+      ];
+      const error = truncateDiagnosticText(job.error ?? result.error);
+      if (error) {
+        parts.push(`error ${error}`);
+      }
+      return `  - ${parts.join(", ")}`;
+    }),
+  ].join("\n");
+}
+
 function buildDiagnosticsAnswer({
   messages,
   memories,
   materialRepositoryAvailable,
+  jobs = [],
   supervisorReport = null,
   pollingStates = [],
   now = new Date(),
@@ -718,9 +762,12 @@ function buildDiagnosticsAnswer({
     `- Последний ответ: ${durationLabel(last?.durationMs)}; режим: ${last?.action ?? "нет данных"}.`,
     `- Медленных ответов в последних сообщениях: ${slowCount} (порог ${durationLabel(slowResponseThresholdMs)}).`,
     "Если обычные вопросы отвечают долго, узкое место почти всегда внешний AI-вызов. Быстрые команды, память и библиотека отвечают локально.",
+    buildFailedJobsDiagnostics(jobs),
     supervisorReport ? "" : null,
     supervisorReport ? formatSupervisorReport(supervisorReport) : null,
-  ].join("\n");
+  ]
+    .filter((line) => line != null)
+    .join("\n");
 }
 
 function buildSupervisorRepairAnswer(result) {
@@ -1266,6 +1313,7 @@ export function createRepositoryBackedOrchestrator({
         messages: diagnosticMessages,
         memories,
         materialRepositoryAvailable: Boolean(repositories.materials?.search),
+        jobs: diagnosticJobs,
         supervisorReport,
         pollingStates: diagnosticPollingStates,
         now: diagnosticNow,
