@@ -193,6 +193,20 @@ const normalizeJob = (job) => ({
   updatedAt: cloneDate(job.updatedAt) ?? new Date(),
 });
 
+const normalizeTelegramPollingState = (state) => ({
+  botKey: state.botKey,
+  offset: state.offset ?? null,
+  lockedUntil: cloneDate(state.lockedUntil) ?? null,
+  lockedBy: state.lockedBy ?? null,
+  lastUpdateId: state.lastUpdateId ?? null,
+  lastUpdateAt: cloneDate(state.lastUpdateAt) ?? null,
+  lastHeartbeatAt: cloneDate(state.lastHeartbeatAt) ?? null,
+  lastError: state.lastError ?? null,
+  lastErrorAt: cloneDate(state.lastErrorAt) ?? null,
+  createdAt: cloneDate(state.createdAt) ?? new Date(),
+  updatedAt: cloneDate(state.updatedAt) ?? new Date(),
+});
+
 const normalizeReminder = (reminder) => ({
   id: reminder.id ?? createId("reminder"),
   userId: reminder.userId,
@@ -221,6 +235,8 @@ export function createInMemoryRepositories(seed = {}) {
   }));
   const reminders = [...(seed.reminders ?? [])].map(normalizeReminder);
   const jobs = [...(seed.jobs ?? [])].map(normalizeJob);
+  const telegramPollingStates = [...(seed.telegramPollingStates ?? [])]
+    .map(normalizeTelegramPollingState);
   const auditLogs = [...(seed.auditLogs ?? [])].map(normalizeAuditLog);
 
   const claimJob = ({
@@ -627,6 +643,135 @@ export function createInMemoryRepositories(seed = {}) {
           stored.failedAt = nowDate;
           stored.updatedAt = nowDate;
         });
+      },
+    },
+
+    telegramPollingStates: {
+      async get(botKey) {
+        if (!botKey) return null;
+        return cloneRecord(
+          telegramPollingStates.find((state) => state.botKey === botKey) ?? null,
+        );
+      },
+
+      async list() {
+        return telegramPollingStates
+          .sort((left, right) => left.botKey.localeCompare(right.botKey))
+          .map(cloneRecord);
+      },
+
+      async claimLease({
+        botKey,
+        workerId,
+        now = new Date(),
+        leaseMs = 60_000,
+      } = {}) {
+        if (!botKey) throw new Error("botKey is required");
+        const nowDate = cloneDate(now) ?? new Date();
+        const existing = telegramPollingStates.find((state) => state.botKey === botKey);
+        const canClaim =
+          existing == null ||
+          existing.lockedBy === workerId ||
+          existing.lockedUntil == null ||
+          new Date(existing.lockedUntil).getTime() <= nowDate.getTime();
+
+        if (!canClaim) {
+          return { claimed: false, state: cloneRecord(existing) };
+        }
+
+        const state =
+          existing ??
+          normalizeTelegramPollingState({
+            botKey,
+            createdAt: nowDate,
+            updatedAt: nowDate,
+          });
+        if (existing == null) {
+          telegramPollingStates.push(state);
+        }
+
+        state.lockedBy = workerId ?? null;
+        state.lockedUntil = new Date(nowDate.getTime() + leaseMs);
+        state.lastHeartbeatAt = nowDate;
+        state.updatedAt = nowDate;
+
+        return { claimed: true, state: cloneRecord(state) };
+      },
+
+      async updateOffset({
+        botKey,
+        offset,
+        lastUpdateId = null,
+        now = new Date(),
+      } = {}) {
+        if (!botKey) throw new Error("botKey is required");
+        const nowDate = cloneDate(now) ?? new Date();
+        const existing = telegramPollingStates.find((state) => state.botKey === botKey);
+        const state =
+          existing ??
+          normalizeTelegramPollingState({
+            botKey,
+            createdAt: nowDate,
+            updatedAt: nowDate,
+          });
+        if (existing == null) {
+          telegramPollingStates.push(state);
+        }
+
+        state.offset = offset ?? state.offset ?? null;
+        state.lastUpdateId = lastUpdateId ?? state.lastUpdateId ?? null;
+        state.lastUpdateAt = lastUpdateId == null ? state.lastUpdateAt : nowDate;
+        state.lastHeartbeatAt = nowDate;
+        state.lastError = null;
+        state.lastErrorAt = null;
+        state.updatedAt = nowDate;
+
+        return cloneRecord(state);
+      },
+
+      async heartbeat({ botKey, now = new Date() } = {}) {
+        if (!botKey) throw new Error("botKey is required");
+        const nowDate = cloneDate(now) ?? new Date();
+        const existing = telegramPollingStates.find((state) => state.botKey === botKey);
+        const state =
+          existing ??
+          normalizeTelegramPollingState({
+            botKey,
+            createdAt: nowDate,
+            updatedAt: nowDate,
+          });
+        if (existing == null) {
+          telegramPollingStates.push(state);
+        }
+
+        state.lastHeartbeatAt = nowDate;
+        state.updatedAt = nowDate;
+
+        return cloneRecord(state);
+      },
+
+      async recordError({ botKey, error, now = new Date() } = {}) {
+        if (!botKey) throw new Error("botKey is required");
+        const nowDate = cloneDate(now) ?? new Date();
+        const existing = telegramPollingStates.find((state) => state.botKey === botKey);
+        const state =
+          existing ??
+          normalizeTelegramPollingState({
+            botKey,
+            createdAt: nowDate,
+            updatedAt: nowDate,
+          });
+        if (existing == null) {
+          telegramPollingStates.push(state);
+        }
+
+        state.lastError =
+          typeof error === "string" ? error : error?.message ?? "telegram polling failed";
+        state.lastErrorAt = nowDate;
+        state.lastHeartbeatAt = nowDate;
+        state.updatedAt = nowDate;
+
+        return cloneRecord(state);
       },
     },
 

@@ -40,9 +40,14 @@ function sortRows(rows, orderBy) {
 
   const [[field, direction]] = Object.entries(orderBy);
   return [...rows].sort((left, right) => {
-    const leftValue = new Date(left[field]).getTime();
-    const rightValue = new Date(right[field]).getTime();
-    return direction === "desc" ? rightValue - leftValue : leftValue - rightValue;
+    const leftDate = new Date(left[field]).getTime();
+    const rightDate = new Date(right[field]).getTime();
+    const comparison =
+      Number.isNaN(leftDate) || Number.isNaN(rightDate)
+        ? String(left[field]).localeCompare(String(right[field]))
+        : leftDate - rightDate;
+
+    return direction === "desc" ? -comparison : comparison;
   });
 }
 
@@ -84,6 +89,14 @@ function createDelegate(rows, idPrefix) {
         error.code = "P2002";
         throw error;
       }
+      if (
+        data.botKey != null &&
+        rows.some((row) => row.botKey === data.botKey)
+      ) {
+        const error = new Error("Unique constraint failed on botKey");
+        error.code = "P2002";
+        throw error;
+      }
 
       const stored = {
         id: data.id ?? `${idPrefix}-${nextId++}`,
@@ -117,6 +130,7 @@ function createFakePrisma(seed = {}) {
     reminders: [...(seed.reminders ?? [])].map(clone),
     jobs: [...(seed.jobs ?? [])].map(clone),
     auditLogs: [...(seed.auditLogs ?? [])].map(clone),
+    telegramPollingStates: [...(seed.telegramPollingStates ?? [])].map(clone),
   };
 
   const prisma = {
@@ -129,6 +143,7 @@ function createFakePrisma(seed = {}) {
     reminder: createDelegate(data.reminders, "reminder"),
     job: createDelegate(data.jobs, "job"),
     auditLog: createDelegate(data.auditLogs, "audit"),
+    telegramPollingState: createDelegate(data.telegramPollingStates, "telegram-polling-state"),
     async $transaction(callback) {
       return callback(prisma);
     },
@@ -174,6 +189,34 @@ function createFakePrisma(seed = {}) {
       ...clone(create),
     };
     data.jobs.push(stored);
+    return clone(stored);
+  };
+  prisma.telegramPollingState.updateMany = async ({ where, data: updateData }) => {
+    const matched = data.telegramPollingStates.filter((state) => matchesWhere(state, where));
+
+    for (const state of matched) {
+      applyData(state, updateData);
+    }
+
+    return { count: matched.length };
+  };
+  prisma.telegramPollingState.upsert = async ({ where, update, create }) => {
+    const existing = data.telegramPollingStates.find((state) => {
+      const [field, value] = Object.entries(where)[0];
+      return state[field] === value;
+    });
+
+    if (existing) {
+      applyData(existing, update);
+      return clone(existing);
+    }
+
+    const stored = {
+      createdAt: create.createdAt ?? new Date(),
+      updatedAt: create.updatedAt ?? new Date(),
+      ...clone(create),
+    };
+    data.telegramPollingStates.push(stored);
     return clone(stored);
   };
   prisma.__data = data;
@@ -507,6 +550,41 @@ describe("Prisma repositories", () => {
     });
 
     assert.equal(upsertCalled, true);
+  });
+
+  it("stores Telegram polling offset and leases through Prisma adapter", async () => {
+    const repositories = createPrismaRepositories(createFakePrisma());
+
+    const firstClaim = await repositories.telegramPollingStates.claimLease({
+      botKey: "owner",
+      workerId: "worker-1",
+      now: new Date("2026-07-23T08:00:00.000Z"),
+      leaseMs: 60_000,
+    });
+
+    assert.equal(firstClaim.claimed, true);
+
+    const secondClaim = await repositories.telegramPollingStates.claimLease({
+      botKey: "owner",
+      workerId: "worker-2",
+      now: new Date("2026-07-23T08:00:10.000Z"),
+      leaseMs: 60_000,
+    });
+
+    assert.equal(secondClaim.claimed, false);
+    assert.equal(secondClaim.state.lockedBy, "worker-1");
+
+    await repositories.telegramPollingStates.updateOffset({
+      botKey: "owner",
+      offset: 43,
+      lastUpdateId: 42,
+      now: new Date("2026-07-23T08:01:02.000Z"),
+    });
+
+    const state = await repositories.telegramPollingStates.get("owner");
+    assert.equal(state.offset, 43);
+    assert.equal(state.lastUpdateId, 42);
+    assert.equal(state.lastError, null);
   });
 
   it("can claim only jobs matching a type", async () => {

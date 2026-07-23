@@ -58,6 +58,23 @@ function normalizeJob(job) {
   };
 }
 
+function normalizeTelegramPollingStateCreate(state, now = new Date()) {
+  const nowDate = new Date(now);
+  return {
+    botKey: state.botKey,
+    offset: state.offset ?? null,
+    lockedUntil: state.lockedUntil ?? null,
+    lockedBy: state.lockedBy ?? null,
+    lastUpdateId: state.lastUpdateId ?? null,
+    lastUpdateAt: state.lastUpdateAt ?? null,
+    lastHeartbeatAt: state.lastHeartbeatAt ?? null,
+    lastError: state.lastError ?? null,
+    lastErrorAt: state.lastErrorAt ?? null,
+    createdAt: state.createdAt ?? nowDate,
+    updatedAt: state.updatedAt ?? nowDate,
+  };
+}
+
 const tokenPattern = /[\p{L}\p{N}]{3,}/gu;
 
 function tokenizeSearchText(text) {
@@ -520,6 +537,146 @@ export function createPrismaRepositories(prisma) {
               });
 
               return auditLogs.reverse();
+            },
+          },
+        }
+      : {}),
+
+    ...(prisma.telegramPollingState?.findUnique
+      ? {
+          telegramPollingStates: {
+            async get(botKey) {
+              if (!botKey) return null;
+              return prisma.telegramPollingState.findUnique({
+                where: { botKey },
+              });
+            },
+
+            async list() {
+              return prisma.telegramPollingState.findMany({
+                orderBy: { botKey: "asc" },
+              });
+            },
+
+            async claimLease({
+              botKey,
+              workerId,
+              now = new Date(),
+              leaseMs = defaultLockMs,
+            } = {}) {
+              if (!botKey) throw new Error("botKey is required");
+              const nowDate = new Date(now);
+              const lockedUntil = new Date(nowDate.getTime() + leaseMs);
+
+              try {
+                const state = await prisma.telegramPollingState.create({
+                  data: normalizeTelegramPollingStateCreate({
+                    botKey,
+                    lockedBy: workerId ?? null,
+                    lockedUntil,
+                    lastHeartbeatAt: nowDate,
+                  }, nowDate),
+                });
+
+                return { claimed: true, state };
+              } catch (error) {
+                if (error?.code !== "P2002") {
+                  throw error;
+                }
+              }
+
+              const updated = await prisma.telegramPollingState.updateMany({
+                where: {
+                  botKey,
+                  OR: [
+                    { lockedUntil: null },
+                    { lockedUntil: { lte: nowDate } },
+                    { lockedBy: workerId ?? null },
+                  ],
+                },
+                data: {
+                  lockedBy: workerId ?? null,
+                  lockedUntil,
+                  lastHeartbeatAt: nowDate,
+                  updatedAt: nowDate,
+                },
+              });
+
+              const state = await prisma.telegramPollingState.findUnique({
+                where: { botKey },
+              });
+
+              return { claimed: updated.count === 1, state };
+            },
+
+            async updateOffset({
+              botKey,
+              offset,
+              lastUpdateId = null,
+              now = new Date(),
+            } = {}) {
+              if (!botKey) throw new Error("botKey is required");
+              const nowDate = new Date(now);
+              return prisma.telegramPollingState.upsert({
+                where: { botKey },
+                update: {
+                  offset: offset ?? undefined,
+                  lastUpdateId: lastUpdateId ?? undefined,
+                  lastUpdateAt: lastUpdateId == null ? undefined : nowDate,
+                  lastHeartbeatAt: nowDate,
+                  lastError: null,
+                  lastErrorAt: null,
+                  updatedAt: nowDate,
+                },
+                create: normalizeTelegramPollingStateCreate({
+                  botKey,
+                  offset,
+                  lastUpdateId,
+                  lastUpdateAt: lastUpdateId == null ? null : nowDate,
+                  lastHeartbeatAt: nowDate,
+                }, nowDate),
+              });
+            },
+
+            async heartbeat({ botKey, now = new Date() } = {}) {
+              if (!botKey) throw new Error("botKey is required");
+              const nowDate = new Date(now);
+              return prisma.telegramPollingState.upsert({
+                where: { botKey },
+                update: {
+                  lastHeartbeatAt: nowDate,
+                  updatedAt: nowDate,
+                },
+                create: normalizeTelegramPollingStateCreate({
+                  botKey,
+                  lastHeartbeatAt: nowDate,
+                }, nowDate),
+              });
+            },
+
+            async recordError({ botKey, error, now = new Date() } = {}) {
+              if (!botKey) throw new Error("botKey is required");
+              const nowDate = new Date(now);
+              const message =
+                typeof error === "string"
+                  ? error
+                  : error?.message ?? "telegram polling failed";
+
+              return prisma.telegramPollingState.upsert({
+                where: { botKey },
+                update: {
+                  lastError: message,
+                  lastErrorAt: nowDate,
+                  lastHeartbeatAt: nowDate,
+                  updatedAt: nowDate,
+                },
+                create: normalizeTelegramPollingStateCreate({
+                  botKey,
+                  lastError: message,
+                  lastErrorAt: nowDate,
+                  lastHeartbeatAt: nowDate,
+                }, nowDate),
+              });
             },
           },
         }

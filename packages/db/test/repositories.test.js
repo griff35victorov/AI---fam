@@ -277,6 +277,49 @@ describe("in-memory repositories", () => {
     assert.equal(reclaimed.attempts, 2);
   });
 
+  it("stores Telegram polling offset and leases by bot", async () => {
+    const repositories = createInMemoryRepositories();
+    const firstClaim = await repositories.telegramPollingStates.claimLease({
+      botKey: "owner",
+      workerId: "worker-1",
+      now: new Date("2026-07-23T08:00:00.000Z"),
+      leaseMs: 60_000,
+    });
+
+    assert.equal(firstClaim.claimed, true);
+
+    const secondClaim = await repositories.telegramPollingStates.claimLease({
+      botKey: "owner",
+      workerId: "worker-2",
+      now: new Date("2026-07-23T08:00:10.000Z"),
+      leaseMs: 60_000,
+    });
+
+    assert.equal(secondClaim.claimed, false);
+    assert.equal(secondClaim.state.lockedBy, "worker-1");
+
+    const reclaimed = await repositories.telegramPollingStates.claimLease({
+      botKey: "owner",
+      workerId: "worker-2",
+      now: new Date("2026-07-23T08:01:01.000Z"),
+      leaseMs: 60_000,
+    });
+
+    assert.equal(reclaimed.claimed, true);
+    assert.equal(reclaimed.state.lockedBy, "worker-2");
+
+    const updated = await repositories.telegramPollingStates.updateOffset({
+      botKey: "owner",
+      offset: 43,
+      lastUpdateId: 42,
+      now: new Date("2026-07-23T08:01:02.000Z"),
+    });
+
+    assert.equal(updated.offset, 43);
+    assert.equal(updated.lastUpdateId, 42);
+    assert.equal(updated.lastError, null);
+  });
+
   it("can claim only the job matching a dedupe key", async () => {
     const repositories = createInMemoryRepositories({
       jobs: [

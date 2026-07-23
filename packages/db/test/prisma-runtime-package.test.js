@@ -68,4 +68,9 @@ test("Timeweb Compose runs Prisma migrations in the public web service", async (
   );
   assert.doesNotMatch(compose, /service_completed_successfully/);
   assert.doesNotMatch(compose, /\n  migrate:/);
+  assert.match(compose, /TELEGRAM_POLLING_ENABLED: \$\{TELEGRAM_POLLING_ENABLED:-true\}/);
+  assert.match(
+    compose,
+    /TELEGRAM_POLLING_CLEAR_WEBHOOK_ENABLED: \$\{TELEGRAM_POLLING_CLEAR_WEBHOOK_ENABLED:-true\}/,
+  );
 });

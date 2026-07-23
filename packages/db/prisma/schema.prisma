@@ -208,6 +208,20 @@ model Job {
   updatedAt   DateTime  @updatedAt
 }
 
+model TelegramPollingState {
+  botKey          String   @id
+  offset          Int?
+  lockedUntil     DateTime?
+  lockedBy        String?
+  lastUpdateId    Int?
+  lastUpdateAt    DateTime?
+  lastHeartbeatAt DateTime?
+  lastError       String?
+  lastErrorAt     DateTime?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+}
+
 model UsageEvent {
   id          String   @id @default(cuid())
   userId      String

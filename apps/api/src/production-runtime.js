@@ -378,6 +378,10 @@ export function createProductionDependencies({
       env.TELEGRAM_POLLING_ENABLED,
       env.NODE_ENV === "production" && Object.keys(telegramPollingBotTokens).length > 0,
     ),
+    telegramPollingClearWebhookEnabled: parseBoolean(
+      env.TELEGRAM_POLLING_CLEAR_WEBHOOK_ENABLED,
+      env.NODE_ENV === "production" && Object.keys(telegramPollingBotTokens).length > 0,
+    ),
     telegramPollingIntervalMs: parseNumber(env.TELEGRAM_POLLING_INTERVAL_MS, 1000),
     telegramPollingErrorDelayMs: parseNumber(env.TELEGRAM_POLLING_ERROR_DELAY_MS, 5000),
     telegramPollingTimeoutSeconds: parseNumber(env.TELEGRAM_POLLING_TIMEOUT_SECONDS, 20),

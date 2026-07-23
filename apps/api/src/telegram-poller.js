@@ -1,5 +1,6 @@
 const defaultTelegramBaseUrl = "https://api.telegram.org";
 const defaultAllowedUpdates = ["message"];
+const webhookConflictPattern = /webhook/i;
 
 function delay(ms) {
   if (!ms) return Promise.resolve();
@@ -27,12 +28,41 @@ function buildGetUpdatesUrl({
   return `${baseUrl.replace(/\/+$/, "")}/bot${botToken}/getUpdates?${params.toString()}`;
 }
 
+function buildDeleteWebhookUrl({ baseUrl, botToken }) {
+  return `${baseUrl.replace(/\/+$/, "")}/bot${botToken}/deleteWebhook`;
+}
+
 async function responseJson(response) {
   try {
     return await response.json();
   } catch {
     return {};
   }
+}
+
+async function deleteWebhookBeforePolling({
+  botKey,
+  botToken,
+  fetchImpl = fetch,
+  baseUrl = defaultTelegramBaseUrl,
+  dropPendingUpdates = false,
+} = {}) {
+  const response = await fetchImpl(
+    buildDeleteWebhookUrl({ baseUrl, botToken }),
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ drop_pending_updates: Boolean(dropPendingUpdates) }),
+    },
+  );
+  const body = await responseJson(response);
+
+  if (!response.ok || body.ok === false) {
+    const description = body.description ? `: ${body.description}` : "";
+    throw new Error(`Telegram deleteWebhook failed for ${botKey} with ${response.status}${description}`);
+  }
+
+  return body;
 }
 
 export async function pollTelegramBotOnce({
@@ -100,6 +130,11 @@ export function startTelegramPolling({
   errorDelayMs = 5000,
   timeoutSeconds = 20,
   limit = 10,
+  pollingStateRepository = null,
+  clearWebhookBeforePolling = false,
+  dropPendingUpdatesOnWebhookClear = false,
+  workerId = `telegram-poller-${Math.random().toString(36).slice(2)}`,
+  leaseMs = Math.max(60_000, (Number(timeoutSeconds) || 20) * 1000 + 30_000),
   logger = console,
 } = {}) {
   let stopped = false;
@@ -108,8 +143,47 @@ export function startTelegramPolling({
 
   const loops = botEntries.map(([botKey, botToken]) =>
     (async () => {
+      let webhookCleared = !clearWebhookBeforePolling;
+
       while (!stopped) {
         try {
+          if (!webhookCleared) {
+            await deleteWebhookBeforePolling({
+              botKey,
+              botToken,
+              fetchImpl,
+              baseUrl,
+              dropPendingUpdates: dropPendingUpdatesOnWebhookClear,
+            });
+            webhookCleared = true;
+          }
+
+          let pollingState = null;
+          if (pollingStateRepository?.claimLease) {
+            const lease = await pollingStateRepository.claimLease({
+              botKey,
+              workerId,
+              leaseMs,
+              now: new Date(),
+            });
+
+            pollingState = lease.state;
+            if (!lease.claimed) {
+              await delay(intervalMs);
+              continue;
+            }
+
+            if (offsets[botKey] == null && pollingState?.offset != null) {
+              offsets[botKey] = pollingState.offset;
+            }
+          } else if (pollingStateRepository?.get && offsets[botKey] == null) {
+            pollingState = await pollingStateRepository.get(botKey);
+            if (pollingState?.offset != null) {
+              offsets[botKey] = pollingState.offset;
+            }
+          }
+
+          const previousOffset = offsets[botKey];
           const result = await pollTelegramBotOnce({
             botKey,
             botToken,
@@ -122,8 +196,40 @@ export function startTelegramPolling({
             logger,
           });
           offsets[botKey] = result.nextOffset;
+
+          if (pollingStateRepository?.updateOffset && result.nextOffset !== previousOffset) {
+            await pollingStateRepository.updateOffset({
+              botKey,
+              offset: result.nextOffset,
+              lastUpdateId: result.nextOffset == null ? null : result.nextOffset - 1,
+              now: new Date(),
+            });
+          } else if (pollingStateRepository?.heartbeat) {
+            await pollingStateRepository.heartbeat({
+              botKey,
+              now: new Date(),
+            });
+          }
           await delay(intervalMs);
         } catch (error) {
+          if (webhookConflictPattern.test(error.message ?? "")) {
+            webhookCleared = !clearWebhookBeforePolling;
+          }
+
+          if (pollingStateRepository?.recordError) {
+            try {
+              await pollingStateRepository.recordError({
+                botKey,
+                error,
+                now: new Date(),
+              });
+            } catch (recordError) {
+              logger?.error?.("telegram polling state update failed", {
+                botKey,
+                errorMessage: recordError.message,
+              });
+            }
+          }
           logger?.error?.("telegram polling failed", {
             botKey,
             errorMessage: error.message,

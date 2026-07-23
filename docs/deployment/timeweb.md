@@ -59,7 +59,9 @@ removes the need to keep Telegram webhook secrets synchronized between Telegram,
 relay, and the application.
 
 - Production enables polling by default when Telegram bot tokens are configured.
-- Telegram webhooks should be deleted for the same bots while polling is active.
+- While polling is active, the app deletes Telegram webhooks for the same bots
+  on startup with `drop_pending_updates=false`; pending Telegram updates are not
+  intentionally discarded.
 - Set `TELEGRAM_POLLING_ENABLED=false` only when a dedicated webhook ingress is
   intentionally configured and verified.
 

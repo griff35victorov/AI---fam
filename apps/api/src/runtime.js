@@ -665,11 +665,42 @@ function recentAssistantDiagnostics(messages) {
     }));
 }
 
+function pollingStateAgeLabel(date, now = new Date()) {
+  if (!date) return "нет данных";
+  const elapsedMs = Math.max(0, new Date(now).getTime() - new Date(date).getTime());
+  if (elapsedMs < 60_000) return `${Math.round(elapsedMs / 1000)} сек назад`;
+  if (elapsedMs < 60 * 60_000) return `${Math.round(elapsedMs / 60_000)} мин назад`;
+  return `${Math.round(elapsedMs / (60 * 60_000))} ч назад`;
+}
+
+function buildPollingStatesDiagnostics(pollingStates = [], now = new Date()) {
+  if (!pollingStates.length) {
+    return "- Telegram polling: нет сохраненного состояния.";
+  }
+
+  return [
+    "- Telegram polling:",
+    ...pollingStates.map((state) => {
+      const parts = [
+        `${state.botKey}`,
+        `offset ${state.offset ?? "нет"}`,
+        `heartbeat ${pollingStateAgeLabel(state.lastHeartbeatAt, now)}`,
+      ];
+      if (state.lastError) {
+        parts.push(`ошибка: ${state.lastError}`);
+      }
+      return `  - ${parts.join(", ")}`;
+    }),
+  ].join("\n");
+}
+
 function buildDiagnosticsAnswer({
   messages,
   memories,
   materialRepositoryAvailable,
   supervisorReport = null,
+  pollingStates = [],
+  now = new Date(),
 }) {
   const assistantDiagnostics = recentAssistantDiagnostics(messages);
   const durations = assistantDiagnostics
@@ -683,6 +714,7 @@ function buildDiagnosticsAnswer({
     "- Telegram-поток работает: команда дошла до сервера.",
     `- Память: доступна, записей в контексте сейчас ${memories.length}.`,
     `- Библиотека материалов: ${materialRepositoryAvailable ? "доступна" : "пока не настроена"}.`,
+    buildPollingStatesDiagnostics(pollingStates, now),
     `- Последний ответ: ${durationLabel(last?.durationMs)}; режим: ${last?.action ?? "нет данных"}.`,
     `- Медленных ответов в последних сообщениях: ${slowCount} (порог ${durationLabel(slowResponseThresholdMs)}).`,
     "Если обычные вопросы отвечают долго, узкое место почти всегда внешний AI-вызов. Быстрые команды, память и библиотека отвечают локально.",
@@ -1216,6 +1248,9 @@ export function createRepositoryBackedOrchestrator({
       const diagnosticAuditLogs = repositories.auditLogs?.listRecent
         ? await repositories.auditLogs.listRecent({ limit: 100 })
         : [];
+      const diagnosticPollingStates = repositories.telegramPollingStates?.list
+        ? await repositories.telegramPollingStates.list()
+        : [];
       const supervisorReport = analyzeSupervisorState({
         jobs: diagnosticJobs,
         auditLogs: diagnosticAuditLogs,
@@ -1226,6 +1261,8 @@ export function createRepositoryBackedOrchestrator({
         memories,
         materialRepositoryAvailable: Boolean(repositories.materials?.search),
         supervisorReport,
+        pollingStates: diagnosticPollingStates,
+        now: diagnosticNow,
       });
       const durationMs = Date.now() - requestStartedMs;
       await writeAuditLog(repositories, {

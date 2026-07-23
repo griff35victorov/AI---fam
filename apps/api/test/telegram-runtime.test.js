@@ -835,6 +835,12 @@ test("repository backed orchestrator stores teacher materials and uses them as R
 
 test("repository backed orchestrator answers diagnostics without calling AI", async () => {
   const repositories = createInMemoryRepositories();
+  await repositories.telegramPollingStates.updateOffset({
+    botKey: "owner",
+    offset: 42,
+    lastUpdateId: 41,
+    now: new Date("2026-07-23T08:00:00.000Z"),
+  });
   const orchestrator = createRepositoryBackedOrchestrator({
     repositories,
     aiProvider: {
@@ -854,6 +860,8 @@ test("repository backed orchestrator answers diagnostics without calling AI", as
 
   assert.equal(response.answer.source, "diagnostics");
   assert.match(response.answer.text, /Самодиагностика/);
+  assert.match(response.answer.text, /Telegram polling/);
+  assert.match(response.answer.text, /offset 42/);
 });
 
 test("repository backed orchestrator diagnostics include stale jobs outside recent window", async () => {

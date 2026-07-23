@@ -810,6 +810,14 @@ export function createAppServer(options = {}) {
     options.telegramPollingErrorDelayMs ?? dependencies.telegramPollingErrorDelayMs ?? 5000;
   const telegramPollingTimeoutSeconds =
     options.telegramPollingTimeoutSeconds ?? dependencies.telegramPollingTimeoutSeconds ?? 20;
+  const telegramPollingStateRepository =
+    options.telegramPollingStateRepository ??
+    dependencies.telegramPollingStateRepository ??
+    repositories?.telegramPollingStates;
+  const telegramPollingClearWebhookEnabled =
+    options.telegramPollingClearWebhookEnabled ??
+    dependencies.telegramPollingClearWebhookEnabled ??
+    false;
   const telegramBackgroundDelayMs =
     options.telegramBackgroundDelayMs ?? dependencies.telegramBackgroundDelayMs ?? 0;
   const telegramAcceptedAckThrottleMs =
@@ -1293,6 +1301,8 @@ export function createAppServer(options = {}) {
         intervalMs: telegramPollingIntervalMs,
         errorDelayMs: telegramPollingErrorDelayMs,
         timeoutSeconds: telegramPollingTimeoutSeconds,
+        pollingStateRepository: telegramPollingStateRepository,
+        clearWebhookBeforePolling: telegramPollingClearWebhookEnabled,
         handleUpdate: async (botKey, update) => {
           const pollingSender = resolveTelegramBackgroundSender({
             botKey,

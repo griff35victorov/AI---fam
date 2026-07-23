@@ -167,6 +167,7 @@ test("production dependencies enable Telegram polling by default in production w
   });
 
   assert.equal(dependencies.telegramPollingEnabled, true);
+  assert.equal(dependencies.telegramPollingClearWebhookEnabled, true);
   assert.equal(dependencies.telegramUpdateQueueEnabled, true);
   assert.equal(dependencies.telegramWebhookIngressMode, "direct_or_relay");
   assert.equal(dependencies.telegramUpdateDispatcherIntervalMs, 1000);
@@ -234,6 +235,21 @@ test("production dependencies can explicitly disable Telegram polling", () => {
 
   assert.equal(dependencies.telegramPollingEnabled, false);
   assert.deepEqual(dependencies.telegramPollingBotTokens, { owner: "owner-token" });
+});
+
+test("production dependencies can explicitly keep Telegram webhook while polling is disabled", () => {
+  const dependencies = createProductionDependencies({
+    env: {
+      NODE_ENV: "production",
+      TELEGRAM_OWNER_BOT_TOKEN: "owner-token",
+      TELEGRAM_POLLING_ENABLED: "false",
+      TELEGRAM_POLLING_CLEAR_WEBHOOK_ENABLED: "false",
+    },
+    repositories: createInMemoryRepositories(),
+  });
+
+  assert.equal(dependencies.telegramPollingEnabled, false);
+  assert.equal(dependencies.telegramPollingClearWebhookEnabled, false);
 });
 
 test("production dependencies create background relay senders when relay is configured", async () => {

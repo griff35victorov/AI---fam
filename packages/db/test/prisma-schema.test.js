@@ -62,3 +62,22 @@ test("material chunk migration adds searchable library storage", async () => {
   assert.match(migration, /CREATE TABLE "MaterialChunk"/);
   assert.match(migration, /MaterialChunk_workspaceId_ownerUserId_idx/);
 });
+
+test("Telegram polling state migration persists bot offsets and leases", async () => {
+  const schema = await readFile(
+    new URL("../prisma/schema.prisma", import.meta.url),
+    "utf8",
+  );
+  const migration = await readFile(
+    new URL("../prisma/migrations/20260723000000_telegram_polling_state/migration.sql", import.meta.url),
+    "utf8",
+  );
+
+  assert.match(schema, /model TelegramPollingState/);
+  assert.match(schema, /botKey\s+String\s+@id/);
+  assert.match(schema, /offset\s+Int\?/);
+  assert.match(schema, /lastHeartbeatAt\s+DateTime\?/);
+  assert.match(migration, /CREATE TABLE "TelegramPollingState"/);
+  assert.match(migration, /"botKey" TEXT NOT NULL/);
+  assert.match(migration, /"offset" INTEGER/);
+});
