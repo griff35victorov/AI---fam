@@ -1041,6 +1041,73 @@ test("repository backed orchestrator gives web chat access code only to owner wi
   assert.equal(messages.length, 0);
 });
 
+test("repository backed orchestrator understands short natural web chat code requests", async () => {
+  const repositories = createInMemoryRepositories();
+  const orchestrator = createRepositoryBackedOrchestrator({
+    repositories,
+    webChatAccessCode: "family-web-code",
+    webChatUrl: "https://family.example/chat",
+    aiProvider: {
+      async complete() {
+        throw new Error("AI should not be called for natural web chat code request");
+      },
+    },
+  });
+
+  const response = await orchestrator({
+    chatId: 777,
+    actor: { id: "owner-1", role: "owner" },
+    intent: "household",
+    text: "выдай мне код на чат",
+    telegramUpdateId: 904,
+  });
+
+  assert.equal(response.answer.source, "web_chat_access");
+  assert.match(response.answer.text, /https:\/\/family\.example\/chat/);
+  assert.match(response.answer.text, /family-web-code/);
+  assert.equal(response.secretEphemeral, true);
+
+  const messages = await repositories.conversations.listMessages("telegram:777:owner-1");
+  assert.equal(messages.length, 0);
+});
+
+test("repository backed orchestrator treats its own web chat URL as an access request", async () => {
+  const repositories = createInMemoryRepositories();
+  const orchestrator = createRepositoryBackedOrchestrator({
+    repositories,
+    webChatAccessCode: "family-web-code",
+    webChatUrl: "https://family.example/chat",
+    capabilityRegistry: {
+      has() {
+        return true;
+      },
+      async run() {
+        throw new Error("web chat URL should not be fetched as an external URL");
+      },
+    },
+    aiProvider: {
+      async complete() {
+        throw new Error("AI should not be called for own web chat URL");
+      },
+    },
+  });
+
+  const response = await orchestrator({
+    chatId: 777,
+    actor: { id: "owner-1", role: "owner" },
+    intent: "household",
+    text: "Доступ к резервному веб-чату: Ссылка: https://family.example/chat",
+    telegramUpdateId: 905,
+  });
+
+  assert.equal(response.answer.source, "web_chat_access");
+  assert.match(response.answer.text, /https:\/\/family\.example\/chat/);
+  assert.match(response.answer.text, /family-web-code/);
+
+  const messages = await repositories.conversations.listMessages("telegram:777:owner-1");
+  assert.equal(messages.length, 0);
+});
+
 test("repository backed orchestrator rejects web chat access code for non-owner", async () => {
   const repositories = createInMemoryRepositories();
   const orchestrator = createRepositoryBackedOrchestrator({
