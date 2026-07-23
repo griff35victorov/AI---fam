@@ -36,6 +36,7 @@ This repository is built locally and deployed to Timeweb Cloud from GitHub. Tele
 - `проверка связи` - fast health check for Telegram gateway, App Platform, and orchestrator.
 - `диагностика` or `/diag` - shows recent latency, memory/material status, queue health, stale jobs, failed jobs, duplicates, and delivery signals.
 - `/repair` - owner-only supervisor repair; safely requeues stale Telegram update jobs and failed Telegram update jobs that stopped before a final send attempt.
+- `/webcode` or `код доступа для веб интерфейса` - owner-only command that returns the fallback web chat URL and access code without calling AI or storing the secret in chat history.
 
 ## Documentation
 

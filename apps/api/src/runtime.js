@@ -501,6 +501,7 @@ export function isImmediateRepositoryBackedRequest(text) {
     isMemoryRecallRequest(text) ||
     isDiagnosticsRequest(text) ||
     isCapabilitiesRequest(text) ||
+    isWebChatAccessRequest(text) ||
     parseMaterialCommand(text)?.matched ||
     isMaterialListRequest(text),
   );
@@ -622,6 +623,49 @@ function isSupervisorRepairRequest(text) {
 
 function canRunSupervisorRepair(actor) {
   return actor?.role === "owner";
+}
+
+function canReadWebChatAccess(actor) {
+  return actor?.role === "owner";
+}
+
+function isWebChatAccessRequest(text) {
+  const normalized = String(text ?? "").trim().toLowerCase();
+  if (!normalized) return false;
+
+  if (/^\/(?:web|webchat|webcode|web-code|chat|access)(?:@\w+)?$/.test(normalized)) {
+    return true;
+  }
+
+  return (
+    /(?:код\s+доступа|доступн(?:ый|ой)\s+код|парол[ья]?)\s+(?:для\s+)?(?:в[еэ]б|web)/iu.test(normalized) ||
+    /(?:в[еэ]б|web)[-\s]?(?:интерфейс|чат|chat).*(?:код|доступ|парол)/iu.test(normalized) ||
+    /(?:выдай|дай|покажи|пришли|напомни).*(?:код|доступ|парол).*(?:в[еэ]б|web)/iu.test(normalized)
+  );
+}
+
+function normalizeWebChatUrl(url) {
+  const value = String(url ?? "").trim();
+  return value || "/chat";
+}
+
+function buildWebChatAccessAnswer({ accessCode, webChatUrl }) {
+  const resolvedUrl = normalizeWebChatUrl(webChatUrl);
+  if (!accessCode) {
+    return [
+      "Веб-чат уже есть, но код доступа не настроен.",
+      "Нужно задать переменную WEB_CHAT_ACCESS_CODE в Timeweb App Platform и перезапустить приложение.",
+      `Ссылка на веб-чат: ${resolvedUrl}`,
+    ].join("\n");
+  }
+
+  return [
+    "Доступ к резервному веб-чату:",
+    `Ссылка: ${resolvedUrl}`,
+    `Код: ${accessCode}`,
+    "",
+    "Telegram остается основным каналом. Веб-чат нужен как запасной вход в тот же оркестр и ту же память.",
+  ].join("\n");
 }
 
 function isCapabilitiesRequest(text) {
@@ -855,6 +899,8 @@ export function createRepositoryBackedOrchestrator({
   aiProvider,
   capabilityRegistry = createCapabilityRegistry(),
   workspaceId = "workspace-family",
+  webChatAccessCode,
+  webChatUrl = "/chat",
   now = () => new Date(),
 } = {}) {
   if (!repositories) {
@@ -882,6 +928,47 @@ export function createRepositoryBackedOrchestrator({
         answer: { text: assistantMessage.content },
         conversationId,
         idempotent: true,
+      };
+    }
+
+    if (isWebChatAccessRequest(request.text)) {
+      let answerText;
+      let source = "web_chat_access";
+
+      if (!canReadWebChatAccess(request.actor)) {
+        answerText =
+          "Код доступа к веб-чату может получить только владелец семейного оркестра.";
+        source = "web_chat_access_rejected";
+      } else {
+        answerText = buildWebChatAccessAnswer({
+          accessCode: webChatAccessCode,
+          webChatUrl,
+        });
+      }
+
+      await writeAuditLog(repositories, {
+        actorId: request.actor.id,
+        action: source,
+        resource: conversationId,
+        metadata: {
+          source: requestSource,
+          configured: Boolean(webChatAccessCode),
+          durationMs: Date.now() - requestStartedMs,
+          ...(request.telegramUpdateId != null
+            ? { telegramUpdateId: request.telegramUpdateId }
+            : {}),
+        },
+        createdAt: now(),
+      });
+
+      return {
+        accepted: true,
+        answer: {
+          text: answerText,
+          source,
+        },
+        conversationId,
+        secretEphemeral: source === "web_chat_access" && Boolean(webChatAccessCode),
       };
     }
 

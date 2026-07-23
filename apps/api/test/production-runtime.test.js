@@ -93,6 +93,26 @@ test("production dependencies wire Timeweb AI and Telegram sender from env", asy
   });
 });
 
+test("production dependencies expose configured web chat url", () => {
+  const explicit = createProductionDependencies({
+    env: {
+      WEB_CHAT_ACCESS_CODE: "family-web-code",
+      WEB_CHAT_URL: "https://family.example/custom-chat",
+    },
+    repositories: createInMemoryRepositories(),
+  });
+  assert.equal(explicit.webChatAccessCode, "family-web-code");
+  assert.equal(explicit.webChatUrl, "https://family.example/custom-chat");
+
+  const fromAppUrl = createProductionDependencies({
+    env: {
+      TIMEWEB_APP_URL: "https://family.example",
+    },
+    repositories: createInMemoryRepositories(),
+  });
+  assert.equal(fromAppUrl.webChatUrl, "https://family.example/chat");
+});
+
 test("production dependencies also read individual Timeweb agent id env vars", async () => {
   const calls = [];
   const dependencies = createProductionDependencies({

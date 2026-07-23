@@ -1120,6 +1120,8 @@ export function createAppServer(options = {}) {
     10 * 60_000;
   const webChatAccessCode =
     options.webChatAccessCode ?? dependencies.webChatAccessCode;
+  const webChatUrl =
+    options.webChatUrl ?? dependencies.webChatUrl ?? "/chat";
   const users = options.users ?? dependencies.users ?? [];
   const orchestrator =
     options.orchestrator ??
@@ -1130,6 +1132,8 @@ export function createAppServer(options = {}) {
           aiProvider: dependencies.aiProvider,
           capabilityRegistry: dependencies.capabilityRegistry,
           workspaceId: dependencies.workspaceId,
+          webChatAccessCode,
+          webChatUrl,
         })
       : ((request) => handleOrchestratorRequest(request, dependencies)));
   const telegramBackgroundUpdates = new Set();

@@ -31,6 +31,20 @@ function envValue(value) {
   return typeof value === "string" && value.trim() === "" ? undefined : value;
 }
 
+function resolveWebChatUrl(env = {}) {
+  const explicitUrl = envValue(env.WEB_CHAT_URL);
+  if (explicitUrl) return explicitUrl;
+
+  const appUrl = envValue(env.TIMEWEB_APP_URL) ?? envValue(env.TIMEWEB_PUBLIC_URL);
+  if (!appUrl) return "/chat";
+
+  try {
+    return new URL("/chat", appUrl).toString();
+  } catch {
+    return "/chat";
+  }
+}
+
 function parseBoolean(value, fallback = false) {
   const normalized = String(value ?? "").trim().toLowerCase();
   if (!normalized) return fallback;
@@ -379,6 +393,7 @@ export function createProductionDependencies({
     repositories: resolvedRepositories,
     workspaceId: envValue(env.APP_DEFAULT_WORKSPACE_ID) ?? defaultWorkspaceId,
     webChatAccessCode: envValue(env.WEB_CHAT_ACCESS_CODE),
+    webChatUrl: resolveWebChatUrl(env),
     capabilityRegistry,
     telegramWebhookSecret: envValue(env.TELEGRAM_WEBHOOK_SECRET),
     telegramWebhookSecrets: parseTelegramWebhookSecrets(env),

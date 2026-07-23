@@ -1011,6 +1011,86 @@ test("repository backed orchestrator lets owner run supervisor repair from Teleg
   assert.equal(jobs.find((job) => job.id === "stale-reminder").status, "running");
 });
 
+test("repository backed orchestrator gives web chat access code only to owner without storing secret", async () => {
+  const repositories = createInMemoryRepositories();
+  const orchestrator = createRepositoryBackedOrchestrator({
+    repositories,
+    webChatAccessCode: "family-web-code",
+    webChatUrl: "https://family.example/chat",
+    aiProvider: {
+      async complete() {
+        throw new Error("AI should not be called for web chat access code");
+      },
+    },
+  });
+
+  const response = await orchestrator({
+    chatId: 777,
+    actor: { id: "owner-1", role: "owner" },
+    intent: "household",
+    text: "/webcode",
+    telegramUpdateId: 901,
+  });
+
+  assert.equal(response.answer.source, "web_chat_access");
+  assert.match(response.answer.text, /https:\/\/family\.example\/chat/);
+  assert.match(response.answer.text, /family-web-code/);
+  assert.equal(response.secretEphemeral, true);
+
+  const messages = await repositories.conversations.listMessages("telegram:777:owner-1");
+  assert.equal(messages.length, 0);
+});
+
+test("repository backed orchestrator rejects web chat access code for non-owner", async () => {
+  const repositories = createInMemoryRepositories();
+  const orchestrator = createRepositoryBackedOrchestrator({
+    repositories,
+    webChatAccessCode: "family-web-code",
+    webChatUrl: "https://family.example/chat",
+    aiProvider: {
+      async complete() {
+        throw new Error("AI should not be called for rejected web chat access code");
+      },
+    },
+  });
+
+  const response = await orchestrator({
+    chatId: 777,
+    actor: { id: "daughter-1", role: "family_child" },
+    intent: "study",
+    text: "/webcode",
+    telegramUpdateId: 902,
+  });
+
+  assert.equal(response.answer.source, "web_chat_access_rejected");
+  assert.doesNotMatch(response.answer.text, /family-web-code/);
+});
+
+test("repository backed orchestrator explains missing web chat access config to owner", async () => {
+  const repositories = createInMemoryRepositories();
+  const orchestrator = createRepositoryBackedOrchestrator({
+    repositories,
+    webChatUrl: "https://family.example/chat",
+    aiProvider: {
+      async complete() {
+        throw new Error("AI should not be called when web chat access code is missing");
+      },
+    },
+  });
+
+  const response = await orchestrator({
+    chatId: 777,
+    actor: { id: "owner-1", role: "owner" },
+    intent: "household",
+    text: "выдай мне код доступа для веб интерфейса",
+    telegramUpdateId: 903,
+  });
+
+  assert.equal(response.answer.source, "web_chat_access");
+  assert.match(response.answer.text, /WEB_CHAT_ACCESS_CODE/);
+  assert.match(response.answer.text, /https:\/\/family\.example\/chat/);
+});
+
 test("repository backed orchestrator uses weather capability before AI", async () => {
   const repositories = createInMemoryRepositories();
   const orchestrator = createRepositoryBackedOrchestrator({
