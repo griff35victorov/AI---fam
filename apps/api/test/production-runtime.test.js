@@ -106,7 +106,7 @@ test("production dependencies expose configured web chat url", () => {
 
   const fromAppUrl = createProductionDependencies({
     env: {
-      TIMEWEB_APP_URL: "https://family.example",
+      APP_PUBLIC_URL: "https://family.example",
     },
     repositories: createInMemoryRepositories(),
   });

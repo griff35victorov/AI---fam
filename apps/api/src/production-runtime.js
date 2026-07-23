@@ -35,7 +35,11 @@ function resolveWebChatUrl(env = {}) {
   const explicitUrl = envValue(env.WEB_CHAT_URL);
   if (explicitUrl) return explicitUrl;
 
-  const appUrl = envValue(env.TIMEWEB_APP_URL) ?? envValue(env.TIMEWEB_PUBLIC_URL);
+  const appUrl =
+    envValue(env.WEB_CHAT_PUBLIC_URL) ??
+    envValue(env.TIMEWEB_APP_URL) ??
+    envValue(env.TIMEWEB_PUBLIC_URL) ??
+    envValue(env.APP_PUBLIC_URL);
   if (!appUrl) return "/chat";
 
   try {
