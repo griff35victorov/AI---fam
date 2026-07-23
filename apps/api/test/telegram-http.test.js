@@ -147,6 +147,18 @@ test("GET /chat serves the fallback web chat page", async () => {
   });
 });
 
+test("GET /chat exposes a file attachment control", async () => {
+  await withServer({}, async (baseUrl) => {
+    const response = await fetch(`${baseUrl}/chat`);
+    const html = await response.text();
+
+    assert.equal(response.status, 200);
+    assert.match(html, /type="file"/);
+    assert.match(html, /accept="[^"]*image\/\*/);
+    assert.match(html, /FormData/);
+  });
+});
+
 test("POST /web/chat fails closed when access code is missing or wrong", async () => {
   let orchestratorCalled = false;
 
@@ -237,6 +249,102 @@ test("POST /web/chat maps family role to existing DB user and calls orchestrator
   assert.equal(calls[0].actor.role, "family_child");
   assert.equal(calls[0].intent, "english_practice");
   assert.equal(calls[0].conversationId, "web:daughter:daughter-1");
+});
+
+test("POST /web/chat accepts a text file attachment and sends extracted text to the orchestrator", async () => {
+  const calls = [];
+
+  await withServer(
+    {
+      users: [{ id: "owner-1", role: "owner", workspaceId: "workspace-family" }],
+      webChatAccessCode: "test-code",
+      orchestrator: async (request) => {
+        calls.push(request);
+        return { accepted: true, answer: { text: "Attachment accepted" } };
+      },
+    },
+    async (baseUrl) => {
+      const form = new FormData();
+      form.set("role", "owner");
+      form.set("accessCode", "test-code");
+      form.set("message", "Разбери файл");
+      form.set(
+        "attachment",
+        new Blob(["Ключевые материалы урока: speaking warm-up"], {
+          type: "text/plain",
+        }),
+        "lesson-notes.txt",
+      );
+
+      const response = await fetch(`${baseUrl}/web/chat`, {
+        method: "POST",
+        body: form,
+      });
+
+      assert.equal(response.status, 200);
+      assert.deepEqual(await response.json(), {
+        accepted: true,
+        answer: { text: "Attachment accepted" },
+      });
+    },
+  );
+
+  assert.equal(calls.length, 1);
+  assert.match(calls[0].text, /Разбери файл/);
+  assert.match(calls[0].text, /lesson-notes\.txt/);
+  assert.match(calls[0].text, /Ключевые материалы урока/);
+});
+
+test("POST /web/chat accepts an image attachment and sends OCR text to the orchestrator", async () => {
+  const calls = [];
+  const recognizedPaths = [];
+
+  await withServer(
+    {
+      users: [{ id: "owner-1", role: "owner", workspaceId: "workspace-family" }],
+      webChatAccessCode: "test-code",
+      imageOcr: {
+        async recognizeFile(imagePath) {
+          recognizedPaths.push(imagePath);
+          return "На изображении: беседка 3 на 4 метра";
+        },
+      },
+      orchestrator: async (request) => {
+        calls.push(request);
+        return { accepted: true, answer: { text: "Image accepted" } };
+      },
+    },
+    async (baseUrl) => {
+      const form = new FormData();
+      form.set("role", "owner");
+      form.set("accessCode", "test-code");
+      form.set("message", "Сделай чертеж по картинке");
+      form.set(
+        "attachment",
+        new Blob([new Uint8Array([0x89, 0x50, 0x4e, 0x47])], {
+          type: "image/png",
+        }),
+        "gazebo.png",
+      );
+
+      const response = await fetch(`${baseUrl}/web/chat`, {
+        method: "POST",
+        body: form,
+      });
+
+      assert.equal(response.status, 200);
+      assert.deepEqual(await response.json(), {
+        accepted: true,
+        answer: { text: "Image accepted" },
+      });
+    },
+  );
+
+  assert.equal(calls.length, 1);
+  assert.equal(recognizedPaths.length, 1);
+  assert.match(calls[0].text, /Сделай чертеж по картинке/);
+  assert.match(calls[0].text, /gazebo\.png/);
+  assert.match(calls[0].text, /беседка 3 на 4 метра/);
 });
 
 test("POST /web/chat uses repository-backed orchestrator storage", async () => {

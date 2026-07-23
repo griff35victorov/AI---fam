@@ -1,5 +1,8 @@
 import { createServer } from "node:http";
-import { timingSafeEqual } from "node:crypto";
+import { randomUUID, timingSafeEqual } from "node:crypto";
+import { mkdir, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { extname, join } from "node:path";
 
 import {
   bootstrapUsersFromEnv,
@@ -31,6 +34,16 @@ const telegramConnectivityText =
   "Связь установлена. Telegram gateway, App Platform и оркестр отвечают. Если запрос требует AI или инструмента, финальный ответ придет отдельным сообщением.";
 const urlPattern = /https?:\/\/\S+/i;
 const defaultTelegramAcceptedAckThrottleMs = 8000;
+const defaultWebChatMaxAttachmentBytes = 8 * 1024 * 1024;
+const defaultWebChatMaxExtractedChars = 16_000;
+const webChatTextAttachmentMimeTypes = new Set([
+  "application/json",
+  "application/x-ndjson",
+  "text/csv",
+  "text/markdown",
+  "text/plain",
+  "text/tab-separated-values",
+]);
 
 function sendJson(response, statusCode, body) {
   const payload = JSON.stringify(body);
@@ -51,11 +64,27 @@ function sendHtml(response, statusCode, body) {
   response.end(body);
 }
 
-async function readJson(request) {
+async function readRequestBuffer(request, { maxBytes } = {}) {
   const chunks = [];
-  for await (const chunk of request) chunks.push(chunk);
-  if (chunks.length === 0) return {};
-  return JSON.parse(Buffer.concat(chunks).toString("utf8"));
+  let totalBytes = 0;
+
+  for await (const chunk of request) {
+    totalBytes += chunk.length;
+    if (maxBytes && totalBytes > maxBytes) {
+      const error = new Error("request_body_too_large");
+      error.code = "request_body_too_large";
+      throw error;
+    }
+    chunks.push(chunk);
+  }
+
+  return Buffer.concat(chunks);
+}
+
+async function readJson(request) {
+  const buffer = await readRequestBuffer(request);
+  if (buffer.length === 0) return {};
+  return JSON.parse(buffer.toString("utf8"));
 }
 
 function accessCodeMatches(received, expected) {
@@ -104,6 +133,276 @@ function buildWebChatRequest({ body, actor, workspaceId }) {
     conversationId: `web:${role}:${actor.id}`,
     workspaceId: actor.workspaceId ?? workspaceId,
     source: "web_chat",
+  };
+}
+
+function httpRequestError(error, statusCode) {
+  const requestError = new Error(error);
+  requestError.code = error;
+  requestError.statusCode = statusCode;
+  return requestError;
+}
+
+function requestContentType(request) {
+  return String(request.headers["content-type"] ?? "");
+}
+
+function isMultipartFormDataRequest(request) {
+  return /^multipart\/form-data\b/i.test(requestContentType(request));
+}
+
+function multipartBoundaryFromContentType(contentType) {
+  const match = contentType.match(/(?:^|;)\s*boundary=(?:"([^"]+)"|([^;]+))/i);
+  return match?.[1] ?? match?.[2] ?? null;
+}
+
+function parseMultipartHeaders(headerText) {
+  const headers = {};
+  for (const line of headerText.split("\r\n")) {
+    const separatorIndex = line.indexOf(":");
+    if (separatorIndex === -1) continue;
+    const name = line.slice(0, separatorIndex).trim().toLowerCase();
+    const value = line.slice(separatorIndex + 1).trim();
+    if (name) headers[name] = value;
+  }
+  return headers;
+}
+
+function multipartDispositionValue(disposition, key) {
+  const match = disposition.match(new RegExp(`${key}="([^"]*)"`, "i"));
+  return match?.[1] ?? null;
+}
+
+function normalizeUploadedFileName(fileName) {
+  return (
+    String(fileName ?? "attachment")
+      .replace(/\\/g, "/")
+      .split("/")
+      .pop()
+      ?.replace(/[\u0000-\u001f\u007f]/g, "")
+      .trim() || "attachment"
+  );
+}
+
+function parseMultipartFormDataBody({ contentType, buffer }) {
+  const boundary = multipartBoundaryFromContentType(contentType);
+  if (!boundary) {
+    throw httpRequestError("multipart_boundary_missing", 400);
+  }
+
+  const delimiter = `--${boundary}`;
+  const rawParts = buffer.toString("latin1").split(delimiter);
+  const fields = {};
+  const files = [];
+
+  for (const rawPart of rawParts.slice(1)) {
+    if (rawPart.startsWith("--")) break;
+
+    let part = rawPart;
+    if (part.startsWith("\r\n")) part = part.slice(2);
+    if (part.endsWith("\r\n")) part = part.slice(0, -2);
+    if (!part) continue;
+
+    const headerEndIndex = part.indexOf("\r\n\r\n");
+    if (headerEndIndex === -1) continue;
+
+    const headers = parseMultipartHeaders(part.slice(0, headerEndIndex));
+    const disposition = headers["content-disposition"] ?? "";
+    const fieldName = multipartDispositionValue(disposition, "name");
+    if (!fieldName) continue;
+
+    const fileName = multipartDispositionValue(disposition, "filename");
+    const content = Buffer.from(part.slice(headerEndIndex + 4), "latin1");
+    if (fileName != null && fileName !== "") {
+      files.push({
+        fieldName,
+        fileName: normalizeUploadedFileName(fileName),
+        contentType: headers["content-type"] ?? "application/octet-stream",
+        buffer: content,
+      });
+      continue;
+    }
+
+    fields[fieldName] = content.toString("utf8").replace(/\u0000/g, "").trim();
+  }
+
+  return { body: fields, attachments: files };
+}
+
+async function readWebChatBody(request, { maxAttachmentBytes }) {
+  if (!isMultipartFormDataRequest(request)) {
+    return { body: await readJson(request), attachments: [] };
+  }
+
+  const buffer = await readRequestBuffer(request, {
+    maxBytes: maxAttachmentBytes + 64 * 1024,
+  });
+  return parseMultipartFormDataBody({
+    contentType: requestContentType(request),
+    buffer,
+  });
+}
+
+function webChatAttachmentExtension(fileName) {
+  return extname(String(fileName ?? "")).toLowerCase();
+}
+
+function isSupportedWebChatTextAttachment({ fileName, contentType }) {
+  const normalizedMimeType = String(contentType ?? "").toLowerCase();
+  if (normalizedMimeType.startsWith("text/")) return true;
+  if (webChatTextAttachmentMimeTypes.has(normalizedMimeType)) return true;
+  return /\.(?:csv|json|md|markdown|txt)$/i.test(String(fileName ?? ""));
+}
+
+function isSupportedWebChatImageAttachment({ fileName, contentType }) {
+  const normalizedMimeType = String(contentType ?? "").toLowerCase();
+  if (normalizedMimeType.startsWith("image/")) return true;
+  return /\.(?:gif|jpe?g|png|webp)$/i.test(String(fileName ?? ""));
+}
+
+function safeImageExtension({ fileName, contentType }) {
+  const extension = webChatAttachmentExtension(fileName);
+  if ([".gif", ".jpg", ".jpeg", ".png", ".webp"].includes(extension)) {
+    return extension;
+  }
+
+  const normalizedMimeType = String(contentType ?? "").toLowerCase();
+  if (normalizedMimeType.includes("png")) return ".png";
+  if (normalizedMimeType.includes("webp")) return ".webp";
+  if (normalizedMimeType.includes("gif")) return ".gif";
+  return ".jpg";
+}
+
+function truncateExtractedWebChatText(text, maxChars) {
+  const normalizedText = String(text ?? "").replace(/\u0000/g, "").trim();
+  if (normalizedText.length <= maxChars) return normalizedText;
+  return `${normalizedText.slice(0, maxChars).trim()}\n\n[Текст вложения сокращен до ${maxChars} символов]`;
+}
+
+function formatExtractedWebChatAttachment({ file, heading, text, maxExtractedChars }) {
+  return [
+    `[${heading}: ${file.fileName}]`,
+    `Тип: ${file.contentType}`,
+    truncateExtractedWebChatText(text, maxExtractedChars),
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
+async function recognizeWebChatImageAttachment({ file, imageOcr, maxExtractedChars }) {
+  if (typeof imageOcr?.recognizeFile !== "function") {
+    return {
+      ok: false,
+      statusCode: 503,
+      error: "web_chat_image_ocr_not_configured",
+    };
+  }
+
+  const tempDirectory = join(tmpdir(), "family-ai-web-chat-ocr");
+  await mkdir(tempDirectory, { recursive: true });
+  const imagePath = join(
+    tempDirectory,
+    `${Date.now()}-${randomUUID()}${safeImageExtension(file)}`,
+  );
+
+  try {
+    await writeFile(imagePath, file.buffer);
+    const recognizedText = await imageOcr.recognizeFile(imagePath);
+    const text = truncateExtractedWebChatText(recognizedText, maxExtractedChars);
+    if (!text) {
+      return {
+        ok: false,
+        statusCode: 422,
+        error: "web_chat_image_ocr_empty",
+      };
+    }
+
+    return {
+      ok: true,
+      text: formatExtractedWebChatAttachment({
+        file,
+        heading: "Изображение",
+        text: `Распознанный текст:\n${text}`,
+        maxExtractedChars,
+      }),
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      statusCode: 422,
+      error: "web_chat_image_ocr_failed",
+      message: error.message,
+    };
+  } finally {
+    await rm(imagePath, { force: true }).catch(() => {});
+  }
+}
+
+async function extractWebChatAttachmentText({
+  file,
+  imageOcr,
+  maxAttachmentBytes,
+  maxExtractedChars,
+}) {
+  if (!file?.buffer?.length) {
+    return { ok: false, statusCode: 400, error: "web_chat_attachment_empty" };
+  }
+
+  if (file.buffer.length > maxAttachmentBytes) {
+    return { ok: false, statusCode: 413, error: "web_chat_attachment_too_large" };
+  }
+
+  if (isSupportedWebChatTextAttachment(file)) {
+    return {
+      ok: true,
+      text: formatExtractedWebChatAttachment({
+        file,
+        heading: "Файл",
+        text: file.buffer.toString("utf8").replace(/\u0000/g, "").trim(),
+        maxExtractedChars,
+      }),
+    };
+  }
+
+  if (isSupportedWebChatImageAttachment(file)) {
+    return recognizeWebChatImageAttachment({
+      file,
+      imageOcr,
+      maxExtractedChars,
+    });
+  }
+
+  return { ok: false, statusCode: 415, error: "web_chat_attachment_unsupported" };
+}
+
+async function bodyWithWebChatAttachments({
+  body,
+  attachments,
+  imageOcr,
+  maxAttachmentBytes,
+  maxExtractedChars,
+}) {
+  if (!attachments.length) return body;
+
+  const extractedTexts = [];
+  for (const file of attachments) {
+    const extracted = await extractWebChatAttachmentText({
+      file,
+      imageOcr,
+      maxAttachmentBytes,
+      maxExtractedChars,
+    });
+    if (!extracted.ok) return extracted;
+    extractedTexts.push(extracted.text);
+  }
+
+  const originalText = String(body.message ?? body.text ?? "").trim();
+  const message = [originalText, ...extractedTexts].filter(Boolean).join("\n\n");
+
+  return {
+    ...body,
+    message,
+    text: message,
   };
 }
 
@@ -205,7 +504,13 @@ const webChatPage = `<!doctype html>
       background: #fff1f1;
       color: #7f1d1d;
     }
-    .composer { display: grid; grid-template-columns: 1fr 132px; gap: 10px; align-items: end; }
+    .composer {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(160px, 230px) 132px;
+      gap: 10px;
+      align-items: end;
+    }
+    .file-input input { padding: 9px 10px; }
     .hint { margin: 0; color: #667085; font-size: 13px; line-height: 1.35; }
     @media (max-width: 700px) {
       main { padding: 12px 10px; }
@@ -246,10 +551,11 @@ const webChatPage = `<!doctype html>
         <div class="message assistant">Напишите сообщение. Ответ появится здесь и сохранится в той же семейной памяти.</div>
       </div>
       <form id="chat-form" class="composer">
-        <label>Сообщение<textarea id="message" name="message" required></textarea></label>
+        <label>Сообщение<textarea id="message" name="message"></textarea></label>
+        <label class="file-input">Файл или картинка<input id="attachment" name="attachment" type="file" accept=".txt,.md,.markdown,.csv,.json,image/*"></label>
         <button id="send" type="submit">Отправить</button>
       </form>
-      <p class="hint">Если Telegram временно не отвечает, этот чат использует тот же backend напрямую.</p>
+      <p class="hint">Можно приложить .txt, .md, .csv, .json или изображение. Telegram временно не отвечает - этот чат использует тот же backend напрямую.</p>
     </section>
   </main>
   <script>
@@ -273,30 +579,46 @@ const webChatPage = `<!doctype html>
       event.preventDefault();
       const message = document.getElementById("message");
       const code = document.getElementById("code");
+      const attachment = document.getElementById("attachment");
       const text = message.value.trim();
-      if (!text) return;
+      const file = attachment.files && attachment.files.length > 0 ? attachment.files[0] : null;
+      if (!text && !file) return;
 
       sessionStorage.setItem("family-ai-role", role.value);
-      appendMessage("user", text);
+      appendMessage("user", file ? [text || "Вложение без текста", "Файл: " + file.name].join("\\n") : text);
       message.value = "";
       const pending = appendMessage("assistant", "Готовлю ответ...");
       send.disabled = true;
 
       try {
-        const response = await fetch("/web/chat", {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({
-            accessCode: code.value,
-            role: role.value,
-            message: text,
-          }),
-        });
+        let response;
+        if (file) {
+          const formData = new FormData();
+          formData.set("accessCode", code.value);
+          formData.set("role", role.value);
+          formData.set("message", text);
+          formData.set("attachment", file);
+          response = await fetch("/web/chat", {
+            method: "POST",
+            body: formData,
+          });
+        } else {
+          response = await fetch("/web/chat", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({
+              accessCode: code.value,
+              role: role.value,
+              message: text,
+            }),
+          });
+        }
         const body = await response.json();
         pending.className = response.ok ? "message assistant" : "message error";
         pending.textContent = response.ok
           ? (body.answer && body.answer.text ? body.answer.text : "Пустой ответ")
           : ("Ошибка: " + (body.error || "request_failed"));
+        if (response.ok) attachment.value = "";
       } catch (error) {
         pending.className = "message error";
         pending.textContent = "Ошибка связи с backend.";
@@ -1122,6 +1444,12 @@ export function createAppServer(options = {}) {
     options.webChatAccessCode ?? dependencies.webChatAccessCode;
   const webChatUrl =
     options.webChatUrl ?? dependencies.webChatUrl ?? "/chat";
+  const webChatMaxAttachmentBytes =
+    Number(options.webChatMaxAttachmentBytes ?? dependencies.webChatMaxAttachmentBytes) ||
+    defaultWebChatMaxAttachmentBytes;
+  const webChatMaxExtractedChars =
+    Number(options.webChatMaxExtractedChars ?? dependencies.webChatMaxExtractedChars) ||
+    defaultWebChatMaxExtractedChars;
   const users = options.users ?? dependencies.users ?? [];
   const orchestrator =
     options.orchestrator ??
@@ -1172,7 +1500,29 @@ export function createAppServer(options = {}) {
           return;
         }
 
-        const body = await readJson(request);
+        let parsedWebChatBody;
+        try {
+          parsedWebChatBody = await readWebChatBody(request, {
+            maxAttachmentBytes: webChatMaxAttachmentBytes,
+          });
+        } catch (error) {
+          if (error.code === "request_body_too_large") {
+            sendJson(response, 413, { error: "web_chat_attachment_too_large" });
+            return;
+          }
+          if (error.statusCode) {
+            sendJson(response, error.statusCode, { error: error.code });
+            return;
+          }
+          if (error instanceof SyntaxError) {
+            sendJson(response, 400, { error: "web_chat_body_invalid" });
+            return;
+          }
+          throw error;
+        }
+
+        const { attachments } = parsedWebChatBody;
+        let body = parsedWebChatBody.body;
         const receivedAccessCode =
           body.accessCode ?? body.code ?? request.headers["x-family-ai-web-code"];
         if (!accessCodeMatches(receivedAccessCode, webChatAccessCode)) {
@@ -1189,6 +1539,26 @@ export function createAppServer(options = {}) {
           sendJson(response, 403, { error: "web_chat_role_not_allowed" });
           return;
         }
+
+        const bodyWithAttachments = await bodyWithWebChatAttachments({
+          body,
+          attachments,
+          imageOcr: resolveImageOcr({
+            botKey: String(body.role ?? "").trim().toLowerCase(),
+            imageOcr,
+            imageOcrs,
+          }),
+          maxAttachmentBytes: webChatMaxAttachmentBytes,
+          maxExtractedChars: webChatMaxExtractedChars,
+        });
+        if (bodyWithAttachments.ok === false) {
+          sendJson(response, bodyWithAttachments.statusCode, {
+            error: bodyWithAttachments.error,
+            message: bodyWithAttachments.message,
+          });
+          return;
+        }
+        body = bodyWithAttachments;
 
         const text = String(body.message ?? body.text ?? "").trim();
         if (!text) {
