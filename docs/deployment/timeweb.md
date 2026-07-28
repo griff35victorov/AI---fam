@@ -150,6 +150,35 @@ The orchestrator chooses a profile, and configuration maps profile to actual Tim
 
 Production uses `TIMEWEB_AI_API_KEY`, `TIMEWEB_AI_BASE_URL`, and a profile-to-agent mapping. `TIMEWEB_AI_BASE_URL` must point to the Agent API runtime, `https://agent.timeweb.cloud`, not the resource-management API. The mapping can be supplied as `TIMEWEB_AGENT_IDS` JSON or as individual variables such as `TIMEWEB_AGENT_OWNER_ASSISTANT`, `TIMEWEB_AGENT_TEACHER_METHODOLOGIST`, and `TIMEWEB_AGENT_DAUGHTER_TUTOR`.
 
+### Optional Kimi/Moonshot Provider
+
+Kimi can be connected in two different ways:
+
+- through Timeweb AI Agent UI, if Timeweb exposes the required Kimi model there;
+- directly through Kimi's OpenAI-compatible API.
+
+For direct Kimi integration keep the Timeweb variables in place and add:
+
+- `AI_PROVIDER=hybrid` - Kimi first for text profiles, Timeweb fallback;
+- `KIMI_AI_API_KEY` or `MOONSHOT_API_KEY` - Kimi platform API key;
+- `KIMI_AI_BASE_URL=https://api.moonshot.ai/v1`;
+- `KIMI_MODEL_CHEAP`, `KIMI_MODEL_STANDARD`, `KIMI_MODEL_STRONG` - provider-specific model names.
+
+For fine-grained control use `AI_PROVIDER_ROUTES`, for example:
+
+```env
+AI_PROVIDER_ROUTES={"cheap":["kimi","timeweb"],"standard":["kimi","timeweb"],"strong":["kimi","timeweb"],"image":["timeweb"]}
+```
+
+Do not replace `TIMEWEB_AI_BASE_URL` with the Kimi URL. The Timeweb adapter uses
+`/api/v1/cloud-ai/agents/{agentId}/v1/chat/completions`; Kimi uses
+`/chat/completions`. The app chooses the correct adapter from `AI_PROVIDER` or
+`AI_PROVIDER_ROUTES`.
+
+Telegram transport, memory, weather, web search, Google Workspace, file parsing,
+and the web chat remain outside the model provider. Switching to Kimi only
+changes the final text generation step.
+
 ## Telegram Integration
 
 The production backend supports one legacy Telegram webhook and three dedicated

@@ -1,4 +1,8 @@
-import { TimewebAiProvider } from "../../../packages/ai/src/index.js";
+import {
+  KimiAiProvider,
+  ProfileRoutingAiProvider,
+  TimewebAiProvider,
+} from "../../../packages/ai/src/index.js";
 import { createPrismaRepositories } from "../../../packages/db/src/index.js";
 import {
   createCapabilityRegistry,
@@ -17,6 +21,7 @@ import {
 import { LocalVoskTelegramVoiceTranscriber, TelegramVoiceTranscriber } from "./voice.js";
 
 const defaultTimewebBaseUrl = "https://agent.timeweb.cloud";
+const defaultKimiBaseUrl = "https://api.moonshot.ai/v1";
 const defaultWorkspaceId = "workspace-family";
 const telegramBotEnv = {
   owner: "TELEGRAM_OWNER_BOT_TOKEN",
@@ -96,6 +101,126 @@ function resolveTelegramBotTokenForKey(env, botKey) {
 function parseNumber(value, fallback) {
   const parsed = Number(value);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function compactObject(object) {
+  return Object.fromEntries(
+    Object.entries(object).filter(([, value]) => value !== undefined),
+  );
+}
+
+function normalizeProviderName(value) {
+  const normalized = String(value ?? "").trim().toLowerCase();
+  if (normalized === "moonshot") return "kimi";
+  return normalized;
+}
+
+function parseProviderList(value) {
+  if (Array.isArray(value)) {
+    return value.map(normalizeProviderName).filter(Boolean);
+  }
+
+  if (typeof value === "string") {
+    return value.split(",").map(normalizeProviderName).filter(Boolean);
+  }
+
+  return [];
+}
+
+function normalizeAiProviderRoutes(routes = {}) {
+  return Object.fromEntries(
+    Object.entries(routes)
+      .map(([profile, route]) => [profile, parseProviderList(route)])
+      .filter(([, route]) => route.length > 0),
+  );
+}
+
+export function parseAiProviderRoutes(env = {}) {
+  const explicitRoutes = envValue(env.AI_PROVIDER_ROUTES);
+  if (explicitRoutes) {
+    return normalizeAiProviderRoutes(JSON.parse(explicitRoutes));
+  }
+
+  const profiles = ["cheap", "standard", "strong", "image"];
+  const profileRoutes = {};
+  for (const profile of profiles) {
+    const key = `AI_PROVIDER_${profile.toUpperCase()}`;
+    const fallbackKey = `AI_FALLBACK_${profile.toUpperCase()}`;
+    const primary = parseProviderList(envValue(env[key]));
+    const fallback = parseProviderList(envValue(env[fallbackKey]));
+    if (primary.length > 0 || fallback.length > 0) {
+      profileRoutes[profile] = [...primary, ...fallback];
+    }
+  }
+
+  if (Object.keys(profileRoutes).length > 0) {
+    return profileRoutes;
+  }
+
+  const provider = normalizeProviderName(envValue(env.AI_PROVIDER) ?? "timeweb");
+  if (provider === "kimi") {
+    return {
+      cheap: ["kimi"],
+      standard: ["kimi"],
+      strong: ["kimi"],
+      image: ["timeweb"],
+    };
+  }
+
+  if (provider === "auto" || provider === "hybrid") {
+    return {
+      cheap: ["kimi", "timeweb"],
+      standard: ["kimi", "timeweb"],
+      strong: ["kimi", "timeweb"],
+      image: ["timeweb"],
+    };
+  }
+
+  return {
+    default: ["timeweb"],
+  };
+}
+
+function routeUsesProvider(routes, providerName) {
+  return Object.values(routes).some((route) => route.includes(providerName));
+}
+
+function createAiProvider({ env = {}, fetchImpl = fetch } = {}) {
+  const routes = parseAiProviderRoutes(env);
+  const timewebProvider = new TimewebAiProvider({
+    baseUrl: envValue(env.TIMEWEB_AI_BASE_URL) ?? defaultTimewebBaseUrl,
+    apiKey: envValue(env.TIMEWEB_AI_API_KEY),
+    agentIds: parseTimewebAgentIds(env),
+    fetchImpl,
+    timeoutMs: parseNumber(env.TIMEWEB_AI_TIMEOUT_MS, 30_000),
+  });
+  const providers = {
+    timeweb: timewebProvider,
+  };
+
+  const kimiApiKey = envValue(env.KIMI_AI_API_KEY) ?? envValue(env.MOONSHOT_API_KEY);
+  if (kimiApiKey || routeUsesProvider(routes, "kimi")) {
+    providers.kimi = new KimiAiProvider({
+      baseUrl: envValue(env.KIMI_AI_BASE_URL) ?? defaultKimiBaseUrl,
+      apiKey: kimiApiKey,
+      modelByProfile: compactObject({
+        cheap: envValue(env.KIMI_MODEL_CHEAP),
+        standard: envValue(env.KIMI_MODEL_STANDARD),
+        strong: envValue(env.KIMI_MODEL_STRONG),
+        image: envValue(env.KIMI_MODEL_IMAGE),
+      }),
+      fetchImpl,
+      timeoutMs: parseNumber(env.KIMI_AI_TIMEOUT_MS, 30_000),
+      maxCompletionTokens: envValue(env.KIMI_MAX_COMPLETION_TOKENS),
+      reasoningEffort: envValue(env.KIMI_REASONING_EFFORT),
+    });
+  }
+
+  return new ProfileRoutingAiProvider({
+    providers,
+    routes,
+    defaultRoute: ["timeweb"],
+  });
 }
 
 function resolveTelegramWebhookSecretForKey(env, botKey) {
@@ -476,13 +601,7 @@ export function createProductionDependencies({
     ),
     supervisorAlertChatId:
       envValue(env.SUPERVISOR_ALERT_CHAT_ID) ?? envValue(env.TELEGRAM_OWNER_CHAT_ID),
-    aiProvider: new TimewebAiProvider({
-      baseUrl: envValue(env.TIMEWEB_AI_BASE_URL) ?? defaultTimewebBaseUrl,
-      apiKey: envValue(env.TIMEWEB_AI_API_KEY),
-      agentIds: parseTimewebAgentIds(env),
-      fetchImpl,
-      timeoutMs: parseNumber(env.TIMEWEB_AI_TIMEOUT_MS, 30_000),
-    }),
+    aiProvider: createAiProvider({ env, fetchImpl }),
     telegramSender: new TelegramBotSender({
       botToken: resolveTelegramBotToken(env),
       fetchImpl,

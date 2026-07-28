@@ -56,7 +56,9 @@ export class TimewebAiProvider extends AiProvider {
     }
 
     if (!response.ok) {
-      throw new Error(`Timeweb AI request failed with ${response.status}`);
+      const error = new Error(`Timeweb AI request failed with ${response.status}`);
+      error.status = response.status;
+      throw error;
     }
 
     const raw = await response.json();

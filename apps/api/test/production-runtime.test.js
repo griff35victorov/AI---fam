@@ -6,6 +6,7 @@ import { createAppServerFromEnv, createAppServerFromEnvAsync } from "../src/serv
 import {
   createProductionDependencies,
   createTelegramSenders,
+  parseAiProviderRoutes,
   parseTelegramWebhookSecrets,
 } from "../src/production-runtime.js";
 
@@ -188,6 +189,59 @@ test("production dependencies also read individual Timeweb agent id env vars", a
   assert.equal(
     calls[0][0],
     "https://agent.timeweb.cloud/api/v1/cloud-ai/agents/agent-design/v1/chat/completions",
+  );
+});
+
+test("production dependencies can route standard AI calls to Kimi with Timeweb fallback configured", async () => {
+  const calls = [];
+  const dependencies = createProductionDependencies({
+    env: {
+      AI_PROVIDER_ROUTES: JSON.stringify({
+        standard: ["kimi", "timeweb"],
+        image: ["timeweb"],
+      }),
+      KIMI_AI_API_KEY: "kimi-key",
+      KIMI_AI_BASE_URL: "https://kimi.example/v1",
+      KIMI_MODEL_STANDARD: "kimi-standard",
+      TIMEWEB_AI_API_KEY: "timeweb-key",
+      TIMEWEB_AI_BASE_URL: "https://timeweb.example",
+      TIMEWEB_AGENT_OWNER_ASSISTANT: "agent-owner",
+      TELEGRAM_BOT_TOKEN: "telegram-token",
+    },
+    repositories: createInMemoryRepositories(),
+    fetchImpl: async (...args) => {
+      calls.push(args);
+      return jsonResponse({ choices: [{ message: { content: "kimi ok" } }] });
+    },
+  });
+
+  const result = await dependencies.aiProvider.complete({
+    agentProfile: "owner_assistant",
+    modelProfile: { profile: "standard", model: "tw-model" },
+    messages: [{ role: "user", content: "hello" }],
+  });
+
+  assert.equal(result.text, "kimi ok");
+  assert.equal(calls[0][0], "https://kimi.example/v1/chat/completions");
+  assert.equal(calls[0][1].headers.authorization, "Bearer kimi-key");
+  assert.deepEqual(JSON.parse(calls[0][1].body), {
+    model: "kimi-standard",
+    messages: [{ role: "user", content: "hello" }],
+    stream: false,
+  });
+});
+
+test("parseAiProviderRoutes supports profile-specific env vars", () => {
+  assert.deepEqual(
+    parseAiProviderRoutes({
+      AI_PROVIDER_CHEAP: "kimi",
+      AI_FALLBACK_CHEAP: "timeweb",
+      AI_PROVIDER_STRONG: "timeweb",
+    }),
+    {
+      cheap: ["kimi", "timeweb"],
+      strong: ["timeweb"],
+    },
   );
 });
 
