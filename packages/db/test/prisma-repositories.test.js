@@ -324,6 +324,83 @@ describe("Prisma repositories", () => {
     );
   });
 
+  it("searches old relevant memories by query", async () => {
+    const repositories = createPrismaRepositories(
+      createFakePrisma({
+        memoryItems: [
+          ...Array.from({ length: 30 }, (_, index) => ({
+            id: `memory-noise-${index}`,
+            workspaceId: "workspace-family",
+            ownerUserId: "owner-1",
+            scope: "family",
+            sensitivity: "normal",
+            subjectType: "preference",
+            content: `Routine note ${index}`,
+            createdAt: new Date(`2026-07-20T10:${String(index).padStart(2, "0")}:00.000Z`),
+          })),
+          {
+            id: "memory-journal",
+            workspaceId: "workspace-family",
+            ownerUserId: "owner-1",
+            scope: "family",
+            sensitivity: "normal",
+            subjectType: "project",
+            content: "RKSURFMAG is the owner's kitesurfing journal",
+            createdAt: new Date("2026-07-20T09:00:00.000Z"),
+          },
+        ],
+      }),
+    );
+
+    const results = await repositories.memories.search({
+      actorUserId: "owner-1",
+      workspaceId: "workspace-family",
+      query: "what is my RKSURFMAG journal",
+      limit: 3,
+    });
+
+    assert.equal(results[0].id, "memory-journal");
+  });
+
+  it("upserts a single profile summary memory", async () => {
+    const repositories = createPrismaRepositories(createFakePrisma());
+
+    await repositories.memories.upsertSummary({
+      workspaceId: "workspace-family",
+      ownerUserId: "owner-1",
+      scope: "family",
+      sensitivity: "normal",
+      subjectType: "profile_summary",
+      subjectId: "owner-1",
+      content: "Family profile: short answers.",
+      summary: "Family profile: short answers.",
+      sourceMessageIds: ["message-1"],
+    });
+    await repositories.memories.upsertSummary({
+      workspaceId: "workspace-family",
+      ownerUserId: "owner-1",
+      scope: "family",
+      sensitivity: "normal",
+      subjectType: "profile_summary",
+      subjectId: "owner-1",
+      content: "Family profile: short answers and RKSURFMAG.",
+      summary: "Family profile: short answers and RKSURFMAG.",
+      sourceMessageIds: ["message-2"],
+    });
+
+    const summaries = await repositories.memories.listBySubject({
+      actorUserId: "owner-1",
+      workspaceId: "workspace-family",
+      subjectType: "profile_summary",
+      subjectId: "owner-1",
+      limit: 10,
+    });
+
+    assert.equal(summaries.length, 1);
+    assert.match(summaries[0].content, /RKSURFMAG/);
+    assert.deepEqual(summaries[0].sourceMessageIds, ["message-1", "message-2"]);
+  });
+
   it("stores and searches material chunks", async () => {
     const repositories = createPrismaRepositories(createFakePrisma());
 

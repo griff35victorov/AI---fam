@@ -55,6 +55,16 @@ function resolveWebChatUrl(env = {}) {
   }
 }
 
+function resolveHealthVersion(env = {}) {
+  return compactObject({
+    commitSha:
+      envValue(env.GIT_COMMIT_SHA) ??
+      envValue(env.COMMIT_SHA) ??
+      envValue(env.SOURCE_VERSION),
+    buildTime: envValue(env.BUILD_TIME) ?? envValue(env.APP_BUILD_TIME),
+  });
+}
+
 function parseBoolean(value, fallback = false) {
   const normalized = String(value ?? "").trim().toLowerCase();
   if (!normalized) return fallback;
@@ -529,6 +539,21 @@ export function createProductionDependencies({
   return {
     repositories: resolvedRepositories,
     workspaceId: envValue(env.APP_DEFAULT_WORKSPACE_ID) ?? defaultWorkspaceId,
+    healthVersion: resolveHealthVersion(env),
+    healthCapabilities: {
+      aiProviderConfigured: Boolean(
+        envValue(env.TIMEWEB_AI_API_KEY) ||
+          envValue(env.KIMI_AI_API_KEY) ||
+          envValue(env.MOONSHOT_API_KEY),
+      ),
+      kimiConfigured: Boolean(envValue(env.KIMI_AI_API_KEY) ?? envValue(env.MOONSHOT_API_KEY)),
+      timewebConfigured: Boolean(envValue(env.TIMEWEB_AI_API_KEY)),
+      telegramConfigured: Boolean(resolveTelegramBotToken(env)),
+      googleCalendarConfigured: Boolean(googleWorkspaceProviders.calendarProvider),
+      googleGmailConfigured: Boolean(googleWorkspaceProviders.emailProvider),
+      voiceTranscriptionConfigured: Object.keys(voiceTranscribers).length > 0,
+      imageOcrConfigured: Object.keys(imageOcrs).length > 0,
+    },
     webChatAccessCode: envValue(env.WEB_CHAT_ACCESS_CODE),
     webChatUrl: resolveWebChatUrl(env),
     capabilityRegistry,

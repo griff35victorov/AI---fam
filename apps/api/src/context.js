@@ -3,6 +3,13 @@ import { canAccessWorkspace } from "../../../packages/domain/src/index.js";
 export function buildAllowedMemoryContext({ actor, memories, action = "read" }) {
   return memories
     .filter((memory) => memory.sensitivity !== "secret")
+    .filter((memory) => {
+      if (memory.sensitivity !== "student_personal_data") return true;
+      return (
+        (actor?.role === "teacher" || actor?.role === "system") &&
+        memory.scope === "teacher_private"
+      );
+    })
     .filter((memory) => canAccessWorkspace(actor, memory.scope, action));
 }
 
@@ -10,7 +17,10 @@ export function formatMemoryContext(memories) {
   if (memories.length === 0) return "";
 
   return memories
-    .map((memory) => `- [${memory.scope}/${memory.subjectType}] ${memory.content}`)
+    .map((memory) => {
+      const content = memory.summary ?? memory.content;
+      return `- [${memory.scope}/${memory.subjectType}] ${content}`;
+    })
     .join("\n");
 }
 

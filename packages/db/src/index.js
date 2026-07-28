@@ -168,6 +168,46 @@ function scoreMaterialChunk(chunk, material, queryTerms) {
   }, 0);
 }
 
+function searchTermVariants(term) {
+  const variants = [term];
+  if (term.length > 4) variants.push(term.slice(0, -1));
+  if (term.length > 6) variants.push(term.slice(0, -2));
+  return variants.filter((variant, index, list) =>
+    variant.length >= 3 && list.indexOf(variant) === index,
+  );
+}
+
+function textIncludesSearchTerm(text, term) {
+  return searchTermVariants(term).some((variant) => text.includes(variant));
+}
+
+function memoryVisibleToActor(memory, { actorUserId, workspaceId, includePrivate = false } = {}) {
+  if (workspaceId != null && memory.workspaceId !== workspaceId) {
+    return false;
+  }
+
+  if (memory.ownerUserId === actorUserId) {
+    return true;
+  }
+
+  return includePrivate ? true : memory.sensitivity !== "private";
+}
+
+function scoreMemory(memory, queryTerms) {
+  if (queryTerms.length === 0) return 0;
+
+  const subject = String(memory.subjectType ?? "").toLowerCase();
+  const content = String(memory.content ?? "").toLowerCase();
+  const summary = String(memory.summary ?? "").toLowerCase();
+
+  return queryTerms.reduce((score, term) => {
+    if (textIncludesSearchTerm(subject, term)) score += 5;
+    if (textIncludesSearchTerm(summary, term)) score += 4;
+    if (textIncludesSearchTerm(content, term)) score += 3;
+    return score;
+  }, 0);
+}
+
 const normalizeAuditLog = (auditLog) => ({
   id: auditLog.id ?? createId("audit"),
   actorId: auditLog.actorId ?? null,
@@ -369,23 +409,96 @@ export function createInMemoryRepositories(seed = {}) {
         return cloneRecord(stored);
       },
 
+      async upsertSummary(memory) {
+        const subjectId = memory.subjectId ?? null;
+        const existing = memories
+          .filter((candidate) =>
+            candidate.workspaceId === memory.workspaceId &&
+            candidate.ownerUserId === memory.ownerUserId &&
+            candidate.subjectType === memory.subjectType &&
+            (candidate.subjectId ?? null) === subjectId
+          )
+          .sort(byCreatedAtAsc)
+          .at(-1);
+
+        if (!existing) {
+          const stored = normalizeMemory(memory);
+          memories.push(stored);
+          return cloneRecord(stored);
+        }
+
+        const updatedAt = cloneDate(memory.updatedAt) ?? new Date();
+        existing.scope = memory.scope ?? existing.scope;
+        existing.sensitivity = memory.sensitivity ?? existing.sensitivity;
+        existing.subjectId = subjectId;
+        existing.content = memory.content;
+        existing.summary = memory.summary ?? memory.content;
+        existing.sourceMessageIds = [
+          ...new Set([
+            ...(existing.sourceMessageIds ?? []),
+            ...(memory.sourceMessageIds ?? []),
+          ]),
+        ];
+        existing.confidence = memory.confidence ?? existing.confidence;
+        existing.expiresAt = cloneDate(memory.expiresAt) ?? null;
+        existing.createdAt = cloneDate(memory.createdAt) ?? updatedAt;
+        existing.updatedAt = updatedAt;
+
+        return cloneRecord(existing);
+      },
+
       async listForActor({ actorUserId, workspaceId, includePrivate = false, limit = null }) {
         const visibleMemories = memories
-          .filter((memory) => {
-            if (workspaceId != null && memory.workspaceId !== workspaceId) {
-              return false;
-            }
-
-            if (memory.ownerUserId === actorUserId) {
-              return true;
-            }
-
-            return includePrivate ? true : memory.sensitivity !== "private";
-          })
+          .filter((memory) =>
+            memoryVisibleToActor(memory, { actorUserId, workspaceId, includePrivate }),
+          )
           .sort(byCreatedAtAsc);
 
         return applyRecentLimit(visibleMemories, limit)
           .map(cloneRecord);
+      },
+
+      async listBySubject({
+        actorUserId,
+        workspaceId,
+        subjectType,
+        subjectId = undefined,
+        includePrivate = false,
+        limit = null,
+      }) {
+        const visibleMemories = memories
+          .filter((memory) =>
+            memoryVisibleToActor(memory, { actorUserId, workspaceId, includePrivate }),
+          )
+          .filter((memory) => memory.subjectType === subjectType)
+          .filter((memory) =>
+            subjectId === undefined ? true : (memory.subjectId ?? null) === subjectId,
+          )
+          .sort(byCreatedAtAsc);
+
+        return applyRecentLimit(visibleMemories, limit)
+          .map(cloneRecord);
+      },
+
+      async search({ actorUserId, workspaceId, query, includePrivate = false, limit = 8 }) {
+        const queryTerms = tokenizeSearchText(query);
+        if (queryTerms.length === 0) return [];
+
+        return memories
+          .filter((memory) =>
+            memoryVisibleToActor(memory, { actorUserId, workspaceId, includePrivate }),
+          )
+          .map((memory) => ({
+            memory,
+            score: scoreMemory(memory, queryTerms),
+          }))
+          .filter((result) => result.score > 0)
+          .sort((left, right) => {
+            if (right.score !== left.score) return right.score - left.score;
+            return byCreatedAtAsc(right.memory, left.memory);
+          })
+          .slice(0, Math.max(0, limit))
+          .map((result) => cloneRecord(result.memory));
       },
     },
 

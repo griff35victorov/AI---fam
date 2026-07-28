@@ -8,7 +8,7 @@ import {
   bootstrapUsersFromEnv,
   createPrismaClient,
 } from "../../../packages/db/src/index.js";
-import { createHealthResponse } from "./health.js";
+import { createDeepHealthResponse, createHealthResponse } from "./health.js";
 import { handleOrchestratorRequest } from "./orchestrator.js";
 import { createProductionDependencies } from "./production-runtime.js";
 import { startReminderDispatcher } from "./reminder-dispatcher.js";
@@ -1817,6 +1817,9 @@ export function createAppServer(options = {}) {
   const webChatMaxExtractedChars =
     Number(options.webChatMaxExtractedChars ?? dependencies.webChatMaxExtractedChars) ||
     defaultWebChatMaxExtractedChars;
+  const healthVersion = options.healthVersion ?? dependencies.healthVersion;
+  const healthCapabilities =
+    options.healthCapabilities ?? dependencies.healthCapabilities ?? {};
   const users = options.users ?? dependencies.users ?? [];
   const orchestrator =
     options.orchestrator ??
@@ -1843,7 +1846,17 @@ export function createAppServer(options = {}) {
       const requestPathname = new URL(request.url ?? "/", "http://localhost").pathname;
 
       if (request.method === "GET" && requestPathname === "/health") {
-        sendJson(response, 200, createHealthResponse());
+        sendJson(response, 200, createHealthResponse({ version: healthVersion }));
+        return;
+      }
+
+      if (request.method === "GET" && requestPathname === "/health/deep") {
+        const deepHealth = await createDeepHealthResponse({
+          repositories,
+          capabilities: healthCapabilities,
+          version: healthVersion,
+        });
+        sendJson(response, deepHealth.status === "error" ? 503 : 200, deepHealth);
         return;
       }
 

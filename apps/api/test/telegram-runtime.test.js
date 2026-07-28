@@ -705,6 +705,106 @@ test("repository backed orchestrator sends memory and recent history to AI", asy
   );
 });
 
+test("repository backed orchestrator retrieves old relevant memory for AI context", async () => {
+  const repositories = createInMemoryRepositories({
+    memories: [
+      {
+        id: "memory-journal",
+        workspaceId: "workspace-family",
+        ownerUserId: "owner-1",
+        scope: "family",
+        sensitivity: "normal",
+        subjectType: "project",
+        content: "Мой журнал называется RKSURFMAG, я его автор и редактор",
+        createdAt: new Date("2026-07-20T09:00:00.000Z"),
+      },
+      ...Array.from({ length: 35 }, (_, index) => ({
+        id: `memory-noise-${index}`,
+        workspaceId: "workspace-family",
+        ownerUserId: "owner-1",
+        scope: "family",
+        sensitivity: "normal",
+        subjectType: "auto_observed_fact",
+        content: `Свежая бытовая заметка ${index}`,
+        createdAt: new Date(`2026-07-21T10:${String(index).padStart(2, "0")}:00.000Z`),
+      })),
+    ],
+  });
+  const aiCalls = [];
+  const orchestrator = createRepositoryBackedOrchestrator({
+    repositories,
+    aiProvider: {
+      async complete(payload) {
+        aiCalls.push(payload);
+        return { text: "Учел память." };
+      },
+    },
+  });
+
+  await orchestrator({
+    chatId: 777,
+    actor: { id: "owner-1", role: "owner" },
+    intent: "household",
+    text: "Как называется мой журнал?",
+    telegramUpdateId: 792,
+  });
+
+  assert.equal(aiCalls.length, 1);
+  assert.match(aiCalls[0].messages[0].content, /RKSURFMAG/);
+  assert.match(aiCalls[0].messages[0].content, /автор и редактор/);
+});
+
+test("repository backed orchestrator pins profile summary into AI context", async () => {
+  const repositories = createInMemoryRepositories({
+    memories: [
+      {
+        id: "profile-summary",
+        workspaceId: "workspace-family",
+        ownerUserId: "owner-1",
+        scope: "family",
+        sensitivity: "normal",
+        subjectType: "profile_summary",
+        subjectId: "owner-1",
+        content: "Семейный профиль: Григорий любит короткие практичные ответы и ведет RKSURFMAG.",
+        summary: "Семейный профиль: Григорий любит короткие практичные ответы и ведет RKSURFMAG.",
+        createdAt: new Date("2026-07-20T09:00:00.000Z"),
+      },
+      ...Array.from({ length: 35 }, (_, index) => ({
+        id: `fresh-memory-${index}`,
+        workspaceId: "workspace-family",
+        ownerUserId: "owner-1",
+        scope: "family",
+        sensitivity: "normal",
+        subjectType: "auto_observed_fact",
+        content: `Свежая заметка ${index}`,
+        createdAt: new Date(`2026-07-21T10:${String(index).padStart(2, "0")}:00.000Z`),
+      })),
+    ],
+  });
+  const aiCalls = [];
+  const orchestrator = createRepositoryBackedOrchestrator({
+    repositories,
+    aiProvider: {
+      async complete(payload) {
+        aiCalls.push(payload);
+        return { text: "Ответ с профилем." };
+      },
+    },
+  });
+
+  await orchestrator({
+    chatId: 777,
+    actor: { id: "owner-1", role: "owner" },
+    intent: "household",
+    text: "Что важно учитывать обо мне при ответах?",
+    telegramUpdateId: 793,
+  });
+
+  assert.equal(aiCalls.length, 1);
+  assert.match(aiCalls[0].messages[0].content, /Семейный профиль/);
+  assert.match(aiCalls[0].messages[0].content, /RKSURFMAG/);
+});
+
 test("repository backed orchestrator sends recent web chat history to AI without telegram update id", async () => {
   const repositories = createInMemoryRepositories();
   const aiCalls = [];
@@ -819,10 +919,18 @@ test("repository backed orchestrator extracts safe facts from ordinary dialogue"
     actorUserId: "owner-1",
     workspaceId: "workspace-family",
   });
+  const factMemories = memories.filter(
+    (memory) => memory.subjectType !== "profile_summary",
+  );
+  const summaryMemories = memories.filter(
+    (memory) => memory.subjectType === "profile_summary",
+  );
 
-  assert.equal(memories.length, 1);
-  assert.equal(memories[0].subjectType, "auto_observed_fact");
-  assert.equal(memories[0].content, "Я люблю короткие ответы без воды");
+  assert.equal(factMemories.length, 1);
+  assert.equal(factMemories[0].subjectType, "auto_observed_fact");
+  assert.equal(factMemories[0].content, "Я люблю короткие ответы без воды");
+  assert.equal(summaryMemories.length, 1);
+  assert.match(summaryMemories[0].content, /короткие ответы/);
 });
 
 test("repository backed orchestrator does not auto-store secrets from ordinary dialogue", async () => {
@@ -1388,8 +1496,149 @@ test("repository backed orchestrator stores automatic memories before capability
     workspaceId: "workspace-family",
     limit: 10,
   });
-  assert.equal(memories.length, 1);
-  assert.equal(memories[0].content, "Я предпочитаю короткие ответы");
+  const factMemories = memories.filter(
+    (memory) => memory.subjectType !== "profile_summary",
+  );
+  const summaryMemories = memories.filter(
+    (memory) => memory.subjectType === "profile_summary",
+  );
+  assert.equal(factMemories.length, 1);
+  assert.equal(factMemories[0].content, "Я предпочитаю короткие ответы");
+  assert.equal(summaryMemories.length, 1);
+  assert.match(summaryMemories[0].content, /короткие ответы/);
+});
+
+test("repository backed orchestrator learns ordinary stable facts into memory profile", async () => {
+  const repositories = createInMemoryRepositories();
+  const orchestrator = createRepositoryBackedOrchestrator({
+    repositories,
+    aiProvider: {
+      async complete() {
+        return { text: "ok" };
+      },
+    },
+  });
+
+  await orchestrator({
+    chatId: 777,
+    actor: { id: "owner-1", role: "owner" },
+    intent: "household",
+    text: "My journal is RKSURFMAG and I am the editor",
+    telegramUpdateId: 933,
+  });
+
+  const profile = await orchestrator({
+    chatId: 777,
+    actor: { id: "owner-1", role: "owner" },
+    intent: "household",
+    text: "/memory profile",
+    telegramUpdateId: 934,
+  });
+
+  assert.equal(profile.answer.source, "memory_profile");
+  assert.match(profile.answer.text, /RKSURFMAG/);
+  assert.match(profile.answer.text, /editor/);
+});
+
+test("repository backed orchestrator learns Russian project facts from ordinary dialogue", async () => {
+  const repositories = createInMemoryRepositories();
+  const orchestrator = createRepositoryBackedOrchestrator({
+    repositories,
+    aiProvider: {
+      async complete() {
+        return { text: "ok" };
+      },
+    },
+  });
+
+  await orchestrator({
+    chatId: 777,
+    actor: { id: "owner-1", role: "owner" },
+    intent: "household",
+    text: "Мой журнал называется RKSURFMAG, я его автор и редактор",
+    telegramUpdateId: 936,
+  });
+
+  const memories = await repositories.memories.listForActor({
+    actorUserId: "owner-1",
+    workspaceId: "workspace-family",
+    limit: 10,
+  });
+  const profile = await orchestrator({
+    chatId: 777,
+    actor: { id: "owner-1", role: "owner" },
+    intent: "household",
+    text: "/memory profile",
+    telegramUpdateId: 937,
+  });
+
+  const factMemories = memories.filter(
+    (memory) => memory.subjectType !== "profile_summary",
+  );
+  const summaryMemories = memories.filter(
+    (memory) => memory.subjectType === "profile_summary",
+  );
+
+  assert.equal(factMemories.length, 1);
+  assert.equal(factMemories[0].subjectType, "project");
+  assert.match(factMemories[0].content, /RKSURFMAG/);
+  assert.equal(summaryMemories.length, 1);
+  assert.match(summaryMemories[0].content, /RKSURFMAG/);
+  assert.equal(profile.answer.source, "memory_profile");
+  assert.match(profile.answer.text, /RKSURFMAG/);
+  assert.match(profile.answer.text, /автор и редактор/);
+});
+
+test("repository backed orchestrator consolidates memory profile without calling AI", async () => {
+  const repositories = createInMemoryRepositories({
+    memories: [
+      {
+        id: "journal",
+        workspaceId: "workspace-family",
+        ownerUserId: "owner-1",
+        scope: "family",
+        sensitivity: "normal",
+        subjectType: "project",
+        content: "My journal is RKSURFMAG and I am the editor",
+        createdAt: new Date("2026-07-20T09:00:00.000Z"),
+      },
+    ],
+  });
+  const orchestrator = createRepositoryBackedOrchestrator({
+    repositories,
+    aiProvider: {
+      async complete() {
+        throw new Error("AI should not be called for memory consolidation");
+      },
+    },
+  });
+
+  const firstResponse = await orchestrator({
+    chatId: 777,
+    actor: { id: "owner-1", role: "owner" },
+    intent: "household",
+    text: "/memory consolidate",
+    telegramUpdateId: 935,
+  });
+  const secondResponse = await orchestrator({
+    chatId: 777,
+    actor: { id: "owner-1", role: "owner" },
+    intent: "household",
+    text: "/memory consolidate",
+    telegramUpdateId: 936,
+  });
+
+  assert.equal(firstResponse.answer.source, "memory_consolidation");
+  assert.equal(secondResponse.answer.source, "memory_consolidation");
+  const summaries = await repositories.memories.listBySubject({
+    actorUserId: "owner-1",
+    workspaceId: "workspace-family",
+    subjectType: "profile_summary",
+    subjectId: "owner-1",
+    limit: 10,
+  });
+  assert.equal(summaries.length, 1);
+  assert.match(summaries[0].content, /RKSURFMAG/);
 });
 
 test("weather request parser keeps Moscow district and evening intent separate", () => {

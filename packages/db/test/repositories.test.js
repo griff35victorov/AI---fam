@@ -102,6 +102,81 @@ describe("in-memory repositories", () => {
     );
   });
 
+  it("searches old relevant memories by query", async () => {
+    const repositories = createInMemoryRepositories({
+      memories: [
+        ...Array.from({ length: 30 }, (_, index) => ({
+          id: `memory-noise-${index}`,
+          workspaceId: "workspace-family",
+          ownerUserId: "user-owner",
+          scope: "family",
+          sensitivity: "normal",
+          subjectType: "preference",
+          content: `Routine note ${index}`,
+          createdAt: new Date(`2026-07-20T10:${String(index).padStart(2, "0")}:00.000Z`),
+        })),
+        {
+          id: "memory-journal",
+          workspaceId: "workspace-family",
+          ownerUserId: "user-owner",
+          scope: "family",
+          sensitivity: "normal",
+          subjectType: "project",
+          content: "RKSURFMAG is the owner's kitesurfing journal",
+          createdAt: new Date("2026-07-20T09:00:00.000Z"),
+        },
+      ],
+    });
+
+    const results = await repositories.memories.search({
+      actorUserId: "user-owner",
+      workspaceId: "workspace-family",
+      query: "what is my RKSURFMAG journal",
+      limit: 3,
+    });
+
+    assert.equal(results[0].id, "memory-journal");
+  });
+
+  it("upserts a single profile summary memory", async () => {
+    const repositories = createInMemoryRepositories();
+
+    await repositories.memories.upsertSummary({
+      workspaceId: "workspace-family",
+      ownerUserId: "user-owner",
+      scope: "family",
+      sensitivity: "normal",
+      subjectType: "profile_summary",
+      subjectId: "user-owner",
+      content: "Family profile: short answers.",
+      summary: "Family profile: short answers.",
+      sourceMessageIds: ["message-1"],
+    });
+    await repositories.memories.upsertSummary({
+      workspaceId: "workspace-family",
+      ownerUserId: "user-owner",
+      scope: "family",
+      sensitivity: "normal",
+      subjectType: "profile_summary",
+      subjectId: "user-owner",
+      content: "Family profile: short answers and RKSURFMAG.",
+      summary: "Family profile: short answers and RKSURFMAG.",
+      sourceMessageIds: ["message-2"],
+    });
+
+    const summaries = await repositories.memories.listBySubject({
+      actorUserId: "user-owner",
+      workspaceId: "workspace-family",
+      subjectType: "profile_summary",
+      subjectId: "user-owner",
+      limit: 10,
+    });
+
+    assert.equal(summaries.length, 1);
+    assert.match(summaries[0].content, /RKSURFMAG/);
+    assert.deepEqual(summaries[0].sourceMessageIds, ["message-1", "message-2"]);
+  });
+
   it("stores material chunks and searches them for the owner", async () => {
     const repositories = createInMemoryRepositories();
 

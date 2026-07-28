@@ -36,6 +36,34 @@ function summarizeByType(records) {
     .join(", ");
 }
 
+function numericMetadataValues(records, key) {
+  return records
+    .map((record) => Number(record.metadata?.[key]))
+    .filter((value) => Number.isFinite(value));
+}
+
+function percentile(sortedValues, ratio) {
+  if (sortedValues.length === 0) return 0;
+  const index = Math.min(
+    sortedValues.length - 1,
+    Math.max(0, Math.ceil(sortedValues.length * ratio) - 1),
+  );
+  return sortedValues[index];
+}
+
+function summarizeLatencyMs(values) {
+  if (values.length === 0) {
+    return { p50: 0, p95: 0, max: 0 };
+  }
+
+  const sorted = [...values].sort((left, right) => left - right);
+  return {
+    p50: percentile(sorted, 0.5),
+    p95: percentile(sorted, 0.95),
+    max: sorted.at(-1),
+  };
+}
+
 function isActiveJob(job) {
   return job.status === "queued" || job.status === "running";
 }
@@ -114,6 +142,17 @@ export function analyzeSupervisorState({
   const aiProblemLogs = auditLogs.filter((log) =>
     ["ai_response_failed", "ai_response_empty"].includes(log.action),
   );
+  const duplicateReplyLogs = auditLogs.filter(
+    (log) =>
+      log.action === "assistant_quality_issue" &&
+      log.metadata?.issue === "duplicate_reply",
+  );
+  const contextUnderfilledLogs = auditLogs.filter(
+    (log) =>
+      log.action === "assistant_quality_issue" &&
+      log.metadata?.issue === "context_underfilled",
+  );
+  const slowAiLatencyMs = summarizeLatencyMs(numericMetadataValues(slowAiLogs, "durationMs"));
 
   let status = "ok";
   const findings = [];
@@ -196,6 +235,7 @@ export function analyzeSupervisorState({
       code: "slow_ai_responses",
       text: `Зафиксированы медленные AI-ответы: ${slowAiLogs.length}.`,
       count: slowAiLogs.length,
+      details: `p50 ${slowAiLatencyMs.p50} ms, p95 ${slowAiLatencyMs.p95} ms, max ${slowAiLatencyMs.max} ms`,
       autoHeal: false,
     });
   }
@@ -208,6 +248,30 @@ export function analyzeSupervisorState({
       text: `Зафиксированы пустые или ошибочные AI-ответы: ${aiProblemLogs.length}.`,
       count: aiProblemLogs.length,
       details: summarizeByType(aiProblemLogs),
+      autoHeal: false,
+    });
+  }
+
+  if (duplicateReplyLogs.length > 0) {
+    status = maxSeverity(status, "warning");
+    findings.push({
+      severity: "warning",
+      code: "duplicate_assistant_replies",
+      text: `Зафиксированы дубли ответов ассистента: ${duplicateReplyLogs.length}.`,
+      count: duplicateReplyLogs.length,
+      details: summarizeByType(duplicateReplyLogs),
+      autoHeal: false,
+    });
+  }
+
+  if (contextUnderfilledLogs.length > 0) {
+    status = maxSeverity(status, "warning");
+    findings.push({
+      severity: "warning",
+      code: "context_underfilled",
+      text: `Зафиксированы ответы с недостаточным контекстом: ${contextUnderfilledLogs.length}.`,
+      count: contextUnderfilledLogs.length,
+      details: summarizeByType(contextUnderfilledLogs),
       autoHeal: false,
     });
   }
@@ -225,7 +289,10 @@ export function analyzeSupervisorState({
       staleTelegramDeliveries: staleTelegramDeliveries.length,
       failedTelegramDeliveries: failedTelegramDeliveries.length,
       slowAiResponses: slowAiLogs.length,
+      slowAiLatencyMs,
       aiResponseProblems: aiProblemLogs.length,
+      duplicateReplies: duplicateReplyLogs.length,
+      contextUnderfilledResponses: contextUnderfilledLogs.length,
     },
     findings,
   };

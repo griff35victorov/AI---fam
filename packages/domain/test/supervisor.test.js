@@ -178,3 +178,64 @@ test("supervisor reports Telegram delivery failures separately", () => {
     ["failed_jobs", "telegram_delivery_failed"],
   );
 });
+
+test("supervisor reports duplicate assistant replies and context loss", () => {
+  const now = new Date("2026-07-22T12:00:00.000Z");
+  const report = analyzeSupervisorState({
+    now,
+    auditLogs: [
+      {
+        action: "assistant_quality_issue",
+        createdAt: new Date("2026-07-22T11:59:00.000Z"),
+        metadata: {
+          issue: "duplicate_reply",
+          count: 2,
+        },
+      },
+      {
+        action: "assistant_quality_issue",
+        createdAt: new Date("2026-07-22T11:59:30.000Z"),
+        metadata: {
+          issue: "context_underfilled",
+          recentMessagesFound: 0,
+          memoriesFound: 0,
+        },
+      },
+    ],
+  });
+
+  assert.equal(report.status, "warning");
+  assert.equal(report.metrics.duplicateReplies, 1);
+  assert.equal(report.metrics.contextUnderfilledResponses, 1);
+  assert.deepEqual(
+    report.findings.map((finding) => finding.code),
+    ["duplicate_assistant_replies", "context_underfilled"],
+  );
+});
+
+test("supervisor calculates slow AI latency distribution", () => {
+  const now = new Date("2026-07-22T12:00:00.000Z");
+  const report = analyzeSupervisorState({
+    now,
+    auditLogs: [
+      {
+        action: "ai_response_slow",
+        createdAt: new Date("2026-07-22T11:58:00.000Z"),
+        metadata: { durationMs: 9000, modelProfile: "standard" },
+      },
+      {
+        action: "ai_response_slow",
+        createdAt: new Date("2026-07-22T11:59:00.000Z"),
+        metadata: { durationMs: 18000, modelProfile: "standard" },
+      },
+    ],
+  });
+
+  assert.equal(report.metrics.slowAiResponses, 2);
+  assert.equal(report.metrics.slowAiLatencyMs.max, 18000);
+  assert.equal(report.metrics.slowAiLatencyMs.p95, 18000);
+  assert.deepEqual(
+    report.findings.map((finding) => finding.code),
+    ["slow_ai_responses"],
+  );
+});

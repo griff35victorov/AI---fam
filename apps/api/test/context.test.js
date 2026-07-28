@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { buildAllowedMemoryContext } from "../src/context.js";
+import {
+  buildAllowedMemoryContext,
+  formatMemoryContext,
+} from "../src/context.js";
 
 const memories = [
   {
@@ -31,6 +34,13 @@ const memories = [
     sensitivity: "secret",
     subjectType: "credential",
     content: "API token is 123.",
+  },
+  {
+    id: "mis-scoped-student-data",
+    scope: "family",
+    sensitivity: "student_personal_data",
+    subjectType: "student",
+    content: "Student Maria phone is +79990000000.",
   },
 ];
 
@@ -71,4 +81,21 @@ test("teacher context includes teacher private student data but excludes secrets
     context.map((memory) => memory.id),
     ["family-pref", "child-progress", "student-private"],
   );
+});
+
+test("formatted owner prompt does not include private student data", () => {
+  const promptContext = formatMemoryContext(
+    buildAllowedMemoryContext({
+      actor: { role: "owner" },
+      memories,
+      action: "read",
+    }),
+  );
+
+  assert.match(promptContext, /Family prefers concise answers/);
+  assert.doesNotMatch(promptContext, /Student Ivan/);
+  assert.doesNotMatch(promptContext, /Student Maria/);
+  assert.doesNotMatch(promptContext, /18:00/);
+  assert.doesNotMatch(promptContext, /\+79990000000/);
+  assert.doesNotMatch(promptContext, /API token/);
 });

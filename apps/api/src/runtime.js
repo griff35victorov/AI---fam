@@ -30,6 +30,10 @@ const recentConversationLookupLimit = 16;
 const diagnosticsLookupLimit = 24;
 const slowResponseThresholdMs = 8000;
 const telegramSafeAnswerLimit = 3900;
+const memoryProfileContextLimit = 40;
+const memoryRecentCandidateLimit = 80;
+const memoryProfileSummaryLimit = 3;
+const memorySearchLimit = 8;
 
 function conversationIdForRequest(request) {
   return request.conversationId ?? `telegram:${request.chatId}:${request.actor.id}`;
@@ -149,6 +153,269 @@ function buildMemoryRecallAnswer({ actor, memories }) {
     ...lines,
     "Чтобы добавить новый факт, напиши: «Запомни, что ...».",
   ].join("\n");
+}
+
+function memoryContentForDisplay(memory) {
+  return String(memory.summary ?? memory.content ?? "").trim();
+}
+
+function buildMemoryProfileAnswer({ actor, memories }) {
+  const allowedMemories = buildAllowedMemoryContext({
+    actor,
+    memories,
+    action: "read",
+  }).filter((memory) => memoryContentForDisplay(memory));
+
+  if (allowedMemories.length === 0) {
+    return [
+      "Профиль памяти пока пуст.",
+      "Можно обучать меня обычными фразами или командами: «Запомни, что ...», «/learn fact ...», «/learn material ...».",
+    ].join("\n");
+  }
+
+  const profileSummaries = allowedMemories.filter(
+    (memory) => memory.subjectType === "profile_summary",
+  );
+  const regularMemories = allowedMemories.filter(
+    (memory) => memory.subjectType !== "profile_summary",
+  );
+  const lines = [
+    "Профиль памяти, который сейчас использует оркестр:",
+    "",
+  ];
+
+  if (profileSummaries.length > 0) {
+    lines.push("Сводка:");
+    lines.push(...profileSummaries.slice(-2).map((memory) => `- ${memoryContentForDisplay(memory)}`));
+    lines.push("");
+  }
+
+  lines.push("Факты:");
+  lines.push(
+    ...regularMemories
+      .slice(-12)
+      .map((memory) => `- [${memory.scope}/${memory.subjectType}] ${memoryContentForDisplay(memory)}`),
+  );
+
+  return lines.join("\n");
+}
+
+function buildConsolidatedMemoryText({ actor, memories }) {
+  const allowedMemories = buildAllowedMemoryContext({
+    actor,
+    memories,
+    action: "read",
+  })
+    .filter((memory) => memory.subjectType !== "profile_summary")
+    .map(memoryContentForDisplay)
+    .filter(Boolean);
+
+  if (allowedMemories.length === 0) return "";
+
+  const roleLabel =
+    actor?.role === "teacher"
+      ? "Профиль преподавателя"
+      : actor?.role === "family_child"
+        ? "Учебный профиль"
+        : "Семейный профиль";
+
+  return [
+    `${roleLabel}:`,
+    ...allowedMemories
+      .slice(-16)
+      .map((content) => `- ${content}`),
+  ].join("\n");
+}
+
+function memoryRecordKey(memory) {
+  if (memory?.id) return `id:${memory.id}`;
+  return [
+    memory?.workspaceId ?? "",
+    memory?.ownerUserId ?? "",
+    memory?.scope ?? "",
+    memory?.subjectType ?? "",
+    memory?.subjectId ?? "",
+    memoryContentForDisplay(memory),
+  ].join("|");
+}
+
+function mergeMemoryLists(lists, limit = memoryContextLimit) {
+  const seen = new Set();
+  const merged = [];
+
+  for (const list of lists) {
+    for (const memory of list ?? []) {
+      const key = memoryRecordKey(memory);
+      if (!key || seen.has(key)) continue;
+      seen.add(key);
+      merged.push(memory);
+      if (merged.length >= limit) return merged;
+    }
+  }
+
+  return merged;
+}
+
+async function loadProfileSummaryMemories({
+  repositories,
+  actor,
+  workspaceId,
+  limit = memoryProfileSummaryLimit,
+}) {
+  if (!repositories.memories) return [];
+
+  if (repositories.memories.listBySubject) {
+    return repositories.memories.listBySubject({
+      actorUserId: actor.id,
+      workspaceId,
+      subjectType: "profile_summary",
+      subjectId: actor.id,
+      limit,
+    });
+  }
+
+  if (!repositories.memories.listForActor) return [];
+  const memories = await repositories.memories.listForActor({
+    actorUserId: actor.id,
+    workspaceId,
+    limit: Math.max(limit, memoryProfileContextLimit),
+  });
+
+  return memories
+    .filter((memory) =>
+      memory.subjectType === "profile_summary" &&
+      (memory.subjectId ?? actor.id) === actor.id,
+    )
+    .slice(-limit);
+}
+
+async function loadMemoryProfileMemories({
+  repositories,
+  actor,
+  workspaceId,
+  fallbackMemories = [],
+}) {
+  if (!repositories.memories) {
+    return mergeMemoryLists([fallbackMemories], memoryProfileContextLimit);
+  }
+
+  const [profileSummaries, recentMemories] = await Promise.all([
+    loadProfileSummaryMemories({
+      repositories,
+      actor,
+      workspaceId,
+      limit: memoryProfileSummaryLimit,
+    }),
+    repositories.memories.listForActor
+      ? repositories.memories.listForActor({
+          actorUserId: actor.id,
+          workspaceId,
+          limit: memoryProfileContextLimit,
+        })
+      : [],
+  ]);
+
+  return mergeMemoryLists(
+    [profileSummaries, recentMemories, fallbackMemories],
+    memoryProfileContextLimit,
+  );
+}
+
+async function loadRelevantMemories({
+  repositories,
+  actor,
+  workspaceId,
+  text,
+  fallbackMemories = [],
+}) {
+  if (!repositories.memories) {
+    return mergeMemoryLists([fallbackMemories], memoryContextLimit);
+  }
+
+  const [profileSummaries, searchedMemories, recentMemories] = await Promise.all([
+    loadProfileSummaryMemories({
+      repositories,
+      actor,
+      workspaceId,
+      limit: memoryProfileSummaryLimit,
+    }),
+    repositories.memories.search
+      ? repositories.memories.search({
+          actorUserId: actor.id,
+          workspaceId,
+          query: text,
+          limit: memorySearchLimit,
+        })
+      : [],
+    repositories.memories.listForActor
+      ? repositories.memories.listForActor({
+          actorUserId: actor.id,
+          workspaceId,
+          limit: memoryContextLimit,
+        })
+      : [],
+  ]);
+
+  return mergeMemoryLists(
+    [profileSummaries, searchedMemories, fallbackMemories, recentMemories],
+    memoryContextLimit,
+  );
+}
+
+async function upsertMemoryProfileSummary({
+  repositories,
+  actor,
+  workspaceId,
+  memories,
+  sourceMessageIds = [],
+}) {
+  if (!repositories.memories?.upsertSummary) return null;
+
+  const consolidatedText = buildConsolidatedMemoryText({ actor, memories });
+  if (!consolidatedText) return null;
+
+  try {
+    return await repositories.memories.upsertSummary({
+      workspaceId,
+      ownerUserId: actor.id,
+      scope: memoryScopeForActor(actor),
+      sensitivity: "normal",
+      subjectType: "profile_summary",
+      subjectId: actor.id,
+      content: consolidatedText,
+      summary: consolidatedText,
+      confidence: 0.82,
+      sourceMessageIds,
+    });
+  } catch (error) {
+    console.error("memory profile summary upsert failed", error);
+    return null;
+  }
+}
+
+function isMemoryProfileRequest(text) {
+  const normalized = normalizeText(text);
+  return (
+    normalized === "/memory" ||
+    normalized === "/memory profile" ||
+    normalized === "/profile" ||
+    normalized === "профиль памяти" ||
+    normalized === "что ты знаешь обо мне" ||
+    normalized === "что ты знаешь о семье" ||
+    normalized.includes("покажи профиль памяти")
+  );
+}
+
+function isMemoryConsolidationRequest(text) {
+  const normalized = normalizeText(text);
+  return (
+    normalized === "/memory consolidate" ||
+    normalized === "/consolidate" ||
+    normalized === "собери память" ||
+    normalized === "консолидируй память" ||
+    normalized.includes("собери профиль памяти") ||
+    normalized.includes("обнови профиль памяти")
+  );
 }
 
 const sensitiveMemoryPatterns = [
@@ -343,6 +610,10 @@ function looksLikeStudentPersonalData(sentence) {
 }
 
 function automaticMemorySubjectType(actor, sentence) {
+  if (/(?:журнал|проект|сайт|бизнес|канал|бренд|journal|project|site|business|brand)/i.test(sentence)) {
+    return "project";
+  }
+
   if (
     actor?.role === "teacher" &&
     /(?:стиль|на уроках|я преподаю|warmup|worksheet|домашн)/i.test(sentence)
@@ -367,6 +638,10 @@ function extractAutomaticMemoryCandidates(text, actor) {
 
   const stableFactPatterns = [
     /(?:я\s+(?:люблю|предпочитаю|обычно|часто|всегда)|мне\s+(?:важно|удобно|нравится))/i,
+    /(?:мой|моя|моё|мое|наша|наш|наше)\s+.{2,80}\s+(?:это|называется|—|-|:)/i,
+    /(?:мой|моя|моё|мое|наша|наш|наше)\s+.{2,80}\s+(?:is|called)\b/i,
+    /\b(?:my|our)\s+.{2,80}\s+(?:is|called)\b/i,
+    /(?:я\s+(?:автор|редактор|владелец|основатель|веду|занимаюсь)|i\s+am\s+(?:the\s+)?(?:author|editor|owner|founder))/i,
     /\b(?:i\s+(?:like|prefer|usually|always)|it is important to me)\b/i,
   ];
   const teacherPatterns = [
@@ -516,6 +791,8 @@ export function isImmediateRepositoryBackedRequest(text) {
   return Boolean(
     parseLearningCommand(text) ||
     extractExplicitMemory(text) ||
+    isMemoryProfileRequest(text) ||
+    isMemoryConsolidationRequest(text) ||
     isMemoryRecallRequest(text) ||
     isDiagnosticsRequest(text) ||
     isCapabilitiesRequest(text) ||
@@ -997,6 +1274,55 @@ function buildWeatherFollowUpArgs({ text, messages }) {
   };
 }
 
+function normalizeAssistantTextForQuality(text) {
+  return String(text ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, " ")
+    .slice(0, 500);
+}
+
+function detectAssistantQualityIssues({
+  request,
+  messages = [],
+  answerText,
+  recentMessages = [],
+  memories = [],
+  materials = [],
+} = {}) {
+  const issues = [];
+  const normalizedAnswer = normalizeAssistantTextForQuality(answerText);
+  const lastAssistant = [...messages]
+    .reverse()
+    .find((message) => message.role === "assistant" && String(message.content ?? "").trim());
+
+  if (
+    normalizedAnswer &&
+    normalizeAssistantTextForQuality(lastAssistant?.content) === normalizedAnswer
+  ) {
+    issues.push({
+      issue: "duplicate_reply",
+      count: 2,
+    });
+  }
+
+  if (
+    looksLikeShortContextualFollowUp(request.text) &&
+    recentMessages.length === 0 &&
+    memories.length === 0 &&
+    materials.length === 0
+  ) {
+    issues.push({
+      issue: "context_underfilled",
+      recentMessagesFound: recentMessages.length,
+      memoriesFound: memories.length,
+      materialsFound: materials.length,
+    });
+  }
+
+  return issues;
+}
+
 export function createRepositoryBackedOrchestrator({
   repositories,
   aiProvider,
@@ -1079,8 +1405,9 @@ export function createRepositoryBackedOrchestrator({
       };
     }
 
-    const appendAssistantMessage = async ({ answerText, action, metadata = {} }) =>
-      repositories.conversations.appendMessage(conversationId, {
+    let activeRequestContext = null;
+    const appendAssistantMessage = async ({ answerText, action, metadata = {} }) => {
+      const stored = await repositories.conversations.appendMessage(conversationId, {
         role: "assistant",
         content: answerText,
         metadata: {
@@ -1095,6 +1422,33 @@ export function createRepositoryBackedOrchestrator({
         workspaceId: requestWorkspaceId,
         createdAt: now(),
       });
+      const qualityIssues = detectAssistantQualityIssues({
+        request,
+        messages,
+        answerText,
+        recentMessages: activeRequestContext?.recentMessages ?? [],
+        memories: activeRequestContext?.memories ?? [],
+        materials: activeRequestContext?.materials ?? [],
+      });
+      for (const issue of qualityIssues) {
+        await writeAuditLog(repositories, {
+          actorId: request.actor.id,
+          action: "assistant_quality_issue",
+          resource: conversationId,
+          metadata: {
+            ...issue,
+            action,
+            source: requestSource,
+            durationMs: metadata.durationMs,
+            ...(request.telegramUpdateId != null
+              ? { telegramUpdateId: request.telegramUpdateId }
+              : {}),
+          },
+          createdAt: now(),
+        });
+      }
+      return stored;
+    };
 
     let storedUserMessage = userMessage;
     if (!userMessage) {
@@ -1416,11 +1770,11 @@ export function createRepositoryBackedOrchestrator({
       }
     }
 
-    let memories = repositories.memories
+    let memoryCandidates = repositories.memories?.listForActor
       ? await repositories.memories.listForActor({
           actorUserId: request.actor.id,
           workspaceId: requestWorkspaceId,
-          limit: memoryContextLimit,
+          limit: memoryRecentCandidateLimit,
         })
       : [];
     let automaticMemories = await storeAutomaticMemories({
@@ -1428,11 +1782,34 @@ export function createRepositoryBackedOrchestrator({
       request,
       storedUserMessage,
       workspaceId: requestWorkspaceId,
-      memories,
+      memories: memoryCandidates,
     });
     if (automaticMemories.length > 0) {
-      memories = memories.slice(-memoryContextLimit);
+      memoryCandidates = mergeMemoryLists(
+        [memoryCandidates, automaticMemories],
+        memoryRecentCandidateLimit,
+      );
+      const summary = await upsertMemoryProfileSummary({
+        repositories,
+        actor: request.actor,
+        workspaceId: requestWorkspaceId,
+        memories: memoryCandidates,
+        sourceMessageIds: storedUserMessage?.id ? [storedUserMessage.id] : [],
+      });
+      if (summary) {
+        memoryCandidates = mergeMemoryLists(
+          [[summary], memoryCandidates],
+          memoryRecentCandidateLimit,
+        );
+      }
     }
+    const memories = await loadRelevantMemories({
+      repositories,
+      actor: request.actor,
+      workspaceId: requestWorkspaceId,
+      text: request.text,
+      fallbackMemories: memoryCandidates,
+    });
     const requestContext = createRequestContext({
       request,
       conversationId,
@@ -1440,6 +1817,96 @@ export function createRepositoryBackedOrchestrator({
       messages,
       memories,
     });
+    activeRequestContext = requestContext;
+
+    if (isMemoryProfileRequest(request.text)) {
+      const profileMemories = await loadMemoryProfileMemories({
+        repositories,
+        actor: request.actor,
+        workspaceId: requestWorkspaceId,
+        fallbackMemories: memories,
+      });
+      const answerText = buildMemoryProfileAnswer({
+        actor: request.actor,
+        memories: profileMemories,
+      });
+      const durationMs = Date.now() - requestStartedMs;
+      await appendAssistantMessage({
+        answerText,
+        action: "memory_profile",
+        metadata: { durationMs, memoryCount: profileMemories.length },
+      });
+
+      return {
+        accepted: true,
+        answer: {
+          text: answerText,
+          source: "memory_profile",
+        },
+        conversationId,
+      };
+    }
+
+    if (isMemoryConsolidationRequest(request.text)) {
+      const profileMemories = await loadMemoryProfileMemories({
+        repositories,
+        actor: request.actor,
+        workspaceId: requestWorkspaceId,
+        fallbackMemories: memories,
+      });
+      const consolidatedText = buildConsolidatedMemoryText({
+        actor: request.actor,
+        memories: profileMemories,
+      });
+      let answerText;
+      let source = "memory_consolidation";
+      if (!consolidatedText) {
+        answerText = "Пока нечего консолидировать: в памяти нет устойчивых фактов.";
+        source = "memory_consolidation_empty";
+      } else if (!repositories.memories?.create && !repositories.memories?.upsertSummary) {
+        answerText = "Профиль собран, но хранилище памяти сейчас недоступно.";
+        source = "memory_consolidation_unavailable";
+      } else {
+        const summaryMemory = {
+          workspaceId: requestWorkspaceId,
+          ownerUserId: request.actor.id,
+          scope: memoryScopeForActor(request.actor),
+          sensitivity: "normal",
+          subjectType: "profile_summary",
+          subjectId: request.actor.id,
+          content: consolidatedText,
+          summary: consolidatedText,
+          confidence: 0.82,
+          sourceMessageIds: storedUserMessage?.id ? [storedUserMessage.id] : [],
+        };
+        if (repositories.memories.upsertSummary) {
+          await repositories.memories.upsertSummary(summaryMemory);
+        } else {
+          await repositories.memories.create(summaryMemory);
+        }
+        answerText = [
+          "Профиль памяти обновлен.",
+          "",
+          consolidatedText,
+        ].join("\n");
+      }
+
+      const durationMs = Date.now() - requestStartedMs;
+      await appendAssistantMessage({
+        answerText,
+        action: source,
+        metadata: { durationMs, memoryCount: profileMemories.length },
+      });
+
+      return {
+        accepted: true,
+        answer: {
+          text: answerText,
+          source,
+        },
+        conversationId,
+      };
+    }
 
     if (isCapabilitiesRequest(request.text)) {
       const answerText = buildCapabilitiesAnswer(capabilityRegistry);
@@ -2128,6 +2595,7 @@ export function createRepositoryBackedOrchestrator({
       memories,
       materials: materialChunks,
     });
+    activeRequestContext = aiRequestContext;
 
     let response;
     try {
@@ -2200,24 +2668,16 @@ export function createRepositoryBackedOrchestrator({
       });
     }
 
-    await repositories.conversations.appendMessage(conversationId, {
-      role: "assistant",
-      content: answerText,
+    await appendAssistantMessage({
+      answerText,
+      action,
       metadata: {
-        source: requestSource,
-        ...(request.telegramUpdateId != null
-          ? { replyToTelegramUpdateId: request.telegramUpdateId }
-          : {}),
-        action,
         agentProfile: response.agentProfile,
         modelProfile: response.modelProfile,
         durationMs,
         materialContextCount: materialChunks.length,
         automaticMemoryCount: automaticMemories.length,
       },
-      userId: request.actor.id,
-      workspaceId: requestWorkspaceId,
-      createdAt: now(),
     });
 
     return {

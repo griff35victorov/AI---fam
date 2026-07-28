@@ -164,6 +164,34 @@ function scoreMaterialChunk(chunk, material, queryTerms) {
   }, 0);
 }
 
+function searchTermVariants(term) {
+  const variants = [term];
+  if (term.length > 4) variants.push(term.slice(0, -1));
+  if (term.length > 6) variants.push(term.slice(0, -2));
+  return variants.filter((variant, index, list) =>
+    variant.length >= 3 && list.indexOf(variant) === index,
+  );
+}
+
+function textIncludesSearchTerm(text, term) {
+  return searchTermVariants(term).some((variant) => text.includes(variant));
+}
+
+function scoreMemory(memory, queryTerms) {
+  if (queryTerms.length === 0) return 0;
+
+  const subject = String(memory.subjectType ?? "").toLowerCase();
+  const content = String(memory.content ?? "").toLowerCase();
+  const summary = String(memory.summary ?? "").toLowerCase();
+
+  return queryTerms.reduce((score, term) => {
+    if (textIncludesSearchTerm(subject, term)) score += 5;
+    if (textIncludesSearchTerm(summary, term)) score += 4;
+    if (textIncludesSearchTerm(content, term)) score += 3;
+    return score;
+  }, 0);
+}
+
 function claimWhere(now, { dedupeKey = null, type = null } = {}) {
   const where = {
     status: { in: ["queued", "running"] },
@@ -302,6 +330,57 @@ export function createPrismaRepositories(prisma) {
         });
       },
 
+      async upsertSummary(memory) {
+        const subjectId = memory.subjectId ?? null;
+        const existing = await prisma.memoryItem.findFirst({
+          where: {
+            workspaceId: memory.workspaceId,
+            ownerUserId: memory.ownerUserId,
+            subjectType: memory.subjectType,
+            subjectId,
+          },
+          orderBy: { updatedAt: "desc" },
+        });
+        const now = memory.updatedAt ?? new Date();
+        const baseData = {
+          workspaceId: memory.workspaceId,
+          ownerUserId: memory.ownerUserId,
+          scope: memory.scope,
+          sensitivity: memory.sensitivity ?? "normal",
+          subjectType: memory.subjectType,
+          subjectId,
+          content: memory.content,
+          summary: memory.summary ?? memory.content,
+          confidence: memory.confidence ?? 1,
+          expiresAt: memory.expiresAt ?? null,
+        };
+
+        if (!existing) {
+          return prisma.memoryItem.create({
+            data: {
+              ...baseData,
+              sourceMessageIds: memory.sourceMessageIds ?? [],
+              createdAt: memory.createdAt ?? now,
+            },
+          });
+        }
+
+        return prisma.memoryItem.update({
+          where: { id: existing.id },
+          data: {
+            ...baseData,
+            sourceMessageIds: [
+              ...new Set([
+                ...(existing.sourceMessageIds ?? []),
+                ...(memory.sourceMessageIds ?? []),
+              ]),
+            ],
+            createdAt: memory.createdAt ?? now,
+            updatedAt: now,
+          },
+        });
+      },
+
       async listForActor({ actorUserId, workspaceId, includePrivate = false, limit = null }) {
         const where = {};
 
@@ -323,6 +402,78 @@ export function createPrismaRepositories(prisma) {
         });
 
         return limit == null ? memories : memories.reverse();
+      },
+
+      async listBySubject({
+        actorUserId,
+        workspaceId,
+        subjectType,
+        subjectId = undefined,
+        includePrivate = false,
+        limit = null,
+      }) {
+        const where = { subjectType };
+
+        if (workspaceId != null) {
+          where.workspaceId = workspaceId;
+        }
+
+        if (subjectId !== undefined) {
+          where.subjectId = subjectId;
+        }
+
+        if (!includePrivate) {
+          where.OR = [
+            { ownerUserId: actorUserId },
+            { sensitivity: { not: "private" } },
+          ];
+        }
+
+        const memories = await prisma.memoryItem.findMany({
+          where,
+          orderBy: { createdAt: limit == null ? "asc" : "desc" },
+          take: limit ?? undefined,
+        });
+
+        return limit == null ? memories : memories.reverse();
+      },
+
+      async search({ actorUserId, workspaceId, query, includePrivate = false, limit = 8 }) {
+        const queryTerms = tokenizeSearchText(query);
+        if (queryTerms.length === 0) return [];
+
+        const where = {};
+
+        if (workspaceId != null) {
+          where.workspaceId = workspaceId;
+        }
+
+        if (!includePrivate) {
+          where.OR = [
+            { ownerUserId: actorUserId },
+            { sensitivity: { not: "private" } },
+          ];
+        }
+
+        const memories = await prisma.memoryItem.findMany({
+          where,
+          orderBy: { createdAt: "desc" },
+          take: 500,
+        });
+
+        return memories
+          .map((memory) => ({
+            memory,
+            score: scoreMemory(memory, queryTerms),
+          }))
+          .filter((result) => result.score > 0)
+          .sort((left, right) => {
+            if (right.score !== left.score) return right.score - left.score;
+            return new Date(right.memory.createdAt).getTime() -
+              new Date(left.memory.createdAt).getTime();
+          })
+          .slice(0, Math.max(0, limit))
+          .map((result) => result.memory);
       },
     },
 
