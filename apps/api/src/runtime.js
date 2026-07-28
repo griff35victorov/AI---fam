@@ -5,7 +5,11 @@ import {
   canStoreMemory,
   formatSupervisorReport,
 } from "../../../packages/domain/src/index.js";
-import { buildAllowedMemoryContext } from "./context.js";
+import {
+  buildAllowedMemoryContext,
+  dedupeMemoriesBySemanticContent,
+  memorySemanticKey,
+} from "./context.js";
 import {
   buildCapabilitiesAnswer,
   buildMissingCapabilityAnswer,
@@ -160,11 +164,11 @@ function memoryContentForDisplay(memory) {
 }
 
 function buildMemoryProfileAnswer({ actor, memories }) {
-  const allowedMemories = buildAllowedMemoryContext({
+  const allowedMemories = dedupeMemoriesBySemanticContent(buildAllowedMemoryContext({
     actor,
     memories,
     action: "read",
-  }).filter((memory) => memoryContentForDisplay(memory));
+  })).filter((memory) => memoryContentForDisplay(memory));
 
   if (allowedMemories.length === 0) {
     return [
@@ -201,11 +205,11 @@ function buildMemoryProfileAnswer({ actor, memories }) {
 }
 
 function buildConsolidatedMemoryText({ actor, memories }) {
-  const allowedMemories = buildAllowedMemoryContext({
+  const allowedMemories = dedupeMemoriesBySemanticContent(buildAllowedMemoryContext({
     actor,
     memories,
     action: "read",
-  })
+  }))
     .filter((memory) => memory.subjectType !== "profile_summary")
     .map(memoryContentForDisplay)
     .filter(Boolean);
@@ -228,15 +232,7 @@ function buildConsolidatedMemoryText({ actor, memories }) {
 }
 
 function memoryRecordKey(memory) {
-  if (memory?.id) return `id:${memory.id}`;
-  return [
-    memory?.workspaceId ?? "",
-    memory?.ownerUserId ?? "",
-    memory?.scope ?? "",
-    memory?.subjectType ?? "",
-    memory?.subjectId ?? "",
-    memoryContentForDisplay(memory),
-  ].join("|");
+  return memorySemanticKey(memory);
 }
 
 function mergeMemoryLists(lists, limit = memoryContextLimit) {

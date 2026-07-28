@@ -1589,6 +1589,52 @@ test("repository backed orchestrator learns Russian project facts from ordinary 
   assert.match(profile.answer.text, /автор и редактор/);
 });
 
+test("repository backed orchestrator deduplicates equivalent memory facts in profile", async () => {
+  const repositories = createInMemoryRepositories({
+    memories: [
+      {
+        id: "journal-a",
+        workspaceId: "workspace-family",
+        ownerUserId: "owner-1",
+        scope: "family",
+        sensitivity: "normal",
+        subjectType: "project",
+        content: "https://rksurfmag.club/ мой журнал, я его автор и редактор",
+        createdAt: new Date("2026-07-20T09:00:00.000Z"),
+      },
+      {
+        id: "journal-b",
+        workspaceId: "workspace-family",
+        ownerUserId: "owner-1",
+        scope: "family",
+        sensitivity: "normal",
+        subjectType: "project",
+        content: " https://rksurfmag.club/ мой журнал, я его автор и редактор ",
+        createdAt: new Date("2026-07-20T09:01:00.000Z"),
+      },
+    ],
+  });
+  const orchestrator = createRepositoryBackedOrchestrator({
+    repositories,
+    aiProvider: {
+      async complete() {
+        throw new Error("AI should not be called for memory profile");
+      },
+    },
+  });
+
+  const profile = await orchestrator({
+    chatId: 777,
+    actor: { id: "owner-1", role: "owner" },
+    intent: "household",
+    text: "/memory profile",
+    telegramUpdateId: 938,
+  });
+
+  assert.equal(profile.answer.source, "memory_profile");
+  assert.equal(profile.answer.text.match(/rksurfmag\.club/g)?.length, 1);
+});
+
 test("repository backed orchestrator consolidates memory profile without calling AI", async () => {
   const repositories = createInMemoryRepositories({
     memories: [

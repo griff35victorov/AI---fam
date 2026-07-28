@@ -99,3 +99,73 @@ test("formatted owner prompt does not include private student data", () => {
   assert.doesNotMatch(promptContext, /\+79990000000/);
   assert.doesNotMatch(promptContext, /API token/);
 });
+
+test("allowed memory context deduplicates equivalent facts with different ids", () => {
+  const context = buildAllowedMemoryContext({
+    actor: { role: "owner" },
+    memories: [
+      {
+        id: "journal-a",
+        workspaceId: "workspace-family",
+        ownerUserId: "owner-1",
+        scope: "family",
+        sensitivity: "normal",
+        subjectType: "project",
+        content: "https://rksurfmag.club/ мой журнал, я его автор и редактор",
+      },
+      {
+        id: "journal-b",
+        workspaceId: "workspace-family",
+        ownerUserId: "owner-1",
+        scope: "family",
+        sensitivity: "normal",
+        subjectType: "project",
+        content: " https://rksurfmag.club/ мой журнал, я его автор и редактор ",
+      },
+    ],
+    action: "read",
+  });
+
+  assert.deepEqual(
+    context.map((memory) => memory.id),
+    ["journal-a"],
+  );
+
+  const promptContext = formatMemoryContext(context);
+  assert.equal(
+    promptContext.match(/rksurfmag\.club/g)?.length,
+    1,
+  );
+});
+
+test("allowed memory context deduplicates only after access filtering", () => {
+  const context = buildAllowedMemoryContext({
+    actor: { role: "owner" },
+    memories: [
+      {
+        id: "secret-duplicate",
+        workspaceId: "workspace-family",
+        ownerUserId: "owner-1",
+        scope: "family",
+        sensitivity: "secret",
+        subjectType: "credential",
+        content: "Family prefers concise operational answers.",
+      },
+      {
+        id: "normal-duplicate",
+        workspaceId: "workspace-family",
+        ownerUserId: "owner-1",
+        scope: "family",
+        sensitivity: "normal",
+        subjectType: "preference",
+        content: "Family prefers concise operational answers.",
+      },
+    ],
+    action: "read",
+  });
+
+  assert.deepEqual(
+    context.map((memory) => memory.id),
+    ["normal-duplicate"],
+  );
+});
