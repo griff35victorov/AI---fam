@@ -16,8 +16,10 @@ import {
   isTimeLocationRequest,
   isTravelLocalRequest,
   isWebFetchRequest,
+  isWindyWeatherRequest,
   isWeatherRequest,
   parseLocationLookupRequest,
+  parseWindyRequest,
   parseWeatherRequest,
 } from "./capabilities.js";
 
@@ -1477,6 +1479,55 @@ export function createRepositoryBackedOrchestrator({
       isMaterialListRequest(request.text) ||
       learningCommand?.type === "material" ||
       learningCommand?.type === "list";
+
+    if (!requestIsMaterialCommand && isWindyWeatherRequest(request.text)) {
+      let answerText;
+      let source = "windy_weather";
+      let metadata = {};
+
+      if (!capabilityRegistry?.has?.("windy_weather")) {
+        answerText = buildMissingCapabilityAnswer("windy_weather", request.text);
+        source = "capability_missing";
+        metadata = { capability: "windy_weather" };
+      } else {
+        try {
+          const urls = extractUrls(request.text);
+          const result = await capabilityRegistry.run("windy_weather", {
+            url: urls[0],
+            text: request.text,
+            ...parseWindyRequest(request.text),
+          });
+          answerText = result.text;
+          metadata = result.metadata ?? {};
+        } catch (error) {
+          answerText = [
+            "Я распознал ссылку Windy, но не смог получить прогноз по координатам.",
+            "Нужный инструмент: windy_weather.",
+            "Попробуйте повторить запрос позже или пришлите координаты текстом.",
+          ].join("\n");
+          source = "windy_weather_error";
+          metadata = {
+            errorMessage: String(error.message ?? "").slice(0, 240),
+          };
+        }
+      }
+
+      const durationMs = Date.now() - requestStartedMs;
+      await appendAssistantMessage({
+        answerText,
+        action: source,
+        metadata: { ...metadata, durationMs },
+      });
+
+      return {
+        accepted: true,
+        answer: {
+          text: answerText,
+          source,
+        },
+        conversationId,
+      };
+    }
 
     if (!requestIsMaterialCommand && isWebFetchRequest(request.text)) {
       let answerText;

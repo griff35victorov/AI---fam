@@ -1852,6 +1852,57 @@ test("repository backed orchestrator uses web_fetch_url for explicit links", asy
   assert.match(response.answer.text, /Hello family AI/);
 });
 
+test("repository backed orchestrator parses Windy links through coordinate weather", async () => {
+  const repositories = createInMemoryRepositories();
+  const calls = [];
+  const capabilityRegistry = createCapabilityRegistry({
+    fetchImpl: async (url) => {
+      calls.push(String(url));
+      assert.match(String(url), /api\.open-meteo\.com\/v1\/forecast/);
+      assert.match(String(url), /latitude=54\.5/);
+      assert.match(String(url), /longitude=23\.75/);
+      return {
+        ok: true,
+        json: async () => ({
+          daily: {
+            time: ["2026-07-28", "2026-07-29", "2026-07-30"],
+            weather_code: [63, 3, 2],
+            temperature_2m_max: [21, 22, 23],
+            temperature_2m_min: [14, 15, 16],
+            precipitation_probability_max: [70, 20, 10],
+            precipitation_sum: [4.2, 0, 0],
+            wind_speed_10m_max: [19, 12, 10],
+          },
+          hourly: { time: [] },
+        }),
+      };
+    },
+  });
+  const orchestrator = createRepositoryBackedOrchestrator({
+    repositories,
+    capabilityRegistry,
+    aiProvider: {
+      async complete() {
+        throw new Error("AI should not be called for Windy coordinate weather");
+      },
+    },
+  });
+
+  const response = await orchestrator({
+    chatId: 777,
+    actor: { id: "owner-1", role: "owner" },
+    intent: "household",
+    text: "Проанализируй этот сайт: https://www.windy.com/?23.750,54.500,5,ptide",
+    telegramUpdateId: 809,
+  });
+
+  assert.equal(response.answer.source, "windy_weather");
+  assert.equal(calls.length, 1);
+  assert.match(response.answer.text, /Windy/);
+  assert.match(response.answer.text, /54\.5, 23\.75/);
+  assert.match(response.answer.text, /Open-Meteo/);
+});
+
 test("repository backed orchestrator blocks local URL fetches", async () => {
   const repositories = createInMemoryRepositories();
   const capabilityRegistry = createCapabilityRegistry({

@@ -18,6 +18,13 @@ export const capabilityCatalog = [
     access: "free_network",
   },
   {
+    id: "windy_weather",
+    title: "Windy weather link",
+    category: "P0",
+    description: "Parses Windy map links and fetches weather by coordinates.",
+    access: "free_network",
+  },
+  {
     id: "web_fetch_url",
     title: "Read a URL",
     category: "P0",
@@ -365,6 +372,10 @@ export function createCapabilityRegistry({
         return fetchWttrWeatherForecast({ ...args, fetchImpl, timeoutMs: weatherTimeoutMs });
       }
 
+      if (capabilityId === "windy_weather") {
+        return fetchWindyWeatherSummary({ ...args, fetchImpl, timeoutMs: weatherTimeoutMs });
+      }
+
       if (capabilityId === "web_fetch_url") {
         return fetchWebPageSummary({
           ...args,
@@ -476,6 +487,7 @@ function capabilityState(capabilityId, deps) {
 function capabilityAvailable(capabilityId, deps) {
   if (capabilityId === "weather_forecast") return Boolean(deps.fetchImpl);
   if (capabilityId === "weather_fallback_wttr") return Boolean(deps.fetchImpl);
+  if (capabilityId === "windy_weather") return Boolean(deps.fetchImpl);
   if (capabilityId === "web_fetch_url") return Boolean(deps.fetchImpl);
   if (capabilityId === "time_location_context") return true;
   if (capabilityId === "travel_local") return Boolean(deps.fetchImpl);
@@ -557,8 +569,62 @@ function cleanUrl(url) {
   }
 }
 
+function parseWindyUrl(url) {
+  const cleanedUrl = cleanUrl(url);
+  if (!cleanedUrl) return null;
+
+  let parsed;
+  try {
+    parsed = new URL(cleanedUrl);
+  } catch {
+    return null;
+  }
+
+  const hostname = parsed.hostname.toLowerCase();
+  if (hostname !== "windy.com" && hostname !== "www.windy.com") {
+    return null;
+  }
+
+  const coordinateText = decodeURIComponent(parsed.search.replace(/^\?/, ""));
+  const [longitudeText, latitudeText, zoomText, layerText] = coordinateText.split(",");
+  const longitude = Number(longitudeText);
+  const latitude = Number(latitudeText);
+  const zoom = Number(zoomText);
+
+  if (
+    !Number.isFinite(latitude) ||
+    !Number.isFinite(longitude) ||
+    Math.abs(latitude) > 90 ||
+    Math.abs(longitude) > 180
+  ) {
+    return null;
+  }
+
+  return {
+    url: cleanedUrl,
+    latitude,
+    longitude,
+    ...(Number.isFinite(zoom) ? { zoom } : {}),
+    ...(layerText ? { layer: layerText.trim() } : {}),
+  };
+}
+
 export function isWebFetchRequest(text) {
   return extractUrls(text).length > 0;
+}
+
+export function parseWindyRequest(text) {
+  const urls = extractUrls(text);
+  for (const url of urls) {
+    const parsed = parseWindyUrl(url);
+    if (parsed) return parsed;
+  }
+
+  return null;
+}
+
+export function isWindyWeatherRequest(text) {
+  return Boolean(parseWindyRequest(text));
 }
 
 export function isTimeLocationRequest(text) {
@@ -883,6 +949,64 @@ export async function fetchWttrWeatherForecast({
     }),
     source: "weather_fallback_wttr",
     metadata: { location: city },
+  };
+}
+
+export async function fetchWindyWeatherSummary({
+  url,
+  text,
+  fetchImpl = fetch,
+  timeoutMs = 6000,
+} = {}) {
+  const request = parseWindyUrl(url) ?? parseWindyRequest(text);
+  if (!request) {
+    return {
+      text: "Это не похоже на ссылку Windy с координатами. Пришлите ссылку вида https://www.windy.com/?lon,lat,zoom,layer.",
+      source: "windy_weather",
+    };
+  }
+
+  const forecastUrl =
+    "https://api.open-meteo.com/v1/forecast" +
+    `?latitude=${request.latitude}&longitude=${request.longitude}` +
+    "&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max,precipitation_sum,wind_speed_10m_max" +
+    "&hourly=weather_code,temperature_2m,precipitation_probability,precipitation,wind_speed_10m" +
+    "&forecast_days=3&timezone=auto";
+  const forecastResponse = await fetchWithTimeout(fetchImpl, forecastUrl, {
+    timeoutMs,
+  });
+  if (!forecastResponse.ok) {
+    throw new Error(`Open-Meteo coordinate forecast failed with ${forecastResponse.status}`);
+  }
+
+  const forecast = await forecastResponse.json();
+  const days = selectedDailyRows(dailyRows(forecast.daily), "daily");
+  const placeLabel = `координаты ${request.latitude}, ${request.longitude}`;
+  const forecastText = formatWeatherAnswer({
+    placeLabel,
+    days,
+    target: "daily",
+    sourceLabel: "Open-Meteo по координатам из Windy",
+  });
+
+  return {
+    text: [
+      "Ссылку Windy распознал как интерактивную карту, поэтому HTML страницы не читаю как обычный сайт.",
+      `Координаты из ссылки: ${request.latitude}, ${request.longitude}.`,
+      request.layer ? `Слой Windy: ${request.layer}.` : null,
+      "",
+      forecastText,
+      "",
+      "Для анализа самой карты Windy с анимацией и слоями нужен browser_automation/Playwright; базовый прогноз по точке уже рассчитан.",
+    ].filter((line) => line != null).join("\n"),
+    source: "windy_weather",
+    metadata: {
+      url: request.url,
+      latitude: request.latitude,
+      longitude: request.longitude,
+      zoom: request.zoom ?? null,
+      layer: request.layer ?? null,
+    },
   };
 }
 
