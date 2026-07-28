@@ -699,6 +699,17 @@ test("async server env factory creates Prisma repositories when DATABASE_URL is 
         },
       };
       this.conversation = {
+        async findMany({ where } = {}) {
+          return conversations.filter((conversation) => {
+            if (where?.userId != null && conversation.userId !== where.userId) {
+              return false;
+            }
+            if (where?.workspaceId != null && conversation.workspaceId !== where.workspaceId) {
+              return false;
+            }
+            return true;
+          });
+        },
         async upsert({ where, update, create }) {
           const existing = conversations.find(
             (conversation) => conversation.id === where.id,
@@ -726,7 +737,15 @@ test("async server env factory creates Prisma repositories when DATABASE_URL is 
           messages.push(data);
           return data;
         },
-        async findMany() {
+        async findMany({ where } = {}) {
+          if (where?.conversationId?.in) {
+            return messages.filter((message) =>
+              where.conversationId.in.includes(message.conversationId),
+            );
+          }
+          if (where?.conversationId != null) {
+            return messages.filter((message) => message.conversationId === where.conversationId);
+          }
           return messages;
         },
       };

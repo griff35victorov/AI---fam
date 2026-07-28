@@ -193,6 +193,41 @@ describe("in-memory repositories", () => {
     );
   });
 
+  it("lists recent messages for an actor across conversations", async () => {
+    const repositories = createInMemoryRepositories();
+
+    await repositories.conversations.appendMessage("telegram:777:owner-1", {
+      role: "user",
+      content: "Telegram context",
+      userId: "owner-1",
+      workspaceId: "workspace-family",
+      createdAt: new Date("2026-07-20T09:00:00.000Z"),
+    });
+    await repositories.conversations.appendMessage("web:owner:owner-1", {
+      role: "assistant",
+      content: "Web answer",
+      userId: "owner-1",
+      workspaceId: "workspace-family",
+      createdAt: new Date("2026-07-20T09:01:00.000Z"),
+    });
+    await repositories.conversations.appendMessage("telegram:777:other", {
+      role: "user",
+      content: "Other actor",
+      userId: "other",
+      workspaceId: "workspace-family",
+      createdAt: new Date("2026-07-20T09:02:00.000Z"),
+    });
+
+    assert.deepEqual(
+      (await repositories.conversations.listRecentForActor({
+        actorUserId: "owner-1",
+        workspaceId: "workspace-family",
+        limit: 5,
+      })).map((message) => message.content),
+      ["Telegram context", "Web answer"],
+    );
+  });
+
   it("lists due scheduled reminders", async () => {
     const now = new Date("2026-07-20T12:00:00.000Z");
     const repositories = createInMemoryRepositories({

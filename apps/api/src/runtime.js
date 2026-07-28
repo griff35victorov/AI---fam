@@ -46,25 +46,41 @@ function sameTelegramUpdate(message, telegramUpdateId, metadataKey) {
   );
 }
 
-async function findExistingTelegramExchange(repositories, conversationId, telegramUpdateId) {
-  if (telegramUpdateId == null || !repositories.conversations.listMessages) {
+async function findExistingTelegramExchange(
+  repositories,
+  conversationId,
+  telegramUpdateId,
+  { actorUserId, workspaceId } = {},
+) {
+  if (!repositories.conversations.listMessages) {
     return { userMessage: null, assistantMessage: null, messages: [] };
   }
 
-  const messages = await repositories.conversations.listMessages(conversationId, {
+  const conversationMessages = await repositories.conversations.listMessages(conversationId, {
     limit: recentConversationLookupLimit,
   });
+  const contextMessages = repositories.conversations.listRecentForActor
+    ? await repositories.conversations.listRecentForActor({
+        actorUserId,
+        workspaceId,
+        limit: recentConversationLookupLimit,
+      })
+    : conversationMessages;
+
+  if (telegramUpdateId == null) {
+    return { userMessage: null, assistantMessage: null, messages: contextMessages };
+  }
 
   return {
-    messages,
+    messages: contextMessages,
     userMessage:
-      messages.find(
+      conversationMessages.find(
         (message) =>
           message.role === "user" &&
           sameTelegramUpdate(message, telegramUpdateId, "telegramUpdateId"),
       ) ?? null,
     assistantMessage:
-      messages.find(
+      conversationMessages.find(
         (message) =>
           message.role === "assistant" &&
           sameTelegramUpdate(message, telegramUpdateId, "replyToTelegramUpdateId"),
@@ -898,6 +914,89 @@ function recentMessagesForPrompt(messages, telegramUpdateId, limit = 6) {
     }));
 }
 
+function createRequestContext({
+  request,
+  conversationId,
+  workspaceId,
+  messages,
+  memories,
+  materials = [],
+}) {
+  return {
+    conversationId,
+    workspaceId,
+    actor: request.actor,
+    source: request.source ?? "telegram",
+    chatId: request.chatId,
+    botKey: request.telegramBotKey,
+    memories,
+    materials,
+    recentMessages: recentMessagesForPrompt(messages, request.telegramUpdateId),
+  };
+}
+
+function buildCapabilityRunArgs({ request, requestContext, base = {} }) {
+  return {
+    text: request.text,
+    query: request.text,
+    actor: request.actor,
+    workspaceId: requestContext.workspaceId,
+    conversationId: requestContext.conversationId,
+    chatId: request.chatId,
+    botKey: request.telegramBotKey,
+    recentMessages: requestContext.recentMessages,
+    memories: requestContext.memories,
+    materials: requestContext.materials,
+    ...base,
+  };
+}
+
+function parseWeatherMetricFocusFromText(text) {
+  const normalized = String(text ?? "").toLowerCase();
+  if (/(?:ветер|wind)/i.test(normalized)) return "wind";
+  return null;
+}
+
+function looksLikeShortContextualFollowUp(text) {
+  const normalized = String(text ?? "")
+    .replace(/[.!]+$/g, "")
+    .trim();
+  if (!normalized || normalized.length < 3 || normalized.length > 90) return false;
+  if (normalized.startsWith("/") || extractUrls(normalized).length > 0) return false;
+  if (/[?]/.test(normalized)) return false;
+  if (isWeatherRequest(normalized) || isWindyWeatherRequest(normalized)) return false;
+  if (detectRequiredCapability(normalized)) return false;
+  if (!/[A-Za-zА-Яа-яЁё]/.test(normalized)) return false;
+
+  const words = normalized.split(/\s+/).filter(Boolean);
+  if (words.length > 8) return false;
+
+  return !/^(?:да|нет|ок|окей|спасибо|привет|здравствуй|проверка|статус|тест)\b/i.test(
+    normalized,
+  );
+}
+
+function buildWeatherFollowUpArgs({ text, messages }) {
+  if (!looksLikeShortContextualFollowUp(text)) return null;
+
+  const previousUserMessage = [...messages]
+    .reverse()
+    .find((message) => message.role === "user" && String(message.content ?? "").trim());
+  if (!previousUserMessage || !isWeatherRequest(previousUserMessage.content)) return null;
+
+  const previousWeatherArgs = parseWeatherRequest(previousUserMessage.content);
+  const metricFocus =
+    previousWeatherArgs.metricFocus ?? parseWeatherMetricFocusFromText(previousUserMessage.content);
+
+  return {
+    location: String(text ?? "").trim(),
+    target: previousWeatherArgs.target,
+    ...(previousWeatherArgs.partOfDay ? { partOfDay: previousWeatherArgs.partOfDay } : {}),
+    ...(metricFocus ? { metricFocus } : {}),
+    inheritedFrom: "weather_follow_up",
+  };
+}
+
 export function createRepositoryBackedOrchestrator({
   repositories,
   aiProvider,
@@ -924,6 +1023,10 @@ export function createRepositoryBackedOrchestrator({
         repositories,
         conversationId,
         request.telegramUpdateId,
+        {
+          actorUserId: request.actor.id,
+          workspaceId: requestWorkspaceId,
+        },
       );
 
     if (assistantMessage) {
@@ -1320,6 +1423,23 @@ export function createRepositoryBackedOrchestrator({
           limit: memoryContextLimit,
         })
       : [];
+    let automaticMemories = await storeAutomaticMemories({
+      repositories,
+      request,
+      storedUserMessage,
+      workspaceId: requestWorkspaceId,
+      memories,
+    });
+    if (automaticMemories.length > 0) {
+      memories = memories.slice(-memoryContextLimit);
+    }
+    const requestContext = createRequestContext({
+      request,
+      conversationId,
+      workspaceId: requestWorkspaceId,
+      messages,
+      memories,
+    });
 
     if (isCapabilitiesRequest(request.text)) {
       const answerText = buildCapabilitiesAnswer(capabilityRegistry);
@@ -1479,6 +1599,9 @@ export function createRepositoryBackedOrchestrator({
       isMaterialListRequest(request.text) ||
       learningCommand?.type === "material" ||
       learningCommand?.type === "list";
+    const weatherFollowUpArgs = !requestIsMaterialCommand
+      ? buildWeatherFollowUpArgs({ text: request.text, messages })
+      : null;
 
     if (!requestIsMaterialCommand && isWindyWeatherRequest(request.text)) {
       let answerText;
@@ -1492,11 +1615,17 @@ export function createRepositoryBackedOrchestrator({
       } else {
         try {
           const urls = extractUrls(request.text);
-          const result = await capabilityRegistry.run("windy_weather", {
-            url: urls[0],
-            text: request.text,
-            ...parseWindyRequest(request.text),
-          });
+          const result = await capabilityRegistry.run(
+            "windy_weather",
+            buildCapabilityRunArgs({
+              request,
+              requestContext,
+              base: {
+                url: urls[0],
+                ...parseWindyRequest(request.text),
+              },
+            }),
+          );
           answerText = result.text;
           metadata = result.metadata ?? {};
         } catch (error) {
@@ -1541,10 +1670,14 @@ export function createRepositoryBackedOrchestrator({
       } else {
         try {
           const urls = extractUrls(request.text);
-          const result = await capabilityRegistry.run("web_fetch_url", {
-            url: urls[0],
-            text: request.text,
-          });
+          const result = await capabilityRegistry.run(
+            "web_fetch_url",
+            buildCapabilityRunArgs({
+              request,
+              requestContext,
+              base: { url: urls[0] },
+            }),
+          );
           answerText = result.text;
           metadata = result.metadata ?? {};
         } catch (error) {
@@ -1577,11 +1710,11 @@ export function createRepositoryBackedOrchestrator({
       };
     }
 
-    if (!requestIsMaterialCommand && isWeatherRequest(request.text)) {
+    if (!requestIsMaterialCommand && (isWeatherRequest(request.text) || weatherFollowUpArgs)) {
       let answerText;
       let source = "weather_forecast";
       let metadata = {};
-      const weatherArgs = parseWeatherRequest(request.text);
+      const weatherArgs = weatherFollowUpArgs ?? parseWeatherRequest(request.text);
 
       if (
         !capabilityRegistry?.has?.("weather_forecast") &&
@@ -1592,8 +1725,14 @@ export function createRepositoryBackedOrchestrator({
       } else {
         try {
           const weather = capabilityRegistry?.has?.("weather_forecast")
-            ? await capabilityRegistry.run("weather_forecast", weatherArgs)
-            : await capabilityRegistry.run("weather_fallback_wttr", weatherArgs);
+            ? await capabilityRegistry.run(
+                "weather_forecast",
+                buildCapabilityRunArgs({ request, requestContext, base: weatherArgs }),
+              )
+            : await capabilityRegistry.run(
+                "weather_fallback_wttr",
+                buildCapabilityRunArgs({ request, requestContext, base: weatherArgs }),
+              );
           answerText = weather.text;
           metadata = weather.metadata ?? {};
         } catch (error) {
@@ -1604,7 +1743,7 @@ export function createRepositoryBackedOrchestrator({
             try {
               const fallbackWeather = await capabilityRegistry.run(
                 "weather_fallback_wttr",
-                weatherArgs,
+                buildCapabilityRunArgs({ request, requestContext, base: weatherArgs }),
               );
               const durationMs = Date.now() - requestStartedMs;
               await appendAssistantMessage({
@@ -1674,9 +1813,10 @@ export function createRepositoryBackedOrchestrator({
         source = "capability_missing";
         metadata = { capability: "time_location_context" };
       } else {
-        const result = await capabilityRegistry.run("time_location_context", {
-          text: request.text,
-        });
+        const result = await capabilityRegistry.run(
+          "time_location_context",
+          buildCapabilityRunArgs({ request, requestContext }),
+        );
         answerText = result.text;
         metadata = result.metadata ?? {};
       }
@@ -1709,10 +1849,14 @@ export function createRepositoryBackedOrchestrator({
         metadata = { capability: "travel_local" };
       } else {
         try {
-          const result = await capabilityRegistry.run("travel_local", {
-            ...parseLocationLookupRequest(request.text),
-            text: request.text,
-          });
+          const result = await capabilityRegistry.run(
+            "travel_local",
+            buildCapabilityRunArgs({
+              request,
+              requestContext,
+              base: parseLocationLookupRequest(request.text),
+            }),
+          );
           answerText = result.text;
           metadata = result.metadata ?? {};
         } catch (error) {
@@ -1769,19 +1913,16 @@ export function createRepositoryBackedOrchestrator({
       try {
         const args =
           requiredCapability === "web_current_data"
-            ? buildWebCurrentDataArgs({
+            ? buildCapabilityRunArgs({
                 request,
-                memories,
-                workspaceId: requestWorkspaceId,
+                requestContext,
+                base: buildWebCurrentDataArgs({
+                  request,
+                  memories,
+                  workspaceId: requestWorkspaceId,
+                }),
               })
-            : {
-                text: request.text,
-                query: request.text,
-                actor: request.actor,
-                workspaceId: requestWorkspaceId,
-                chatId: request.chatId,
-                botKey: request.telegramBotKey,
-              };
+            : buildCapabilityRunArgs({ request, requestContext });
         const result = await capabilityRegistry.run(requiredCapability, args);
         answerText = result.text;
         source = result.source ?? source;
@@ -1971,17 +2112,6 @@ export function createRepositoryBackedOrchestrator({
       };
     }
 
-    const automaticMemories = await storeAutomaticMemories({
-      repositories,
-      request,
-      storedUserMessage,
-      workspaceId: requestWorkspaceId,
-      memories,
-    });
-    if (automaticMemories.length > 0) {
-      memories = memories.slice(-memoryContextLimit);
-    }
-
     const materialChunks = repositories.materials?.search
       ? await repositories.materials.search({
           actorUserId: request.actor.id,
@@ -1990,15 +2120,23 @@ export function createRepositoryBackedOrchestrator({
           limit: materialContextLimit,
         })
       : [];
+    const aiRequestContext = createRequestContext({
+      request,
+      conversationId,
+      workspaceId: requestWorkspaceId,
+      messages,
+      memories,
+      materials: materialChunks,
+    });
 
     let response;
     try {
       response = await handleOrchestratorRequest(
         {
           ...request,
-          memories,
-          materials: materialChunks,
-          recentMessages: recentMessagesForPrompt(messages, request.telegramUpdateId),
+          memories: aiRequestContext.memories,
+          materials: aiRequestContext.materials,
+          recentMessages: aiRequestContext.recentMessages,
         },
         { aiProvider },
       );

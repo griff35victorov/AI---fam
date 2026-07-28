@@ -458,6 +458,34 @@ export function createPrismaRepositories(prisma) {
 
         return limit == null ? messages : messages.reverse();
       },
+
+      async listRecentForActor({ actorUserId, workspaceId, limit = null } = {}) {
+        const conversationWhere = {};
+        if (actorUserId != null) {
+          conversationWhere.userId = actorUserId;
+        }
+        if (workspaceId != null) {
+          conversationWhere.workspaceId = workspaceId;
+        }
+
+        const conversations = await prisma.conversation.findMany({
+          where: conversationWhere,
+          orderBy: { updatedAt: "desc" },
+          take: limit == null ? undefined : Math.max(1, limit),
+        });
+        const conversationIds = conversations.map((conversation) => conversation.id);
+        if (conversationIds.length === 0) {
+          return [];
+        }
+
+        const messages = await prisma.message.findMany({
+          where: { conversationId: { in: conversationIds } },
+          orderBy: { createdAt: limit == null ? "asc" : "desc" },
+          take: limit ?? undefined,
+        });
+
+        return limit == null ? messages : messages.reverse();
+      },
     },
 
     reminders: {

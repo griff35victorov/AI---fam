@@ -207,6 +207,12 @@ const cityAliases = new Map([
 ]);
 
 const weatherLocalAreaAliases = new Map([
+  ["цветочные берега", { location: "Осташево, Московская область", displayLocation: "КП Цветочные берега, Осташево" }],
+  ["кп цветочные берега", { location: "Осташево, Московская область", displayLocation: "КП Цветочные берега, Осташево" }],
+  ["осташево кп цветочные берега", { location: "Осташево, Московская область", displayLocation: "КП Цветочные берега, Осташево" }],
+  ["осташево", { location: "Осташево, Московская область", displayLocation: "Осташево, Рузский округ" }],
+  ["рузское водохранилище", { location: "Рузское водохранилище, Московская область", displayLocation: "Рузское водохранилище" }],
+  ["рузского водохранилища", { location: "Рузское водохранилище, Московская область", displayLocation: "Рузское водохранилище" }],
   ["митино", { location: "Москва", displayLocation: "Митино, Москва" }],
   ["митине", { location: "Москва", displayLocation: "Митино, Москва" }],
   ["митин", { location: "Москва", displayLocation: "Митино, Москва" }],
@@ -286,6 +292,11 @@ function parseWeatherDayPart(lowerText) {
     return "night";
   }
 
+  return null;
+}
+
+function parseWeatherMetricFocus(lowerText) {
+  if (/(?:ветер|wind)/i.test(lowerText)) return "wind";
   return null;
 }
 
@@ -538,18 +549,21 @@ export function parseWeatherRequest(text) {
 
   if (!location) {
     const locationMatch =
-      normalized.match(/(?:в|во|для|по)\s+([A-Za-zА-Яа-яЁё -]{2,50}?)(?=\s+(?:на|завтра|сегодня|вечером|вечер|утром|днем|днём|ночью|будет|ожидается|дожд|снег|погода|температур|ветер|выходн)|[?.!,]|$)/i) ??
+      normalized.match(/(?:^|\s)(?:в|во)\s+районе\s+([A-Za-zА-Яа-яЁё -]{2,70}?)(?=\s+(?:на|завтра|сегодня|вечером|вечер|утром|днем|днём|ночью|будет|ожидается|дожд|снег|погода|температур|ветер|выходн)|[?.!,]|$)/i) ??
+      normalized.match(/(?:^|\s)(?:в|во|для|по|около|у|рядом с)\s+([A-Za-zА-Яа-яЁё -]{2,70}?)(?=\s+(?:на|завтра|сегодня|вечером|вечер|утром|днем|днём|ночью|будет|ожидается|дожд|снег|погода|температур|ветер|выходн)|[?.!,]|$)/i) ??
       normalized.match(/weather\s+in\s+([A-Za-zА-Яа-яЁё -]{3,40})/i);
     location = cleanWeatherLocationCandidate(locationMatch?.[1]) ?? null;
   }
 
   const partOfDay = parseWeatherDayPart(lower);
+  const metricFocus = parseWeatherMetricFocus(lower);
 
   return {
     location: location ?? "Москва",
     ...(displayLocation ? { displayLocation } : {}),
     target: parseWeatherTarget(lower),
     ...(partOfDay ? { partOfDay } : {}),
+    ...(metricFocus ? { metricFocus } : {}),
   };
 }
 
@@ -817,18 +831,14 @@ export function buildMissingCurrentDataCapabilityAnswer(text) {
   return buildMissingCapabilityAnswer(capability, text);
 }
 
-export async function fetchWeatherForecast({
-  location,
-  displayLocation,
-  target = "daily",
-  partOfDay,
-  fetchImpl = fetch,
-  timeoutMs = 6000,
-  forecastDays = 10,
-} = {}) {
-  const city = String(location ?? "Москва").trim() || "Москва";
+function finiteCoordinate(value) {
+  const coordinate = Number(value);
+  return Number.isFinite(coordinate) ? coordinate : null;
+}
+
+async function fetchOpenMeteoGeocodePlace({ query, fetchImpl, timeoutMs }) {
   const geocodeUrl =
-    `https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(city)}` +
+    `https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(query)}` +
     "&count=1&language=ru&format=json";
   const geocodeResponse = await fetchWithTimeout(fetchImpl, geocodeUrl, {
     timeoutMs,
@@ -839,6 +849,74 @@ export async function fetchWeatherForecast({
 
   const geocode = await geocodeResponse.json();
   const place = geocode.results?.[0];
+  return place
+    ? {
+        name: place.name,
+        admin1: place.admin1,
+        country: place.country,
+        latitude: place.latitude,
+        longitude: place.longitude,
+        geocodingSource: "open_meteo",
+      }
+    : null;
+}
+
+async function fetchNominatimWeatherPlace({ query, fetchImpl, timeoutMs }) {
+  const url =
+    "https://nominatim.openstreetmap.org/search" +
+    `?format=jsonv2&limit=1&countrycodes=ru&accept-language=ru&q=${encodeURIComponent(query)}`;
+  const response = await fetchWithTimeout(fetchImpl, url, {
+    timeoutMs,
+    headers: { "user-agent": "family-ai-orchestrator/0.1" },
+  });
+  if (!response.ok) {
+    throw new Error(`Nominatim weather lookup failed with ${response.status}`);
+  }
+
+  const places = await response.json();
+  const place = Array.isArray(places) ? places[0] : null;
+  const latitude = finiteCoordinate(place?.lat);
+  const longitude = finiteCoordinate(place?.lon);
+  if (!place || latitude == null || longitude == null) return null;
+
+  return {
+    name: place.name ?? query,
+    admin1: place.address?.state ?? null,
+    country: place.address?.country ?? null,
+    displayName: place.display_name ?? null,
+    latitude,
+    longitude,
+    geocodingSource: "nominatim",
+  };
+}
+
+export async function fetchWeatherForecast({
+  location,
+  displayLocation,
+  latitude,
+  longitude,
+  target = "daily",
+  partOfDay,
+  fetchImpl = fetch,
+  timeoutMs = 6000,
+  forecastDays = 10,
+} = {}) {
+  const requestedLocation = String(location ?? "Москва").trim() || "Москва";
+  const localArea = resolveWeatherLocalArea(requestedLocation.toLowerCase());
+  const city = localArea?.location ?? requestedLocation;
+  const effectiveDisplayLocation = displayLocation ?? localArea?.displayLocation ?? null;
+  const directLatitude = finiteCoordinate(latitude ?? localArea?.latitude);
+  const directLongitude = finiteCoordinate(longitude ?? localArea?.longitude);
+  const place =
+    directLatitude != null && directLongitude != null
+      ? {
+          name: effectiveDisplayLocation ?? city,
+          latitude: directLatitude,
+          longitude: directLongitude,
+          geocodingSource: "coordinates",
+        }
+      : (await fetchOpenMeteoGeocodePlace({ query: city, fetchImpl, timeoutMs })) ??
+        (await fetchNominatimWeatherPlace({ query: city, fetchImpl, timeoutMs }));
   if (!place) {
     return {
       text: `Не нашел город "${city}" в погодном справочнике. Уточните населенный пункт.`,
@@ -862,10 +940,10 @@ export async function fetchWeatherForecast({
   const forecast = await forecastResponse.json();
   const days = dailyRows(forecast.daily);
   const selectedDays = selectedDailyRows(days, target);
-  const placeLabel = [place.name, place.admin1, place.country]
+  const placeLabel = place.displayName ?? [place.name, place.admin1, place.country]
     .filter(Boolean)
     .join(", ");
-  const answerPlaceLabel = displayWeatherPlaceLabel(displayLocation, placeLabel);
+  const answerPlaceLabel = displayWeatherPlaceLabel(effectiveDisplayLocation, placeLabel);
 
   if (partOfDay) {
     const rows = hourlyRows(forecast.hourly);
@@ -887,11 +965,12 @@ export async function fetchWeatherForecast({
         source: "weather_forecast",
         metadata: {
           location: placeLabel,
-          displayLocation: displayLocation ?? null,
+          displayLocation: effectiveDisplayLocation,
           latitude: place.latitude,
           longitude: place.longitude,
           target,
           partOfDay,
+          geocodingSource: place.geocodingSource,
         },
       };
     }
@@ -902,11 +981,12 @@ export async function fetchWeatherForecast({
     source: "weather_forecast",
     metadata: {
       location: placeLabel,
-      displayLocation: displayLocation ?? null,
+      displayLocation: effectiveDisplayLocation,
       latitude: place.latitude,
       longitude: place.longitude,
       target,
       partOfDay: partOfDay ?? null,
+      geocodingSource: place.geocodingSource,
     },
   };
 }

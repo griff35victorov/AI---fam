@@ -705,6 +705,88 @@ test("repository backed orchestrator sends memory and recent history to AI", asy
   );
 });
 
+test("repository backed orchestrator sends recent web chat history to AI without telegram update id", async () => {
+  const repositories = createInMemoryRepositories();
+  const aiCalls = [];
+  const orchestrator = createRepositoryBackedOrchestrator({
+    repositories,
+    aiProvider: {
+      async complete(payload) {
+        aiCalls.push(payload);
+        return { text: aiCalls.length === 1 ? "Первый ответ сохранен." : "Второй ответ." };
+      },
+    },
+  });
+  const request = {
+    chatId: 0,
+    conversationId: "web:owner:owner-1",
+    source: "web_chat",
+    actor: { id: "owner-1", role: "owner" },
+    intent: "household",
+  };
+
+  await orchestrator({
+    ...request,
+    text: "Первое сообщение в веб-чате",
+  });
+
+  await orchestrator({
+    ...request,
+    text: "Ответь с учетом предыдущего",
+  });
+
+  assert.equal(aiCalls.length, 2);
+  assert.deepEqual(
+    aiCalls[1].messages.slice(1).map((message) => [message.role, message.content]),
+    [
+      ["user", "Первое сообщение в веб-чате"],
+      ["assistant", "Первый ответ сохранен."],
+      ["user", "Ответь с учетом предыдущего"],
+    ],
+  );
+});
+
+test("repository backed orchestrator shares actor history across Telegram and web chat", async () => {
+  const repositories = createInMemoryRepositories();
+  const aiCalls = [];
+  const orchestrator = createRepositoryBackedOrchestrator({
+    repositories,
+    aiProvider: {
+      async complete(payload) {
+        aiCalls.push(payload);
+        return { text: aiCalls.length === 1 ? "Telegram answer." : "Web answer." };
+      },
+    },
+  });
+
+  await orchestrator({
+    chatId: 777,
+    actor: { id: "owner-1", role: "owner" },
+    intent: "household",
+    text: "Remember this channel context",
+    telegramUpdateId: 901,
+  });
+
+  await orchestrator({
+    chatId: 0,
+    conversationId: "web:owner:owner-1",
+    source: "web_chat",
+    actor: { id: "owner-1", role: "owner" },
+    intent: "household",
+    text: "Continue from the previous channel",
+  });
+
+  assert.equal(aiCalls.length, 2);
+  assert.deepEqual(
+    aiCalls[1].messages.slice(1).map((message) => [message.role, message.content]),
+    [
+      ["user", "Remember this channel context"],
+      ["assistant", "Telegram answer."],
+      ["user", "Continue from the previous channel"],
+    ],
+  );
+});
+
 test("repository backed orchestrator extracts safe facts from ordinary dialogue", async () => {
   const repositories = createInMemoryRepositories({
     users: [
@@ -1194,12 +1276,137 @@ test("repository backed orchestrator uses weather capability before AI", async (
   assert.equal(response.answer.text, "Погода: без осадков.");
 });
 
+test("repository backed orchestrator treats short location message as weather follow up", async () => {
+  const repositories = createInMemoryRepositories();
+  const weatherCalls = [];
+  const orchestrator = createRepositoryBackedOrchestrator({
+    repositories,
+    capabilityRegistry: {
+      has(capabilityId) {
+        return capabilityId === "weather_forecast";
+      },
+      async run(capabilityId, args) {
+        assert.equal(capabilityId, "weather_forecast");
+        weatherCalls.push(args);
+        return {
+          text: weatherCalls.length === 1
+            ? "Не нашел город. Уточните населенный пункт."
+            : "Ветер завтра: до 12 км/ч.",
+          source: "weather_forecast",
+          metadata: {
+            location: args.location,
+            target: args.target,
+            partOfDay: args.partOfDay ?? null,
+          },
+        };
+      },
+    },
+    aiProvider: {
+      async complete() {
+        throw new Error("AI should not be called for a weather location follow-up");
+      },
+    },
+  });
+
+  await orchestrator({
+    chatId: 777,
+    actor: { id: "owner-1", role: "owner" },
+    intent: "household",
+    text: "Посмотри на винди какой ветер завтра в районе рузского водохранилища",
+    telegramUpdateId: 930,
+  });
+
+  const response = await orchestrator({
+    chatId: 777,
+    actor: { id: "owner-1", role: "owner" },
+    intent: "household",
+    text: "Осташево КП Цветочные берега",
+    telegramUpdateId: 931,
+  });
+
+  assert.equal(response.answer.source, "weather_forecast");
+  assert.equal(weatherCalls.length, 2);
+  assert.deepEqual(
+    {
+      location: weatherCalls[1].location,
+      target: weatherCalls[1].target,
+      metricFocus: weatherCalls[1].metricFocus,
+      inheritedFrom: weatherCalls[1].inheritedFrom,
+    },
+    {
+    location: "Осташево КП Цветочные берега",
+    target: "tomorrow",
+    metricFocus: "wind",
+    inheritedFrom: "weather_follow_up",
+    },
+  );
+  assert.deepEqual(weatherCalls[1].recentMessages, [
+    {
+      role: "user",
+      content: "Посмотри на винди какой ветер завтра в районе рузского водохранилища",
+    },
+    {
+      role: "assistant",
+      content: "Не нашел город. Уточните населенный пункт.",
+    },
+  ]);
+});
+
+test("repository backed orchestrator stores automatic memories before capability replies", async () => {
+  const repositories = createInMemoryRepositories();
+  const orchestrator = createRepositoryBackedOrchestrator({
+    repositories,
+    capabilityRegistry: {
+      has(capabilityId) {
+        return capabilityId === "weather_forecast";
+      },
+      async run(capabilityId) {
+        assert.equal(capabilityId, "weather_forecast");
+        return {
+          text: "Погода: без осадков.",
+          source: "weather_forecast",
+        };
+      },
+    },
+    aiProvider: {
+      async complete() {
+        throw new Error("AI should not be called for weather");
+      },
+    },
+  });
+
+  await orchestrator({
+    chatId: 777,
+    actor: { id: "owner-1", role: "owner" },
+    intent: "household",
+    text: "Я предпочитаю короткие ответы. Погода в Москве",
+    telegramUpdateId: 932,
+  });
+
+  const memories = await repositories.memories.listForActor({
+    actorUserId: "owner-1",
+    workspaceId: "workspace-family",
+    limit: 10,
+  });
+  assert.equal(memories.length, 1);
+  assert.equal(memories[0].content, "Я предпочитаю короткие ответы");
+});
+
 test("weather request parser keeps Moscow district and evening intent separate", () => {
   assert.deepEqual(parseWeatherRequest("Сегодня в Митино вечером будет дождь?"), {
     location: "Москва",
     displayLocation: "Митино, Москва",
     target: "today",
     partOfDay: "evening",
+  });
+});
+
+test("weather request parser keeps village and cottage settlement location intact", () => {
+  assert.deepEqual(parseWeatherRequest("ветер завтра в Осташево КП Цветочные берега"), {
+    location: "Осташево, Московская область",
+    displayLocation: "КП Цветочные берега, Осташево",
+    target: "tomorrow",
+    metricFocus: "wind",
   });
 });
 
@@ -1270,6 +1477,69 @@ test("Open-Meteo weather capability answers Moscow district evening forecast", a
   assert.match(result.text, /вечером/);
   assert.match(result.text, /вероятность до 60%/);
   assert.doesNotMatch(result.text, /Не нашел город/);
+});
+
+test("Open-Meteo weather capability falls back to Nominatim for local places", async () => {
+  const calls = [];
+  const capabilityRegistry = createCapabilityRegistry({
+    fetchImpl: async (url, options = {}) => {
+      calls.push(String(url));
+      if (String(url).includes("geocoding-api.open-meteo.com")) {
+        return {
+          ok: true,
+          json: async () => ({ results: [] }),
+        };
+      }
+
+      if (String(url).includes("nominatim.openstreetmap.org")) {
+        assert.match(String(url), /countrycodes=ru/);
+        assert.equal(options.headers?.["user-agent"], "family-ai-orchestrator/0.1");
+        return {
+          ok: true,
+          json: async () => ([
+            {
+              name: "Осташево",
+              display_name: "Осташево, Рузский городской округ, Московская область, Россия",
+              lat: "55.858",
+              lon: "36.476",
+            },
+          ]),
+        };
+      }
+
+      if (String(url).includes("api.open-meteo.com")) {
+        assert.match(String(url), /latitude=55\.858/);
+        assert.match(String(url), /longitude=36\.476/);
+        return {
+          ok: true,
+          json: async () => ({
+            daily: {
+              time: ["2026-07-23", "2026-07-24", "2026-07-25"],
+              weather_code: [3, 2, 1],
+              temperature_2m_max: [22, 23, 24],
+              temperature_2m_min: [14, 15, 16],
+              precipitation_probability_max: [20, 10, 5],
+              precipitation_sum: [0, 0, 0],
+              wind_speed_10m_max: [12, 11, 10],
+            },
+            hourly: { time: [] },
+          }),
+        };
+      }
+
+      throw new Error(`unexpected url ${url}`);
+    },
+  });
+
+  const result = await capabilityRegistry.run("weather_forecast", {
+    location: "КП Цветочные берега",
+    target: "tomorrow",
+  });
+
+  assert.equal(result.source, "weather_forecast");
+  assert.equal(result.metadata.geocodingSource, "nominatim");
+  assert.match(result.text, /Осташево/);
+  assert.equal(calls.length, 3);
 });
 
 test("repository backed orchestrator returns missing capability instead of dead end", async () => {
@@ -1588,6 +1858,71 @@ test("repository backed orchestrator creates local reminder before AI", async ()
   assert.equal(response.answer.source, "tasks_reminders");
   assert.equal(calls.length, 1);
   assert.equal(calls[0].args.chatId, 777);
+});
+
+test("repository backed orchestrator passes memory and recent history into direct capabilities", async () => {
+  const repositories = createInMemoryRepositories({
+    memories: [
+      {
+        id: "memory-short",
+        workspaceId: "workspace-family",
+        ownerUserId: "owner-1",
+        scope: "family",
+        sensitivity: "normal",
+        subjectType: "preference",
+        content: "Owner prefers concise operational answers",
+        createdAt: new Date("2026-07-20T09:00:00.000Z"),
+      },
+    ],
+    messages: [
+      {
+        id: "message-context",
+        conversationId: "web:owner:owner-1",
+        role: "user",
+        content: "Use my family calendar context",
+        userId: "owner-1",
+        workspaceId: "workspace-family",
+        createdAt: new Date("2026-07-20T09:01:00.000Z"),
+      },
+    ],
+  });
+  const calls = [];
+  const orchestrator = createRepositoryBackedOrchestrator({
+    repositories,
+    capabilityRegistry: {
+      has(capabilityId) {
+        return capabilityId === "calendar_scheduling";
+      },
+      async run(capabilityId, args) {
+        calls.push({ capabilityId, args });
+        return {
+          text: "Calendar context received.",
+          source: "calendar_scheduling",
+        };
+      },
+    },
+    aiProvider: {
+      async complete() {
+        throw new Error("AI should not be called for connected calendar requests");
+      },
+    },
+  });
+
+  const response = await orchestrator({
+    chatId: 777,
+    actor: { id: "owner-1", role: "owner" },
+    intent: "household",
+    text: "Что у меня в календаре завтра?",
+    telegramUpdateId: 902,
+  });
+
+  assert.equal(response.answer.source, "calendar_scheduling");
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].args.conversationId, "telegram:777:owner-1");
+  assert.equal(calls[0].args.memories[0].content, "Owner prefers concise operational answers");
+  assert.deepEqual(calls[0].args.recentMessages, [
+    { role: "user", content: "Use my family calendar context" },
+  ]);
 });
 
 test("repository backed orchestrator composes daily briefing before AI", async () => {

@@ -36,6 +36,8 @@ const normalizeMessage = (conversationId, message) => ({
   role: message.role,
   content: message.content,
   metadata: message.metadata ?? null,
+  userId: message.userId ?? null,
+  workspaceId: message.workspaceId ?? null,
   createdAt: cloneDate(message.createdAt) ?? new Date(),
 });
 
@@ -462,6 +464,25 @@ export function createInMemoryRepositories(seed = {}) {
           .sort(byCreatedAtAsc);
 
         return applyRecentLimit(conversationMessages, limit)
+          .map(cloneRecord);
+      },
+
+      async listRecentForActor({ actorUserId, workspaceId, limit = null } = {}) {
+        const visibleMessages = messages
+          .filter((message) => {
+            if (actorUserId != null && message.userId !== actorUserId) {
+              return false;
+            }
+
+            if (workspaceId != null && message.workspaceId !== workspaceId) {
+              return false;
+            }
+
+            return true;
+          })
+          .sort(byCreatedAtAsc);
+
+        return applyRecentLimit(visibleMessages, limit)
           .map(cloneRecord);
       },
     },
