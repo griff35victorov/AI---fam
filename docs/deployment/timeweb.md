@@ -65,7 +65,10 @@ This avoids the unstable direct App Platform -> Telegram Bot API path observed
 in production. Keep `TELEGRAM_POLLING_ENABLED=false` while relay ingress is
 active. Polling remains available only for runtimes that can reliably reach
 `api.telegram.org`; when polling is explicitly enabled, the app deletes Telegram
-webhooks on startup with `drop_pending_updates=false`.
+webhooks on startup with `drop_pending_updates=false`. If the bot has a stale
+Telegram backlog during emergency recovery, set
+`TELEGRAM_POLLING_DROP_PENDING_UPDATES_ON_WEBHOOK_CLEAR=true` only for that
+recovery run, then return it to `false`.
 
 When relay ingress is active, the app ignores accidental
 `TELEGRAM_POLLING_ENABLED=true` values unless

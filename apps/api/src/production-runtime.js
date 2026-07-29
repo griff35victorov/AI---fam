@@ -524,6 +524,10 @@ export function createProductionDependencies({
     env.TELEGRAM_POLLING_CLEAR_WEBHOOK_ENABLED,
     telegramPollingEnabled,
   );
+  const telegramPollingDropPendingUpdatesOnWebhookClear = parseBoolean(
+    env.TELEGRAM_POLLING_DROP_PENDING_UPDATES_ON_WEBHOOK_CLEAR,
+    false,
+  );
   const telegramAcceptedAckThrottleMs = parseNumber(
     env.TELEGRAM_ACCEPTED_ACK_THROTTLE_MS,
     8000,
@@ -585,6 +589,7 @@ export function createProductionDependencies({
         replyMode: telegramReplyMode,
         pollingEnabled: telegramPollingEnabled,
         pollingClearWebhookEnabled: telegramPollingClearWebhookEnabled,
+        pollingDropPendingUpdatesOnWebhookClear: telegramPollingDropPendingUpdatesOnWebhookClear,
         updateQueueEnabled: telegramUpdateQueueEnabled,
         visibleAcceptedAckEnabled: telegramVisibleAcceptedAckEnabled,
         relayConfigured: telegramRelayConfigured,
@@ -606,6 +611,7 @@ export function createProductionDependencies({
     telegramReplyMode,
     telegramPollingEnabled,
     telegramPollingClearWebhookEnabled,
+    telegramPollingDropPendingUpdatesOnWebhookClear,
     telegramPollingIntervalMs: parseNumber(env.TELEGRAM_POLLING_INTERVAL_MS, 1000),
     telegramPollingErrorDelayMs: parseNumber(env.TELEGRAM_POLLING_ERROR_DELAY_MS, 5000),
     telegramPollingTimeoutSeconds: parseNumber(env.TELEGRAM_POLLING_TIMEOUT_SECONDS, 20),
@@ -616,11 +622,11 @@ export function createProductionDependencies({
     telegramUpdateQueueEnabled,
     telegramUpdateDispatcherIntervalMs: parseNumber(
       env.TELEGRAM_UPDATE_DISPATCHER_INTERVAL_MS,
-      1000,
+      250,
     ),
     telegramUpdateDispatcherMaxJobs: parseNumber(
       env.TELEGRAM_UPDATE_DISPATCHER_MAX_JOBS,
-      10,
+      25,
     ),
     telegramUpdateDispatcherMaxAttempts: parseNumber(
       env.TELEGRAM_UPDATE_DISPATCHER_MAX_ATTEMPTS,

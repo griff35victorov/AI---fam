@@ -623,6 +623,82 @@ function parseWindyUrl(url) {
   };
 }
 
+function parseYandexMapsUrl(url) {
+  const cleanedUrl = cleanUrl(url);
+  if (!cleanedUrl) return null;
+
+  let parsed;
+  try {
+    parsed = new URL(cleanedUrl);
+  } catch {
+    return null;
+  }
+
+  const hostname = parsed.hostname.toLowerCase();
+  if (
+    hostname !== "yandex.ru" &&
+    hostname !== "www.yandex.ru" &&
+    hostname !== "maps.yandex.ru" &&
+    hostname !== "yandex.com" &&
+    hostname !== "www.yandex.com" &&
+    hostname !== "maps.yandex.com"
+  ) {
+    return null;
+  }
+
+  const pathname = parsed.pathname.toLowerCase();
+  if (!pathname.startsWith("/maps") && !hostname.startsWith("maps.yandex.")) {
+    return null;
+  }
+
+  const coordinateText = parsed.searchParams.get("ll") ?? parsed.searchParams.get("pt");
+  const [longitudeText, latitudeText] = String(coordinateText ?? "").split(",");
+  const longitude = Number(longitudeText);
+  const latitude = Number(latitudeText);
+  const zoom = Number(parsed.searchParams.get("z"));
+
+  if (
+    !Number.isFinite(latitude) ||
+    !Number.isFinite(longitude) ||
+    Math.abs(latitude) > 90 ||
+    Math.abs(longitude) > 180
+  ) {
+    return null;
+  }
+
+  return {
+    url: cleanedUrl,
+    latitude,
+    longitude,
+    ...(Number.isFinite(zoom) ? { zoom } : {}),
+  };
+}
+
+function isYandexMapsUrl(url) {
+  const cleanedUrl = cleanUrl(url);
+  if (!cleanedUrl) return false;
+
+  let parsed;
+  try {
+    parsed = new URL(cleanedUrl);
+  } catch {
+    return false;
+  }
+
+  const hostname = parsed.hostname.toLowerCase();
+  const isYandexHost =
+    hostname === "yandex.ru" ||
+    hostname === "www.yandex.ru" ||
+    hostname === "maps.yandex.ru" ||
+    hostname === "yandex.com" ||
+    hostname === "www.yandex.com" ||
+    hostname === "maps.yandex.com";
+  if (!isYandexHost) return false;
+
+  const pathname = parsed.pathname.toLowerCase();
+  return pathname.startsWith("/maps") || hostname.startsWith("maps.yandex.");
+}
+
 export function isWebFetchRequest(text) {
   return extractUrls(text).length > 0;
 }
@@ -639,6 +715,35 @@ export function parseWindyRequest(text) {
 
 export function isWindyWeatherRequest(text) {
   return Boolean(parseWindyRequest(text));
+}
+
+export function parseMapLocationRequest(text) {
+  const urls = extractUrls(text);
+  for (const url of urls) {
+    const parsed = parseYandexMapsUrl(url);
+    if (parsed) return parsed;
+  }
+
+  return null;
+}
+
+export function parseMapReferenceRequest(text) {
+  const urls = extractUrls(text);
+  for (const url of urls) {
+    if (isYandexMapsUrl(url)) {
+      return { provider: "yandex_maps", url: cleanUrl(url) };
+    }
+  }
+
+  return null;
+}
+
+export function isMapLocationRequest(text) {
+  return Boolean(parseMapLocationRequest(text));
+}
+
+export function isMapReferenceRequest(text) {
+  return Boolean(parseMapReferenceRequest(text));
 }
 
 export function isTimeLocationRequest(text) {
@@ -681,6 +786,8 @@ export function detectRequiredCapability(text) {
   const normalized = String(text ?? "").toLowerCase();
 
   if (isWeatherRequest(text)) return "weather_forecast";
+  if (isWindyWeatherRequest(text)) return "windy_weather";
+  if (isMapLocationRequest(text) || isMapReferenceRequest(text)) return "travel_local";
   if (isWebFetchRequest(text)) return "web_fetch_url";
   if (isTimeLocationRequest(text)) return "time_location_context";
   if (isTravelLocalRequest(text)) return "travel_local";

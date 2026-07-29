@@ -176,6 +176,88 @@ test("startTelegramPolling clears Telegram webhook before polling", async () => 
   assert.match(calls[1].url, /\/getUpdates\?/);
 });
 
+test("startTelegramPolling waits for polling lease before clearing webhook", async () => {
+  const calls = [];
+  let claimCount = 0;
+
+  const polling = startTelegramPolling({
+    botTokens: { owner: "owner-token" },
+    clearWebhookBeforePolling: true,
+    dropPendingUpdatesOnWebhookClear: true,
+    intervalMs: 10,
+    timeoutSeconds: 1,
+    baseUrl: "https://telegram.example",
+    pollingStateRepository: {
+      async claimLease() {
+        claimCount += 1;
+        return { claimed: false, state: null };
+      },
+    },
+    fetchImpl: async (url, options = {}) => {
+      calls.push({ url, method: options.method ?? "GET", body: options.body });
+      return {
+        ok: true,
+        status: 200,
+        async json() {
+          return { ok: true, result: [] };
+        },
+      };
+    },
+    handleUpdate: async () => {},
+  });
+
+  for (let attempt = 0; attempt < 20 && claimCount === 0; attempt += 1) {
+    await delay(10);
+  }
+  polling.stop();
+  await polling.done;
+
+  assert.equal(claimCount > 0, true);
+  assert.deepEqual(calls, []);
+});
+
+test("startTelegramPolling can drop pending updates after polling lease is claimed", async () => {
+  const calls = [];
+
+  const polling = startTelegramPolling({
+    botTokens: { owner: "owner-token" },
+    clearWebhookBeforePolling: true,
+    dropPendingUpdatesOnWebhookClear: true,
+    intervalMs: 20,
+    timeoutSeconds: 1,
+    baseUrl: "https://telegram.example",
+    pollingStateRepository: {
+      async claimLease() {
+        return { claimed: true, state: null };
+      },
+      async heartbeat() {},
+    },
+    fetchImpl: async (url, options = {}) => {
+      calls.push({ url, method: options.method ?? "GET", body: options.body });
+      const isDeleteWebhook = String(url).includes("/deleteWebhook");
+      return {
+        ok: true,
+        status: 200,
+        async json() {
+          return isDeleteWebhook ? { ok: true, result: true } : { ok: true, result: [] };
+        },
+      };
+    },
+    handleUpdate: async () => {},
+  });
+
+  for (let attempt = 0; attempt < 20 && calls.length < 2; attempt += 1) {
+    await delay(10);
+  }
+  polling.stop();
+  await polling.done;
+
+  assert.equal(calls[0].method, "POST");
+  assert.match(calls[0].url, /\/deleteWebhook$/);
+  assert.deepEqual(JSON.parse(calls[0].body), { drop_pending_updates: true });
+  assert.match(calls[1].url, /\/getUpdates\?/);
+});
+
 test("startTelegramPolling clears webhook again after Telegram conflict", async () => {
   const calls = [];
   let handled = false;

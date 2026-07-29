@@ -295,8 +295,8 @@ test("production dependencies enable Telegram polling by default in production w
   assert.equal(dependencies.telegramPollingClearWebhookEnabled, true);
   assert.equal(dependencies.telegramUpdateQueueEnabled, true);
   assert.equal(dependencies.telegramWebhookIngressMode, "direct_or_relay");
-  assert.equal(dependencies.telegramUpdateDispatcherIntervalMs, 1000);
-  assert.equal(dependencies.telegramUpdateDispatcherMaxJobs, 10);
+  assert.equal(dependencies.telegramUpdateDispatcherIntervalMs, 250);
+  assert.equal(dependencies.telegramUpdateDispatcherMaxJobs, 25);
   assert.equal(dependencies.telegramUpdateDispatcherMaxAttempts, 3);
   assert.equal(dependencies.telegramUpdateDispatcherRetryDelayMs, 5000);
   assert.equal(dependencies.telegramAcceptedAckThrottleMs, 8000);
@@ -352,6 +352,28 @@ test("production dependencies keep polling disabled by default when relay ingres
   assert.equal(dependencies.telegramWebhookIngressMode, "relay");
   assert.equal(dependencies.telegramPollingEnabled, false);
   assert.equal(dependencies.telegramPollingClearWebhookEnabled, false);
+  assert.equal(dependencies.telegramPollingDropPendingUpdatesOnWebhookClear, false);
+  assert.equal(
+    dependencies.healthCapabilities.telegramRuntime.pollingDropPendingUpdatesOnWebhookClear,
+    false,
+  );
+});
+
+test("production dependencies can drop pending Telegram updates during polling webhook cleanup", () => {
+  const dependencies = createProductionDependencies({
+    env: {
+      NODE_ENV: "production",
+      TELEGRAM_OWNER_BOT_TOKEN: "owner-token",
+      TELEGRAM_POLLING_DROP_PENDING_UPDATES_ON_WEBHOOK_CLEAR: "true",
+    },
+    repositories: createInMemoryRepositories(),
+  });
+
+  assert.equal(dependencies.telegramPollingDropPendingUpdatesOnWebhookClear, true);
+  assert.equal(
+    dependencies.healthCapabilities.telegramRuntime.pollingDropPendingUpdatesOnWebhookClear,
+    true,
+  );
 });
 
 test("production dependencies allow polling with relay only in emergency mode", () => {

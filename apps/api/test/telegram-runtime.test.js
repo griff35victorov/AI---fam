@@ -2533,6 +2533,208 @@ test("repository backed orchestrator parses Windy links through coordinate weath
   assert.match(response.answer.text, /Open-Meteo/);
 });
 
+test("repository backed orchestrator extracts Yandex Maps ll coordinates", async () => {
+  const repositories = createInMemoryRepositories();
+  const capabilityRegistry = createCapabilityRegistry({
+    fetchImpl: async () => {
+      throw new Error("fetch should not be called for Yandex Maps coordinates");
+    },
+  });
+  const orchestrator = createRepositoryBackedOrchestrator({
+    repositories,
+    capabilityRegistry,
+    aiProvider: {
+      async complete() {
+        throw new Error("AI should not be called for Yandex Maps coordinates");
+      },
+    },
+  });
+
+  const response = await orchestrator({
+    chatId: 777,
+    actor: { id: "owner-1", role: "owner" },
+    intent: "household",
+    text: "Where is this map point https://yandex.ru/maps/?ll=37.617635%2C55.755814&z=12",
+    telegramUpdateId: 815,
+  });
+
+  assert.equal(response.answer.source, "travel_local");
+  assert.match(response.answer.text, /55\.755814, 37\.617635/);
+});
+
+test("repository backed orchestrator extracts Yandex Maps pt coordinates", async () => {
+  const repositories = createInMemoryRepositories();
+  const capabilityRegistry = createCapabilityRegistry({
+    fetchImpl: async () => {
+      throw new Error("fetch should not be called for Yandex Maps coordinates");
+    },
+  });
+  const orchestrator = createRepositoryBackedOrchestrator({
+    repositories,
+    capabilityRegistry,
+    aiProvider: {
+      async complete() {
+        throw new Error("AI should not be called for Yandex Maps coordinates");
+      },
+    },
+  });
+
+  const response = await orchestrator({
+    chatId: 777,
+    actor: { id: "owner-1", role: "owner" },
+    intent: "household",
+    text: "Where is this map point https://yandex.ru/maps/?pt=37.617635%2C55.755814&z=12",
+    telegramUpdateId: 819,
+  });
+
+  assert.equal(response.answer.source, "travel_local");
+  assert.match(response.answer.text, /55\.755814, 37\.617635/);
+});
+
+test("repository backed orchestrator does not fetch Yandex Maps HTML without coordinates", async () => {
+  const repositories = createInMemoryRepositories();
+  const orchestrator = createRepositoryBackedOrchestrator({
+    repositories,
+    capabilityRegistry: {
+      has() {
+        return false;
+      },
+      async run() {
+        throw new Error("capability should not be called for Yandex Maps without coordinates");
+      },
+    },
+    aiProvider: {
+      async complete() {
+        throw new Error("AI should not be called for Yandex Maps without coordinates");
+      },
+    },
+  });
+
+  const response = await orchestrator({
+    chatId: 777,
+    actor: { id: "owner-1", role: "owner" },
+    intent: "household",
+    text: "https://yandex.ru/maps/org/tsvetochnyye_berega/30106009971/",
+    telegramUpdateId: 820,
+  });
+
+  assert.equal(response.answer.source, "map_coordinates_missing");
+  assert.match(response.answer.text, /Яндекс/);
+  assert.match(response.answer.text, /координат/i);
+});
+
+test("repository backed orchestrator uses Yandex Maps ll coordinates for weather", async () => {
+  const repositories = createInMemoryRepositories();
+  const calls = [];
+  const capabilityRegistry = createCapabilityRegistry({
+    fetchImpl: async (url) => {
+      calls.push(String(url));
+      assert.match(String(url), /api\.open-meteo\.com\/v1\/forecast/);
+      assert.match(String(url), /latitude=55\.755814/);
+      assert.match(String(url), /longitude=37\.617635/);
+      return {
+        ok: true,
+        json: async () => ({
+          daily: {
+            time: ["2026-07-28", "2026-07-29", "2026-07-30"],
+            weather_code: [3, 2, 1],
+            temperature_2m_max: [24, 25, 26],
+            temperature_2m_min: [16, 17, 18],
+            precipitation_probability_max: [20, 10, 5],
+            precipitation_sum: [0, 0, 0],
+            wind_speed_10m_max: [10, 9, 8],
+          },
+          hourly: { time: [] },
+        }),
+      };
+    },
+  });
+  const orchestrator = createRepositoryBackedOrchestrator({
+    repositories,
+    capabilityRegistry,
+    aiProvider: {
+      async complete() {
+        throw new Error("AI should not be called for Yandex Maps weather");
+      },
+    },
+  });
+
+  const response = await orchestrator({
+    chatId: 777,
+    actor: { id: "owner-1", role: "owner" },
+    intent: "household",
+    text: "weather here https://yandex.ru/maps/?ll=37.617635%2C55.755814&z=12",
+    telegramUpdateId: 816,
+  });
+
+  assert.equal(response.answer.source, "weather_forecast");
+  assert.equal(calls.length, 1);
+  assert.match(response.answer.text, /Open-Meteo/);
+});
+
+test("repository backed orchestrator uses Yandex Maps ll coordinates as weather follow up", async () => {
+  const repositories = createInMemoryRepositories();
+  const weatherCalls = [];
+  const orchestrator = createRepositoryBackedOrchestrator({
+    repositories,
+    capabilityRegistry: {
+      has(capabilityId) {
+        return capabilityId === "weather_forecast";
+      },
+      async run(capabilityId, args) {
+        assert.equal(capabilityId, "weather_forecast");
+        weatherCalls.push(args);
+        return {
+          text: weatherCalls.length === 1
+            ? "Send the map link for the exact point."
+            : "Weekend forecast by map point.",
+          source: "weather_forecast",
+        };
+      },
+    },
+    aiProvider: {
+      async complete() {
+        throw new Error("AI should not be called for Yandex Maps weather follow up");
+      },
+    },
+  });
+
+  await orchestrator({
+    chatId: 777,
+    actor: { id: "owner-1", role: "owner" },
+    intent: "household",
+    text: "What is the weekend weather and wind for this place?",
+    telegramUpdateId: 817,
+  });
+
+  const response = await orchestrator({
+    chatId: 777,
+    actor: { id: "owner-1", role: "owner" },
+    intent: "household",
+    text: "https://yandex.ru/maps/org/tsvetochnyye_berega/30106009971/?ll=35.930186%2C55.831423&z=16",
+    telegramUpdateId: 818,
+  });
+
+  assert.equal(response.answer.source, "weather_forecast");
+  assert.equal(weatherCalls.length, 2);
+  assert.deepEqual(
+    {
+      latitude: weatherCalls[1].latitude,
+      longitude: weatherCalls[1].longitude,
+      target: weatherCalls[1].target,
+      metricFocus: weatherCalls[1].metricFocus,
+      inheritedFrom: weatherCalls[1].inheritedFrom,
+    },
+    {
+      latitude: 55.831423,
+      longitude: 35.930186,
+      target: "weekend",
+      metricFocus: "wind",
+      inheritedFrom: "weather_follow_up",
+    },
+  );
+});
+
 test("repository backed orchestrator blocks local URL fetches", async () => {
   const repositories = createInMemoryRepositories();
   const capabilityRegistry = createCapabilityRegistry({

@@ -18,9 +18,13 @@ import {
   detectRequiredCapability,
   extractUrls,
   isTimeLocationRequest,
+  isMapLocationRequest,
+  isMapReferenceRequest,
   isTravelLocalRequest,
   isWebFetchRequest,
   isWindyWeatherRequest,
+  parseMapLocationRequest,
+  parseMapReferenceRequest,
   isWeatherRequest,
   parseLocationLookupRequest,
   parseWindyRequest,
@@ -1250,7 +1254,8 @@ function looksLikeShortContextualFollowUp(text) {
 }
 
 function buildWeatherFollowUpArgs({ text, messages }) {
-  if (!looksLikeShortContextualFollowUp(text)) return null;
+  const mapLocationRequest = parseMapLocationRequest(text);
+  if (!looksLikeShortContextualFollowUp(text) && !mapLocationRequest) return null;
 
   const previousUserMessage = [...messages]
     .reverse()
@@ -2121,7 +2126,14 @@ export function createRepositoryBackedOrchestrator({
       };
     }
 
-    if (!requestIsMaterialCommand && isWebFetchRequest(request.text)) {
+    const mapLocationRequest = !requestIsMaterialCommand
+      ? parseMapLocationRequest(request.text)
+      : null;
+    const mapReferenceRequest = !requestIsMaterialCommand
+      ? parseMapReferenceRequest(request.text)
+      : null;
+
+    if (!requestIsMaterialCommand && !isMapReferenceRequest(request.text) && isWebFetchRequest(request.text)) {
       let answerText;
       let source = "web_fetch_url";
       let metadata = {};
@@ -2177,9 +2189,26 @@ export function createRepositoryBackedOrchestrator({
       let answerText;
       let source = "weather_forecast";
       let metadata = {};
-      const weatherArgs = weatherFollowUpArgs ?? parseWeatherRequest(request.text);
+      const weatherArgs = {
+        ...(weatherFollowUpArgs ?? parseWeatherRequest(request.text)),
+        ...(mapLocationRequest
+          ? {
+              latitude: mapLocationRequest.latitude,
+              longitude: mapLocationRequest.longitude,
+              location: `coordinates ${mapLocationRequest.latitude}, ${mapLocationRequest.longitude}`,
+              displayLocation: "точка на карте",
+            }
+          : {}),
+      };
 
-      if (
+      if (mapReferenceRequest && !mapLocationRequest) {
+        answerText = [
+          "Распознал ссылку Яндекс.Карт, но в ней нет координат точки.",
+          "Чтобы рассчитать погоду или ветер по месту, пришлите полную ссылку с параметром ll=... или напишите адрес/название места текстом.",
+        ].join("\n");
+        source = "map_coordinates_missing";
+        metadata = mapReferenceRequest;
+      } else if (
         !capabilityRegistry?.has?.("weather_forecast") &&
         !capabilityRegistry?.has?.("weather_fallback_wttr")
       ) {
@@ -2301,27 +2330,43 @@ export function createRepositoryBackedOrchestrator({
       };
     }
 
-    if (!requestIsMaterialCommand && isTravelLocalRequest(request.text)) {
+    if (!requestIsMaterialCommand && (isMapReferenceRequest(request.text) || isTravelLocalRequest(request.text))) {
       let answerText;
       let source = "travel_local";
       let metadata = {};
 
-      if (!capabilityRegistry?.has?.("travel_local")) {
+      if (!mapReferenceRequest && !capabilityRegistry?.has?.("travel_local")) {
         answerText = buildMissingCapabilityAnswer("travel_local", request.text);
         source = "capability_missing";
         metadata = { capability: "travel_local" };
       } else {
         try {
-          const result = await capabilityRegistry.run(
-            "travel_local",
-            buildCapabilityRunArgs({
-              request,
-              requestContext,
-              base: parseLocationLookupRequest(request.text),
-            }),
-          );
-          answerText = result.text;
-          metadata = result.metadata ?? {};
+          if (mapLocationRequest) {
+            answerText = [
+              "Распознал точку на карте.",
+              `Координаты: ${mapLocationRequest.latitude}, ${mapLocationRequest.longitude}.`,
+              "Источник: Yandex Maps URL.",
+            ].join("\n");
+            metadata = mapLocationRequest;
+          } else if (mapReferenceRequest) {
+            answerText = [
+              "Распознал ссылку Яндекс.Карт, но координаты точки в ней не нашел.",
+              "Пришлите полную ссылку из кнопки «Поделиться» или напишите адрес/название места текстом.",
+            ].join("\n");
+            source = "map_coordinates_missing";
+            metadata = mapReferenceRequest;
+          } else {
+            const result = await capabilityRegistry.run(
+              "travel_local",
+              buildCapabilityRunArgs({
+                request,
+                requestContext,
+                base: parseLocationLookupRequest(request.text),
+              }),
+            );
+            answerText = result.text;
+            metadata = result.metadata ?? {};
+          }
         } catch (error) {
           answerText = [
             "Я попытался найти место через карту, но источник не ответил.",

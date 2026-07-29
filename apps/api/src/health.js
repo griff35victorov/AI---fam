@@ -79,6 +79,7 @@ function sanitizeTelegramRuntime(runtime) {
     "replyMode",
     "pollingEnabled",
     "pollingClearWebhookEnabled",
+    "pollingDropPendingUpdatesOnWebhookClear",
     "updateQueueEnabled",
     "visibleAcceptedAckEnabled",
     "relayConfigured",

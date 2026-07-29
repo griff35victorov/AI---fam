@@ -147,17 +147,6 @@ export function startTelegramPolling({
 
       while (!stopped) {
         try {
-          if (!webhookCleared) {
-            await deleteWebhookBeforePolling({
-              botKey,
-              botToken,
-              fetchImpl,
-              baseUrl,
-              dropPendingUpdates: dropPendingUpdatesOnWebhookClear,
-            });
-            webhookCleared = true;
-          }
-
           let pollingState = null;
           if (pollingStateRepository?.claimLease) {
             const lease = await pollingStateRepository.claimLease({
@@ -181,6 +170,17 @@ export function startTelegramPolling({
             if (pollingState?.offset != null) {
               offsets[botKey] = pollingState.offset;
             }
+          }
+
+          if (!webhookCleared) {
+            await deleteWebhookBeforePolling({
+              botKey,
+              botToken,
+              fetchImpl,
+              baseUrl,
+              dropPendingUpdates: dropPendingUpdatesOnWebhookClear,
+            });
+            webhookCleared = true;
           }
 
           const previousOffset = offsets[botKey];

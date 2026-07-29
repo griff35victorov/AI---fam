@@ -1666,7 +1666,7 @@ export async function dispatchTelegramUpdateJobsOnce({
 }
 
 function startTelegramUpdateDispatcher(options = {}) {
-  const intervalMs = options.intervalMs ?? 1000;
+  const intervalMs = options.intervalMs ?? 250;
   let running = false;
   let rerunRequested = false;
 
@@ -1760,6 +1760,10 @@ export function createAppServer(options = {}) {
   const telegramPollingClearWebhookEnabled =
     options.telegramPollingClearWebhookEnabled ??
     dependencies.telegramPollingClearWebhookEnabled ??
+    false;
+  const telegramPollingDropPendingUpdatesOnWebhookClear =
+    options.telegramPollingDropPendingUpdatesOnWebhookClear ??
+    dependencies.telegramPollingDropPendingUpdatesOnWebhookClear ??
     false;
   const telegramBackgroundDelayMs =
     options.telegramBackgroundDelayMs ?? dependencies.telegramBackgroundDelayMs ?? 0;
@@ -2398,6 +2402,7 @@ export function createAppServer(options = {}) {
         timeoutSeconds: telegramPollingTimeoutSeconds,
         pollingStateRepository: telegramPollingStateRepository,
         clearWebhookBeforePolling: telegramPollingClearWebhookEnabled,
+        dropPendingUpdatesOnWebhookClear: telegramPollingDropPendingUpdatesOnWebhookClear,
         handleUpdate: async (botKey, update) => {
           const pollingSender = resolveTelegramBackgroundSender({
             botKey,
