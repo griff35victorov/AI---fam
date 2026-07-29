@@ -15,6 +15,21 @@ function parseInteger(value, fallback) {
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
 }
 
+function parsePositiveInteger(value, fallback) {
+  const parsed = Number.parseInt(String(value ?? ""), 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function timewebResponseTimeoutMsFromEnv(env) {
+  const requestedTimeoutMs = parsePositiveInteger(env.TIMEWEB_RESPONSE_TIMEOUT_MS, 900);
+  const telegramDeadlineMs = parsePositiveInteger(
+    env.TELEGRAM_RELAY_RESPONSE_DEADLINE_MS,
+    1200,
+  );
+
+  return Math.min(requestedTimeoutMs, telegramDeadlineMs);
+}
+
 function json(body, status = 200) {
   return Response.json(body, {
     status,
@@ -268,6 +283,26 @@ async function forwardToTimeweb({
   }
 }
 
+async function forwardToTimewebWithinDeadline(args) {
+  const timeoutMs = parsePositiveInteger(args.timeoutMs, 900);
+  let timeoutId;
+  const task = forwardToTimeweb({ ...args, timeoutMs });
+  const deadline = new Promise((_, reject) => {
+    timeoutId = setTimeout(() => {
+      const error = new Error("telegram_relay_response_deadline_exceeded");
+      error.code = "telegram_relay_response_deadline_exceeded";
+      reject(error);
+    }, timeoutMs);
+  });
+
+  try {
+    return await Promise.race([task, deadline]);
+  } finally {
+    clearTimeout(timeoutId);
+    task.catch(() => undefined);
+  }
+}
+
 async function sleep(ms) {
   if (ms <= 0) return;
   await new Promise((resolve) => setTimeout(resolve, ms));
@@ -379,13 +414,13 @@ export async function handleRelayRequest(
 
   const timewebUrl = buildTimewebWebhookUrl(env, route.botKey);
   const relayUpstreamSecret = envValue(env.TELEGRAM_RELAY_UPSTREAM_SECRET);
-  const responseTimeoutMs = parseInteger(env.TIMEWEB_RESPONSE_TIMEOUT_MS, 1200);
+  const responseTimeoutMs = timewebResponseTimeoutMsFromEnv(env);
   const backgroundTimeoutMs = parseInteger(env.TIMEWEB_BACKGROUND_TIMEOUT_MS, 5000);
   const retries = parseInteger(env.TIMEWEB_FORWARD_RETRIES, 2);
   const retryDelayMs = parseInteger(env.TIMEWEB_FORWARD_RETRY_DELAY_MS, 250);
 
   try {
-    const timewebBody = await forwardToTimeweb({
+    const timewebBody = await forwardToTimewebWithinDeadline({
       url: timewebUrl,
       secret,
       bodyText,

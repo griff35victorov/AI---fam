@@ -180,6 +180,46 @@ test("falls back immediately and retries in background when Timeweb fails", asyn
   assert.equal(calls[1].options.headers["x-telegram-bot-api-secret-token"], "daughter-secret");
 });
 
+test("caps webhook response wait even when Timeweb timeout env is too high", async () => {
+  const calls = [];
+  const waited = [];
+  const startedAt = Date.now();
+  const response = await handleRelayRequest(
+    request("/telegram/daughter/webhook", { secret: "daughter-secret" }),
+    env({
+      RELAY_ACK_TEXT: "ack",
+      TELEGRAM_RELAY_RESPONSE_DEADLINE_MS: "5",
+      TIMEWEB_RESPONSE_TIMEOUT_MS: "1000",
+      TIMEWEB_FORWARD_RETRIES: "1",
+    }),
+    {
+      waitUntil(promise) {
+        waited.push(promise);
+      },
+    },
+    {
+      fetchImpl: async (url, options) => {
+        calls.push({ url, options });
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        return Response.json({ method: "sendMessage", chat_id: 777, text: "slow" });
+      },
+    },
+  );
+  const elapsedMs = Date.now() - startedAt;
+
+  assert.equal(response.status, 200);
+  assert.deepEqual(await json(response), {
+    method: "sendMessage",
+    chat_id: 777,
+    text: "ack",
+  });
+  assert.ok(elapsedMs < 40, `relay waited ${elapsedMs}ms before answering Telegram`);
+  assert.equal(waited.length, 1);
+  await waited[0];
+  assert.ok(calls.length >= 1);
+  assert.equal(calls[0].url, "https://timeweb.example/telegram/daughter/webhook");
+});
+
 test("uses ok fallback when an update has no chat id", async () => {
   const response = await handleRelayRequest(
     request("/telegram/teacher/webhook", {
