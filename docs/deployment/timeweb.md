@@ -192,8 +192,9 @@ family bot webhooks:
 In production the API runtime creates Telegram senders from
 `TELEGRAM_OWNER_BOT_TOKEN`, `TELEGRAM_DAUGHTER_BOT_TOKEN`, and
 `TELEGRAM_TEACHER_BOT_TOKEN`. Each dedicated bot route is role-bound: owner bot
-accepts only `owner`, daughter bot accepts only `family_child`, and teacher bot
-accepts only `teacher`.
+accepts `owner`, daughter bot accepts `family_child`, and teacher bot accepts
+`teacher`. The owner also has diagnostic access to every dedicated family bot
+without impersonating the bot's role.
 
 Telegram webhook registration is handled by `npm run telegram:webhooks:set` for
 all three dedicated bots, or by `node scripts/telegram-webhook.js set owner`,

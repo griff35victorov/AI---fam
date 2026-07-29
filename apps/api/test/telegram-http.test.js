@@ -525,6 +525,48 @@ test("POST /telegram/teacher/webhook uses the dedicated teacher bot sender", asy
   assert.deepEqual(sentMessages, [{ chatId: 777, text: "Teacher bot answer" }]);
 });
 
+test("POST /telegram/teacher/webhook lets owner diagnose teacher bot without impersonating teacher", async () => {
+  const sentMessages = [];
+  const calls = [];
+
+  await withServer(
+    {
+      users: [{ id: "owner-1", role: "owner", telegramUserId: "100" }, ...users],
+      orchestrator: async (request) => {
+        calls.push(request);
+        return { answer: { text: "Teacher diagnostics answer" } };
+      },
+      dependencies: {
+        telegramSenders: {
+          teacher: {
+            async sendMessage(message) {
+              sentMessages.push(message);
+              return { ok: true };
+            },
+          },
+        },
+      },
+    },
+    async (baseUrl) => {
+      const response = await postJson(`${baseUrl}/telegram/teacher/webhook`, {
+        update_id: 26,
+        message: {
+          chat: { id: 777 },
+          from: { id: 100 },
+          text: "teacher diagnostics",
+        },
+      });
+
+      assert.equal(response.status, 200);
+      assert.equal((await response.json()).text, "Teacher diagnostics answer");
+    },
+  );
+
+  assert.equal(calls[0].actor.role, "owner");
+  assert.equal(calls[0].telegramBotKey, "teacher");
+  assert.deepEqual(sentMessages, [{ chatId: 777, text: "Teacher diagnostics answer" }]);
+});
+
 test("POST /telegram/teacher/webhook answers /start through webhook response", async () => {
   let orchestratorCalled = false;
   const sentMessages = [];

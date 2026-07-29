@@ -317,11 +317,12 @@ export async function resolveTelegramActorFromRepositories(message, repositories
 }
 
 export function telegramBotAcceptsActor(botKey, actor) {
-  if (actor?.role === "owner" && botKey === "daughter") {
+  const expectedRole = expectedRoleByBotKey[botKey];
+
+  if (actor?.role === "owner" && expectedRole) {
     return true;
   }
 
-  const expectedRole = expectedRoleByBotKey[botKey];
   return !expectedRole || actor?.role === expectedRole;
 }
 

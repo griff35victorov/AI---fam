@@ -234,8 +234,9 @@ test("telegramBotAcceptsActor enforces dedicated family bot roles", () => {
   assert.equal(telegramBotAcceptsActor("daughter", { role: "family_child" }), true);
   assert.equal(telegramBotAcceptsActor("daughter", { role: "owner" }), true);
   assert.equal(telegramBotAcceptsActor("teacher", { role: "teacher" }), true);
-  assert.equal(telegramBotAcceptsActor("teacher", { role: "owner" }), false);
+  assert.equal(telegramBotAcceptsActor("teacher", { role: "owner" }), true);
   assert.equal(telegramBotAcceptsActor("daughter", { role: "teacher" }), false);
+  assert.equal(telegramBotAcceptsActor("teacher", { role: "family_child" }), false);
   assert.equal(telegramBotAcceptsActor(undefined, { role: "teacher" }), true);
 });
 
@@ -280,6 +281,23 @@ test("buildTelegramRequest lets owner diagnose daughter bot without impersonatin
   assert.equal(request.rejected, undefined);
   assert.equal(request.actor.role, "owner");
   assert.equal(request.telegramBotKey, "daughter");
+});
+
+test("buildTelegramRequest lets owner diagnose teacher bot without impersonating teacher", () => {
+  const request = buildTelegramRequest(
+    {
+      message: {
+        chat: { id: 777 },
+        from: { id: 100 },
+        text: "test teacher bot",
+      },
+    },
+    { users, botKey: "teacher" },
+  );
+
+  assert.equal(request.rejected, undefined);
+  assert.equal(request.actor.role, "owner");
+  assert.equal(request.telegramBotKey, "teacher");
 });
 
 test("buildTelegramRequest rejects users in the wrong dedicated bot", () => {
