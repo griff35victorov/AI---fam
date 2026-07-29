@@ -232,7 +232,9 @@ test("resolveTelegramActor returns null for unknown telegram user", () => {
 test("telegramBotAcceptsActor enforces dedicated family bot roles", () => {
   assert.equal(telegramBotAcceptsActor("owner", { role: "owner" }), true);
   assert.equal(telegramBotAcceptsActor("daughter", { role: "family_child" }), true);
+  assert.equal(telegramBotAcceptsActor("daughter", { role: "owner" }), true);
   assert.equal(telegramBotAcceptsActor("teacher", { role: "teacher" }), true);
+  assert.equal(telegramBotAcceptsActor("teacher", { role: "owner" }), false);
   assert.equal(telegramBotAcceptsActor("daughter", { role: "teacher" }), false);
   assert.equal(telegramBotAcceptsActor(undefined, { role: "teacher" }), true);
 });
@@ -263,6 +265,23 @@ test("buildTelegramRequest creates orchestrator request from message update", ()
   assert.equal(request.text, "Посчитай материалы для беседки");
 });
 
+test("buildTelegramRequest lets owner diagnose daughter bot without impersonating child", () => {
+  const request = buildTelegramRequest(
+    {
+      message: {
+        chat: { id: 777 },
+        from: { id: 100 },
+        text: "test daughter bot",
+      },
+    },
+    { users, botKey: "daughter" },
+  );
+
+  assert.equal(request.rejected, undefined);
+  assert.equal(request.actor.role, "owner");
+  assert.equal(request.telegramBotKey, "daughter");
+});
+
 test("buildTelegramRequest rejects users in the wrong dedicated bot", () => {
   const request = buildTelegramRequest(
     {
@@ -277,6 +296,7 @@ test("buildTelegramRequest rejects users in the wrong dedicated bot", () => {
 
   assert.equal(request.rejected, true);
   assert.equal(request.reason, "telegram_bot_role_mismatch");
+  assert.equal(request.telegramBotKey, "daughter");
 });
 
 test("handleTelegramUpdate rejects unknown telegram users", async () => {
@@ -290,10 +310,8 @@ test("handleTelegramUpdate rejects unknown telegram users", async () => {
     },
   );
 
-  assert.deepEqual(response, {
-    chatId: 777,
-    text: "Доступ не настроен. Обратитесь к владельцу семейного оркестратора.",
-  });
+  assert.equal(response.chatId, 777);
+  assert.match(response.text, /Telegram ID: 999/);
 });
 
 test("handleTelegramUpdate answers /start without calling orchestrator", async () => {

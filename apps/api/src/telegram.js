@@ -279,9 +279,23 @@ async function resolveTelegramMessageText(
 }
 
 export function accessNotConfiguredTextForRequest(request) {
-  return request.telegramUserId
-    ? `${accessNotConfiguredText}\n\nTelegram ID: ${request.telegramUserId}`
-    : accessNotConfiguredText;
+  const lines = [accessNotConfiguredText];
+
+  if (request?.reason === "unknown_telegram_user") {
+    lines.push("Причина: Telegram-аккаунт не найден в семейной базе доступа.");
+  } else if (request?.reason === "telegram_bot_role_mismatch") {
+    lines.push("Причина: этот Telegram-аккаунт не привязан к роли выбранного бота.");
+  }
+
+  if (request?.telegramBotKey) {
+    lines.push(`Бот: ${request.telegramBotKey}`);
+  }
+
+  if (request?.telegramUserId) {
+    lines.push(`Telegram ID: ${request.telegramUserId}`);
+  }
+
+  return lines.join("\n\n");
 }
 
 export function resolveTelegramActor(message, users) {
@@ -303,6 +317,10 @@ export async function resolveTelegramActorFromRepositories(message, repositories
 }
 
 export function telegramBotAcceptsActor(botKey, actor) {
+  if (actor?.role === "owner" && botKey === "daughter") {
+    return true;
+  }
+
   const expectedRole = expectedRoleByBotKey[botKey];
   return !expectedRole || actor?.role === expectedRole;
 }
@@ -348,6 +366,7 @@ export function buildTelegramRequest(update, { users, botKey } = {}) {
       rejected: true,
       reason: "unknown_telegram_user",
       telegramUserId,
+      telegramBotKey: botKey,
     };
   }
 
@@ -357,6 +376,7 @@ export function buildTelegramRequest(update, { users, botKey } = {}) {
       rejected: true,
       reason: "telegram_bot_role_mismatch",
       telegramUserId,
+      telegramBotKey: botKey,
     };
   }
 
@@ -393,6 +413,7 @@ export async function buildTelegramRequestFromRepositories(
       rejected: true,
       reason: "unknown_telegram_user",
       telegramUserId,
+      telegramBotKey: botKey,
     };
   }
 
@@ -402,6 +423,7 @@ export async function buildTelegramRequestFromRepositories(
       rejected: true,
       reason: "telegram_bot_role_mismatch",
       telegramUserId,
+      telegramBotKey: botKey,
     };
   }
 
@@ -575,7 +597,7 @@ export async function handleTelegramUpdate(
   }
 
   if (request.rejected) {
-    const text = accessNotConfiguredText;
+    const text = accessNotConfiguredTextForRequest(request);
     return finish({ chatId: request.chatId, text });
   }
 
