@@ -34,6 +34,7 @@ const telegramConnectivityText =
   "Связь установлена. Telegram gateway, App Platform и оркестр отвечают. Если запрос требует AI или инструмента, финальный ответ придет отдельным сообщением.";
 const urlPattern = /https?:\/\/\S+/i;
 const defaultTelegramAcceptedAckThrottleMs = 8000;
+const defaultTelegramVisibleAcceptedAckEnabled = true;
 const defaultWebChatMaxAttachmentBytes = 8 * 1024 * 1024;
 const defaultWebChatMaxExtractedChars = 16_000;
 const webChatTextAttachmentMimeTypes = new Set([
@@ -1197,8 +1198,13 @@ function shouldSendVisibleTelegramAcceptedAck({
   telegramRequest,
   ackTimestamps,
   throttleMs = defaultTelegramAcceptedAckThrottleMs,
+  visibleAckEnabled = defaultTelegramVisibleAcceptedAckEnabled,
   nowMs = Date.now(),
 } = {}) {
+  if (!visibleAckEnabled) {
+    return false;
+  }
+
   if (!ackTimestamps || throttleMs <= 0) {
     return true;
   }
@@ -1219,6 +1225,7 @@ function buildScheduledTelegramWebhookResponse(
   {
     ackTimestamps,
     ackThrottleMs = defaultTelegramAcceptedAckThrottleMs,
+    visibleAckEnabled = defaultTelegramVisibleAcceptedAckEnabled,
   } = {},
 ) {
   return scheduleResult?.duplicate
@@ -1227,6 +1234,7 @@ function buildScheduledTelegramWebhookResponse(
         telegramRequest,
         ackTimestamps,
         throttleMs: ackThrottleMs,
+        visibleAckEnabled,
       })
       ? buildAcceptedTelegramWebhookResponse(telegramRequest)
       : buildSilentTelegramWebhookResponse(telegramRequest);
@@ -1759,6 +1767,10 @@ export function createAppServer(options = {}) {
     options.telegramAcceptedAckThrottleMs ??
     dependencies.telegramAcceptedAckThrottleMs ??
     defaultTelegramAcceptedAckThrottleMs;
+  const telegramVisibleAcceptedAckEnabled =
+    options.telegramVisibleAcceptedAckEnabled ??
+    dependencies.telegramVisibleAcceptedAckEnabled ??
+    defaultTelegramVisibleAcceptedAckEnabled;
   const telegramUpdateQueueEnabled =
     options.telegramUpdateQueueEnabled ??
     dependencies.telegramUpdateQueueEnabled ??
@@ -2051,6 +2063,7 @@ export function createAppServer(options = {}) {
                 {
                   ackTimestamps: telegramAcceptedAckTimestamps,
                   ackThrottleMs: telegramAcceptedAckThrottleMs,
+                  visibleAckEnabled: telegramVisibleAcceptedAckEnabled,
                 },
               ),
             );
@@ -2129,6 +2142,7 @@ export function createAppServer(options = {}) {
               buildScheduledTelegramWebhookResponse(telegramRequest, scheduleResult, {
                 ackTimestamps: telegramAcceptedAckTimestamps,
                 ackThrottleMs: telegramAcceptedAckThrottleMs,
+                visibleAckEnabled: telegramVisibleAcceptedAckEnabled,
               }),
             );
             return;
@@ -2181,6 +2195,7 @@ export function createAppServer(options = {}) {
                 buildScheduledTelegramWebhookResponse(telegramRequest, scheduleResult, {
                   ackTimestamps: telegramAcceptedAckTimestamps,
                   ackThrottleMs: telegramAcceptedAckThrottleMs,
+                  visibleAckEnabled: telegramVisibleAcceptedAckEnabled,
                 }),
               );
               return;
@@ -2252,6 +2267,7 @@ export function createAppServer(options = {}) {
             buildScheduledTelegramWebhookResponse(telegramRequest, scheduleResult, {
               ackTimestamps: telegramAcceptedAckTimestamps,
               ackThrottleMs: telegramAcceptedAckThrottleMs,
+              visibleAckEnabled: telegramVisibleAcceptedAckEnabled,
             }),
           );
 

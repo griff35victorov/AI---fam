@@ -580,6 +580,10 @@ export function createProductionDependencies({
       env.TELEGRAM_ACCEPTED_ACK_THROTTLE_MS,
       8000,
     ),
+    telegramVisibleAcceptedAckEnabled: parseBoolean(
+      env.TELEGRAM_VISIBLE_ACCEPTED_ACK_ENABLED,
+      true,
+    ),
     telegramUpdateQueueEnabled: parseBoolean(
       env.TELEGRAM_UPDATE_QUEUE_ENABLED,
       Boolean(resolvedRepositories?.jobs?.enqueue && resolvedRepositories?.jobs?.claim),

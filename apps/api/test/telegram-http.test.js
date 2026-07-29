@@ -782,6 +782,51 @@ test("POST /telegram/teacher/webhook returns visible ack and sends background AI
   assert.deepEqual(sentMessages, [{ chatId: 777, text: "Teacher async answer" }]);
 });
 
+test("POST /telegram/teacher/webhook can keep accepted ack silent in production chat mode", async () => {
+  const sentMessages = [];
+
+  await withServer(
+    {
+      users,
+      orchestrator: async () => ({ answer: { text: "Teacher async answer" } }),
+      dependencies: {
+        telegramReplyMode: "webhook_response",
+        telegramBackgroundDelayMs: 0,
+        telegramVisibleAcceptedAckEnabled: false,
+        telegramBackgroundSenders: {
+          teacher: {
+            async sendMessage(message) {
+              sentMessages.push(message);
+              return { ok: true };
+            },
+          },
+        },
+      },
+    },
+    async (baseUrl) => {
+      const response = await postJson(`${baseUrl}/telegram/teacher/webhook`, {
+        update_id: 125,
+        message: {
+          chat: { id: 777 },
+          from: { id: 200 },
+          text: "lesson for B1",
+        },
+      });
+
+      assert.equal(response.status, 200);
+      await assertSilentWebhookAction(response);
+
+      await waitFor(
+        () => sentMessages.length === 1,
+        1000,
+        "background relay sender was not called",
+      );
+    },
+  );
+
+  assert.deepEqual(sentMessages, [{ chatId: 777, text: "Teacher async answer" }]);
+});
+
 test("POST /telegram/owner/webhook keeps burst acknowledgements quiet while sending every final answer", async () => {
   const sentMessages = [];
   const calls = [];
