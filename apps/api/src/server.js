@@ -34,7 +34,7 @@ const telegramConnectivityText =
   "Связь установлена. Telegram gateway, App Platform и оркестр отвечают. Если запрос требует AI или инструмента, финальный ответ придет отдельным сообщением.";
 const urlPattern = /https?:\/\/\S+/i;
 const defaultTelegramAcceptedAckThrottleMs = 8000;
-const defaultTelegramVisibleAcceptedAckEnabled = true;
+const defaultTelegramVisibleAcceptedAckEnabled = false;
 const defaultWebChatMaxAttachmentBytes = 8 * 1024 * 1024;
 const defaultWebChatMaxExtractedChars = 16_000;
 const webChatTextAttachmentMimeTypes = new Set([

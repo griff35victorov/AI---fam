@@ -714,7 +714,7 @@ test("POST /telegram/teacher/webhook closes immediate response and uses regular 
       assert.equal(response.status, 200);
       assert.equal(response.headers.get("connection"), "close");
       assert.ok(Number(response.headers.get("content-length")) > 0);
-      await assertAcceptedWebhookMessage(response);
+      await assertSilentWebhookAction(response);
 
       await waitFor(
         () => calls.length === 1,
@@ -747,6 +747,7 @@ test("POST /telegram/teacher/webhook returns visible ack and sends background AI
       dependencies: {
         telegramReplyMode: "webhook_response",
         telegramBackgroundDelayMs: 0,
+        telegramVisibleAcceptedAckEnabled: true,
         telegramBackgroundSenders: {
           teacher: {
             async sendMessage(message) {
@@ -879,7 +880,7 @@ test("POST /telegram/owner/webhook keeps burst acknowledgements quiet while send
       }
 
       assert.equal(responses[0].status, 200);
-      await assertAcceptedWebhookMessage(responses[0]);
+      await assertSilentWebhookAction(responses[0]);
       assert.equal(responses[1].status, 200);
       await assertSilentWebhookAction(responses[1]);
       assert.equal(responses[2].status, 200);
@@ -963,7 +964,7 @@ test("POST /telegram/owner/webhook queues valid updates before slow user lookup"
       );
 
       assert.equal(response.status, 200);
-      await assertAcceptedWebhookMessage(response);
+      await assertSilentWebhookAction(response);
 
       releaseUserLookup();
 
@@ -1051,7 +1052,7 @@ test("POST /telegram/owner/webhook waits for durable enqueue before ack", async 
       );
 
       assert.equal(response.status, 200);
-      await assertAcceptedWebhookMessage(response);
+      await assertSilentWebhookAction(response);
 
       await waitFor(
         () => sentMessages.length === 1,
@@ -1221,7 +1222,7 @@ test("POST /telegram/owner/webhook answers /learn once through background sender
       });
 
       assert.equal(response.status, 200);
-      await assertAcceptedWebhookMessage(response);
+      await assertSilentWebhookAction(response);
 
       await waitFor(
         () => sentMessages.length === 1,
@@ -1287,7 +1288,7 @@ test("POST /telegram/owner/webhook does not resend /learn answer for repeated up
     async (baseUrl) => {
       const first = await postJson(`${baseUrl}/telegram/owner/webhook`, update);
       assert.equal(first.status, 200);
-      await assertAcceptedWebhookMessage(first);
+      await assertSilentWebhookAction(first);
 
       await waitFor(
         () => sentMessages.length === 1,
@@ -1358,7 +1359,7 @@ test("POST /telegram/owner/webhook does not resend answer for same Telegram mess
         message,
       });
       assert.equal(first.status, 200);
-      await assertAcceptedWebhookMessage(first);
+      await assertSilentWebhookAction(first);
 
       await waitFor(
         () => sentMessages.length === 1,
@@ -1436,7 +1437,7 @@ test("POST /telegram/owner/webhook retries queued processing failure without dup
       });
 
       assert.equal(response.status, 200);
-      await assertAcceptedWebhookMessage(response);
+      await assertSilentWebhookAction(response);
 
       await waitFor(
         () => calls.length === 2 && sentMessages.length === 1,
@@ -1501,7 +1502,7 @@ test("POST /telegram/owner/webhook does not retry after Telegram send was attemp
       });
 
       assert.equal(response.status, 200);
-      await assertAcceptedWebhookMessage(response);
+      await assertSilentWebhookAction(response);
 
       await waitFor(
         () => calls.length === 1 && sentMessages.length === 1,
@@ -1605,7 +1606,7 @@ test("POST /telegram/owner/webhook stores explicit memory once through backgroun
       });
 
       assert.equal(response.status, 200);
-      await assertAcceptedWebhookMessage(response);
+      await assertSilentWebhookAction(response);
 
       await waitFor(
         () => sentMessages.length === 1,
@@ -1666,7 +1667,7 @@ test("POST /telegram/owner/webhook does not resend explicit memory answer for re
     async (baseUrl) => {
       const first = await postJson(`${baseUrl}/telegram/owner/webhook`, update);
       assert.equal(first.status, 200);
-      await assertAcceptedWebhookMessage(first);
+      await assertSilentWebhookAction(first);
 
       await waitFor(
         () => sentMessages.length === 1,

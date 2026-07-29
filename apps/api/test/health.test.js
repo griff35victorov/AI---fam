@@ -42,6 +42,18 @@ test("deep health reports repository and provider readiness", async () => {
       googleGmailConfigured: false,
       voiceTranscriptionConfigured: false,
       imageOcrConfigured: true,
+      telegramRuntime: {
+        webhookIngressMode: "relay",
+        replyMode: "webhook_response",
+        pollingEnabled: false,
+        pollingClearWebhookEnabled: false,
+        updateQueueEnabled: true,
+        visibleAcceptedAckEnabled: false,
+        relayConfigured: true,
+        backgroundSendMode: "relay",
+        directBackgroundSendAllowed: false,
+        token: "must-not-leak",
+      },
     },
   });
 
@@ -51,5 +63,16 @@ test("deep health reports repository and provider readiness", async () => {
   assert.equal(response.checks.ai_provider.status, "ok");
   assert.equal(response.checks.google_calendar.status, "not_configured");
   assert.equal(response.checks.ocr.status, "ok");
-  assert.doesNotMatch(JSON.stringify(response), /token|secret|sk-/i);
+  assert.deepEqual(response.checks.telegram.runtime, {
+    webhookIngressMode: "relay",
+    replyMode: "webhook_response",
+    pollingEnabled: false,
+    pollingClearWebhookEnabled: false,
+    updateQueueEnabled: true,
+    visibleAcceptedAckEnabled: false,
+    relayConfigured: true,
+    backgroundSendMode: "relay",
+    directBackgroundSendAllowed: false,
+  });
+  assert.doesNotMatch(JSON.stringify(response), /token|secret|sk-|must-not-leak/i);
 });

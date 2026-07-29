@@ -519,6 +519,33 @@ export function createProductionDependencies({
       !telegramRelayUrl &&
       telegramWebhookIngressMode !== "relay",
   ) && (telegramWebhookIngressMode !== "relay" || telegramPollingEmergencyEnabled);
+  const telegramReplyMode = envValue(env.TELEGRAM_REPLY_MODE) ?? "webhook_response";
+  const telegramPollingClearWebhookEnabled = parseBoolean(
+    env.TELEGRAM_POLLING_CLEAR_WEBHOOK_ENABLED,
+    telegramPollingEnabled,
+  );
+  const telegramAcceptedAckThrottleMs = parseNumber(
+    env.TELEGRAM_ACCEPTED_ACK_THROTTLE_MS,
+    8000,
+  );
+  const telegramVisibleAcceptedAckEnabled = parseBoolean(
+    env.TELEGRAM_VISIBLE_ACCEPTED_ACK_ENABLED,
+    false,
+  );
+  const telegramUpdateQueueEnabled = parseBoolean(
+    env.TELEGRAM_UPDATE_QUEUE_ENABLED,
+    Boolean(resolvedRepositories?.jobs?.enqueue && resolvedRepositories?.jobs?.claim),
+  );
+  const telegramRelayConfigured = Boolean(
+    telegramRelayUrl && envValue(env.TELEGRAM_RELAY_SECRET),
+  );
+  const telegramBackgroundSendMode = envValue(env.TELEGRAM_BACKGROUND_SEND_MODE) ?? (
+    telegramRelayConfigured ? "relay" : "direct_disabled_in_production"
+  );
+  const telegramDirectBackgroundSendAllowed = parseBoolean(
+    env.TELEGRAM_ALLOW_DIRECT_BACKGROUND_SEND,
+    false,
+  );
   const capabilityRegistry = createCapabilityRegistry({
     fetchImpl,
     weatherTimeoutMs: parseNumber(env.WEATHER_TIMEOUT_MS, 6000),
@@ -553,6 +580,17 @@ export function createProductionDependencies({
       googleGmailConfigured: Boolean(googleWorkspaceProviders.emailProvider),
       voiceTranscriptionConfigured: Object.keys(voiceTranscribers).length > 0,
       imageOcrConfigured: Object.keys(imageOcrs).length > 0,
+      telegramRuntime: {
+        webhookIngressMode: telegramWebhookIngressMode,
+        replyMode: telegramReplyMode,
+        pollingEnabled: telegramPollingEnabled,
+        pollingClearWebhookEnabled: telegramPollingClearWebhookEnabled,
+        updateQueueEnabled: telegramUpdateQueueEnabled,
+        visibleAcceptedAckEnabled: telegramVisibleAcceptedAckEnabled,
+        relayConfigured: telegramRelayConfigured,
+        backgroundSendMode: telegramBackgroundSendMode,
+        directBackgroundSendAllowed: telegramDirectBackgroundSendAllowed,
+      },
     },
     webChatAccessCode: envValue(env.WEB_CHAT_ACCESS_CODE),
     webChatUrl: resolveWebChatUrl(env),
@@ -565,29 +603,17 @@ export function createProductionDependencies({
       env.TELEGRAM_REQUIRE_WEBHOOK_SECRET,
       env.NODE_ENV === "production",
     ),
-    telegramReplyMode: envValue(env.TELEGRAM_REPLY_MODE) ?? "webhook_response",
+    telegramReplyMode,
     telegramPollingEnabled,
-    telegramPollingClearWebhookEnabled: parseBoolean(
-      env.TELEGRAM_POLLING_CLEAR_WEBHOOK_ENABLED,
-      telegramPollingEnabled,
-    ),
+    telegramPollingClearWebhookEnabled,
     telegramPollingIntervalMs: parseNumber(env.TELEGRAM_POLLING_INTERVAL_MS, 1000),
     telegramPollingErrorDelayMs: parseNumber(env.TELEGRAM_POLLING_ERROR_DELAY_MS, 5000),
     telegramPollingTimeoutSeconds: parseNumber(env.TELEGRAM_POLLING_TIMEOUT_SECONDS, 20),
     telegramPollingBotTokens,
     telegramPollingFetchImpl: fetchImpl,
-    telegramAcceptedAckThrottleMs: parseNumber(
-      env.TELEGRAM_ACCEPTED_ACK_THROTTLE_MS,
-      8000,
-    ),
-    telegramVisibleAcceptedAckEnabled: parseBoolean(
-      env.TELEGRAM_VISIBLE_ACCEPTED_ACK_ENABLED,
-      true,
-    ),
-    telegramUpdateQueueEnabled: parseBoolean(
-      env.TELEGRAM_UPDATE_QUEUE_ENABLED,
-      Boolean(resolvedRepositories?.jobs?.enqueue && resolvedRepositories?.jobs?.claim),
-    ),
+    telegramAcceptedAckThrottleMs,
+    telegramVisibleAcceptedAckEnabled,
+    telegramUpdateQueueEnabled,
     telegramUpdateDispatcherIntervalMs: parseNumber(
       env.TELEGRAM_UPDATE_DISPATCHER_INTERVAL_MS,
       1000,

@@ -71,6 +71,31 @@ function configuredCheck(isConfigured) {
   return healthCheck(isConfigured ? "ok" : "not_configured");
 }
 
+function sanitizeTelegramRuntime(runtime) {
+  if (!runtime || typeof runtime !== "object") return undefined;
+
+  const allowedKeys = [
+    "webhookIngressMode",
+    "replyMode",
+    "pollingEnabled",
+    "pollingClearWebhookEnabled",
+    "updateQueueEnabled",
+    "visibleAcceptedAckEnabled",
+    "relayConfigured",
+    "backgroundSendMode",
+    "directBackgroundSendAllowed",
+  ];
+  const sanitized = {};
+
+  for (const key of allowedKeys) {
+    if (runtime[key] !== undefined) {
+      sanitized[key] = runtime[key];
+    }
+  }
+
+  return Object.keys(sanitized).length > 0 ? sanitized : undefined;
+}
+
 export async function createDeepHealthResponse({
   repositories,
   capabilities = {},
@@ -99,6 +124,10 @@ export async function createDeepHealthResponse({
   checks.google_gmail = configuredCheck(Boolean(capabilities.googleGmailConfigured));
   checks.voice = configuredCheck(Boolean(capabilities.voiceTranscriptionConfigured));
   checks.ocr = configuredCheck(Boolean(capabilities.imageOcrConfigured));
+  const telegramRuntime = sanitizeTelegramRuntime(capabilities.telegramRuntime);
+  if (telegramRuntime) {
+    checks.telegram.runtime = telegramRuntime;
+  }
 
   const response = {
     status: mergeHealthStatus(checks),

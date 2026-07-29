@@ -300,7 +300,7 @@ test("production dependencies enable Telegram polling by default in production w
   assert.equal(dependencies.telegramUpdateDispatcherMaxAttempts, 3);
   assert.equal(dependencies.telegramUpdateDispatcherRetryDelayMs, 5000);
   assert.equal(dependencies.telegramAcceptedAckThrottleMs, 8000);
-  assert.equal(dependencies.telegramVisibleAcceptedAckEnabled, true);
+  assert.equal(dependencies.telegramVisibleAcceptedAckEnabled, false);
   assert.equal(dependencies.supervisorEnabled, true);
   assert.equal(dependencies.supervisorIntervalMs, 60_000);
   assert.equal(dependencies.supervisorAlertCooldownMs, 600_000);
@@ -322,6 +322,19 @@ test("production dependencies can disable visible Telegram accepted acknowledgem
   });
 
   assert.equal(dependencies.telegramVisibleAcceptedAckEnabled, false);
+});
+
+test("production dependencies can explicitly enable visible Telegram accepted acknowledgements", () => {
+  const dependencies = createProductionDependencies({
+    env: {
+      NODE_ENV: "production",
+      TELEGRAM_VISIBLE_ACCEPTED_ACK_ENABLED: "true",
+      TELEGRAM_OWNER_BOT_TOKEN: "owner-token",
+    },
+    repositories: createInMemoryRepositories(),
+  });
+
+  assert.equal(dependencies.telegramVisibleAcceptedAckEnabled, true);
 });
 
 test("production dependencies keep polling disabled by default when relay ingress is configured", () => {
