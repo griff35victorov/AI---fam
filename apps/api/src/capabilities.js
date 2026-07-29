@@ -599,8 +599,15 @@ function parseWindyUrl(url) {
     return null;
   }
 
-  const coordinateText = decodeURIComponent(parsed.search.replace(/^\?/, ""));
-  const [longitudeText, latitudeText, zoomText, layerText] = coordinateText.split(",");
+  const searchCoordinateText = decodeURIComponent(parsed.search.replace(/^\?/, ""));
+  const pathCoordinateText = decodeURIComponent(parsed.pathname)
+    .split("/")
+    .find((part) => /^-?\d+(?:\.\d+)?,-?\d+(?:\.\d+)?(?:,|$)/.test(part));
+  const zoomCoordinateText = parsed.searchParams.has("lat") && parsed.searchParams.has("lon")
+    ? `${parsed.searchParams.get("lon")},${parsed.searchParams.get("lat")},${parsed.searchParams.get("zoom") ?? ""}`
+    : null;
+  const coordinateText = zoomCoordinateText ?? pathCoordinateText ?? searchCoordinateText;
+  const [longitudeText, latitudeText, zoomText, layerText] = String(coordinateText ?? "").split(",");
   const longitude = Number(longitudeText);
   const latitude = Number(latitudeText);
   const zoom = Number(zoomText);
@@ -651,7 +658,7 @@ function parseYandexMapsUrl(url) {
     return null;
   }
 
-  const coordinateText = parsed.searchParams.get("ll") ?? parsed.searchParams.get("pt");
+  const coordinateText = parsed.searchParams.get("pt") ?? parsed.searchParams.get("ll");
   const [longitudeText, latitudeText] = String(coordinateText ?? "").split(",");
   const longitude = Number(longitudeText);
   const latitude = Number(latitudeText);

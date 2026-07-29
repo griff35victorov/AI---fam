@@ -2533,6 +2533,55 @@ test("repository backed orchestrator parses Windy links through coordinate weath
   assert.match(response.answer.text, /Open-Meteo/);
 });
 
+test("repository backed orchestrator parses Windy lat lon query parameters", async () => {
+  const repositories = createInMemoryRepositories();
+  const calls = [];
+  const capabilityRegistry = createCapabilityRegistry({
+    fetchImpl: async (url) => {
+      calls.push(String(url));
+      assert.match(String(url), /api\.open-meteo\.com\/v1\/forecast/);
+      assert.match(String(url), /latitude=54\.5/);
+      assert.match(String(url), /longitude=23\.75/);
+      return {
+        ok: true,
+        json: async () => ({
+          daily: {
+            time: ["2026-07-28", "2026-07-29", "2026-07-30"],
+            weather_code: [63, 3, 2],
+            temperature_2m_max: [21, 22, 23],
+            temperature_2m_min: [14, 15, 16],
+            precipitation_probability_max: [70, 20, 10],
+            precipitation_sum: [4.2, 0, 0],
+            wind_speed_10m_max: [19, 12, 10],
+          },
+          hourly: { time: [] },
+        }),
+      };
+    },
+  });
+  const orchestrator = createRepositoryBackedOrchestrator({
+    repositories,
+    capabilityRegistry,
+    aiProvider: {
+      async complete() {
+        throw new Error("AI should not be called for Windy coordinate weather");
+      },
+    },
+  });
+
+  const response = await orchestrator({
+    chatId: 777,
+    actor: { id: "owner-1", role: "owner" },
+    intent: "household",
+    text: "Windy point https://www.windy.com/?lat=54.500&lon=23.750&zoom=6",
+    telegramUpdateId: 821,
+  });
+
+  assert.equal(response.answer.source, "windy_weather");
+  assert.equal(calls.length, 1);
+  assert.match(response.answer.text, /54\.5, 23\.75/);
+});
+
 test("repository backed orchestrator extracts Yandex Maps ll coordinates", async () => {
   const repositories = createInMemoryRepositories();
   const capabilityRegistry = createCapabilityRegistry({
@@ -2560,6 +2609,36 @@ test("repository backed orchestrator extracts Yandex Maps ll coordinates", async
 
   assert.equal(response.answer.source, "travel_local");
   assert.match(response.answer.text, /55\.755814, 37\.617635/);
+});
+
+test("repository backed orchestrator prefers Yandex Maps pt marker over ll center", async () => {
+  const repositories = createInMemoryRepositories();
+  const capabilityRegistry = createCapabilityRegistry({
+    fetchImpl: async () => {
+      throw new Error("fetch should not be called for Yandex Maps coordinates");
+    },
+  });
+  const orchestrator = createRepositoryBackedOrchestrator({
+    repositories,
+    capabilityRegistry,
+    aiProvider: {
+      async complete() {
+        throw new Error("AI should not be called for Yandex Maps coordinates");
+      },
+    },
+  });
+
+  const response = await orchestrator({
+    chatId: 777,
+    actor: { id: "owner-1", role: "owner" },
+    intent: "household",
+    text: "Where is this map point https://yandex.ru/maps/?ll=30.000000%2C50.000000&pt=37.617635%2C55.755814&z=12",
+    telegramUpdateId: 822,
+  });
+
+  assert.equal(response.answer.source, "travel_local");
+  assert.match(response.answer.text, /55\.755814, 37\.617635/);
+  assert.doesNotMatch(response.answer.text, /50\.000000, 30\.000000/);
 });
 
 test("repository backed orchestrator extracts Yandex Maps pt coordinates", async () => {
