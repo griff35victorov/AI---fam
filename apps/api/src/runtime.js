@@ -130,7 +130,8 @@ function normalizeText(text) {
     .trim()
     .toLowerCase()
     .replaceAll("ё", "е")
-    .replace(/[?!.,]+$/g, "");
+    .replace(/[?!.,]+$/g, "")
+    .replace(/^\/([a-z][\w-]*)(?:@\w+)$/i, "/$1");
 }
 
 function isMemoryRecallRequest(text) {

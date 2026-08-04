@@ -1201,6 +1201,45 @@ test("repository backed orchestrator lets owner run supervisor repair from Teleg
   assert.equal(jobs.find((job) => job.id === "stale-reminder").status, "running");
 });
 
+test("repository backed orchestrator treats bot-suffixed repair command as supervisor repair", async () => {
+  const now = new Date("2026-07-22T12:00:00.000Z");
+  const repositories = createInMemoryRepositories({
+    jobs: [
+      {
+        id: "failed-telegram-update",
+        type: "telegram-update",
+        payload: { botKey: "owner", update: { update_id: 901 } },
+        status: "failed",
+        runAt: new Date("2026-07-22T11:50:00.000Z"),
+        result: { stage: "processing", sendWasAttempted: false },
+        error: "temporary failure",
+      },
+    ],
+  });
+  const orchestrator = createRepositoryBackedOrchestrator({
+    repositories,
+    now: () => now,
+    aiProvider: {
+      async complete() {
+        throw new Error("AI should not be called for bot-suffixed supervisor repair");
+      },
+    },
+  });
+
+  const response = await orchestrator({
+    chatId: 777,
+    actor: { id: "owner-1", role: "owner" },
+    intent: "household",
+    text: "/repair@Gvictorov_family_ai_bot",
+    telegramUpdateId: 902,
+  });
+
+  assert.equal(response.answer.source, "supervisor_repair");
+
+  const jobs = await repositories.jobs.listRecent({ limit: 10 });
+  assert.equal(jobs.find((job) => job.id === "failed-telegram-update").status, "queued");
+});
+
 test("repository backed orchestrator gives web chat access code only to owner without storing secret", async () => {
   const repositories = createInMemoryRepositories();
   const orchestrator = createRepositoryBackedOrchestrator({

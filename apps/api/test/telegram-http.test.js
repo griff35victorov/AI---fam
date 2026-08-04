@@ -1329,6 +1329,211 @@ test("POST /telegram/owner/webhook returns retryable error when durable enqueue 
   );
 });
 
+test("POST /telegram/owner/webhook runs /repair immediately before Telegram update queue", async () => {
+  const sentMessages = [];
+  const repositories = createInMemoryRepositories({
+    users: [
+      {
+        id: "owner-1",
+        role: "owner",
+        telegramUserId: "100",
+        workspaceId: "workspace-family",
+      },
+    ],
+    jobs: [
+      {
+        id: "failed-telegram-update",
+        type: "telegram-update",
+        payload: { botKey: "owner", update: { update_id: 990 } },
+        status: "failed",
+        runAt: new Date("2026-07-22T11:50:00.000Z"),
+        result: { stage: "processing", sendWasAttempted: false },
+        error: "temporary AI failure",
+      },
+    ],
+  });
+
+  await withServer(
+    {
+      repositories,
+      dependencies: {
+        telegramReplyMode: "webhook_response",
+        telegramUpdateDispatcherIntervalMs: 60_000,
+        telegramBackgroundSenders: {
+          owner: {
+            async sendChatAction() {
+              return { ok: true };
+            },
+            async sendMessage(message) {
+              sentMessages.push(message);
+              return { ok: true };
+            },
+          },
+        },
+        aiProvider: {
+          async complete() {
+            throw new Error("AI should not be called for /repair");
+          },
+        },
+      },
+    },
+    async (baseUrl) => {
+      const response = await postJson(`${baseUrl}/telegram/owner/webhook`, {
+        update_id: 991,
+        message: {
+          message_id: 9401,
+          chat: { id: 777 },
+          from: { id: 100 },
+          text: "/repair",
+        },
+      });
+
+      assert.equal(response.status, 200);
+      const body = await response.json();
+      assert.equal(body.method, "sendMessage");
+      assert.equal(body.chat_id, 777);
+      assert.match(body.text, /^Supervisor-/);
+
+      const jobs = await repositories.jobs.listRecent({ limit: 10 });
+      assert.equal(jobs.find((job) => job.id === "failed-telegram-update").status, "queued");
+    },
+  );
+
+  assert.deepEqual(sentMessages, []);
+});
+
+test("POST /telegram/owner/webhook runs bot-suffixed /repair immediately before Telegram update queue", async () => {
+  const repositories = createInMemoryRepositories({
+    users: [
+      {
+        id: "owner-1",
+        role: "owner",
+        telegramUserId: "100",
+        workspaceId: "workspace-family",
+      },
+    ],
+    jobs: [
+      {
+        id: "failed-telegram-update",
+        type: "telegram-update",
+        payload: { botKey: "owner", update: { update_id: 994 } },
+        status: "failed",
+        runAt: new Date("2026-07-22T11:50:00.000Z"),
+        result: { stage: "processing", sendWasAttempted: false },
+        error: "temporary AI failure",
+      },
+    ],
+  });
+
+  await withServer(
+    {
+      repositories,
+      dependencies: {
+        telegramReplyMode: "webhook_response",
+        telegramUpdateDispatcherIntervalMs: 60_000,
+        aiProvider: {
+          async complete() {
+            throw new Error("AI should not be called for bot-suffixed /repair");
+          },
+        },
+      },
+    },
+    async (baseUrl) => {
+      const response = await postJson(`${baseUrl}/telegram/owner/webhook`, {
+        update_id: 995,
+        message: {
+          message_id: 9403,
+          chat: { id: 777 },
+          from: { id: 100 },
+          text: "/repair@Gvictorov_family_ai_bot",
+        },
+      });
+
+      assert.equal(response.status, 200);
+      const body = await response.json();
+      assert.equal(body.method, "sendMessage");
+      assert.equal(body.chat_id, 777);
+      assert.match(body.text, /^Supervisor-/);
+
+      const jobs = await repositories.jobs.listRecent({ limit: 10 });
+      assert.equal(jobs.find((job) => job.id === "failed-telegram-update").status, "queued");
+    },
+  );
+});
+
+test("POST /telegram/daughter/webhook rejects non-owner /repair before Telegram update queue", async () => {
+  const sentMessages = [];
+  const repositories = createInMemoryRepositories({
+    users: [
+      {
+        id: "daughter-1",
+        role: "family_child",
+        telegramUserId: "300",
+        workspaceId: "workspace-family",
+      },
+    ],
+    jobs: [
+      {
+        id: "failed-telegram-update",
+        type: "telegram-update",
+        payload: { botKey: "owner", update: { update_id: 992 } },
+        status: "failed",
+        runAt: new Date("2026-07-22T11:50:00.000Z"),
+        result: { stage: "processing", sendWasAttempted: false },
+        error: "temporary AI failure",
+      },
+    ],
+  });
+
+  await withServer(
+    {
+      repositories,
+      dependencies: {
+        telegramReplyMode: "webhook_response",
+        telegramUpdateDispatcherIntervalMs: 60_000,
+        telegramBackgroundSenders: {
+          daughter: {
+            async sendChatAction() {
+              return { ok: true };
+            },
+            async sendMessage(message) {
+              sentMessages.push(message);
+              return { ok: true };
+            },
+          },
+        },
+        aiProvider: {
+          async complete() {
+            throw new Error("AI should not be called for rejected /repair");
+          },
+        },
+      },
+    },
+    async (baseUrl) => {
+      const response = await postJson(`${baseUrl}/telegram/daughter/webhook`, {
+        update_id: 993,
+        message: {
+          message_id: 9402,
+          chat: { id: 778 },
+          from: { id: 300 },
+          text: "/repair",
+        },
+      });
+
+      assert.equal(response.status, 200);
+      const body = await response.json();
+      assert.equal(body.method, "sendMessage");
+      assert.equal(body.chat_id, 778);
+      assert.doesNotMatch(body.text, /^Supervisor-/);
+
+      const jobs = await repositories.jobs.listRecent({ limit: 10 });
+      assert.equal(jobs.find((job) => job.id === "failed-telegram-update").status, "failed");
+    },
+  );
+
+  assert.deepEqual(sentMessages, []);
+});
+
 test("POST /telegram/owner/webhook answers connectivity check immediately without AI", async () => {
   const sentMessages = [];
   let orchestratorCalled = false;

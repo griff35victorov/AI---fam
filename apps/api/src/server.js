@@ -1383,6 +1383,11 @@ function isTelegramStartCommandText(text) {
   return String(text ?? "").trim().toLowerCase() === "/start";
 }
 
+function isTelegramQueueBypassCommandText(text) {
+  const normalized = normalizeTelegramCommandText(text);
+  return /^\/(?:repair|supervisor|diag|diagnostics)(?:@\w+)?$/.test(normalized);
+}
+
 function buildRawQueuedTelegramRequest(update, botKey) {
   return {
     chatId: telegramChatIdFromUpdate(update),
@@ -2195,6 +2200,54 @@ export function createAppServer(options = {}) {
 
           if (isTelegramConnectivityCheckText(rawText)) {
             sendJson(response, 200, buildConnectivityTelegramWebhookResponse(rawTelegramRequest));
+            return;
+          }
+
+          if (repositories && isTelegramQueueBypassCommandText(rawText)) {
+            const telegramRequest = await buildTelegramWebhookRequest(body, {
+              users,
+              repositories,
+              botKey,
+              voiceTranscriber: resolveVoiceTranscriber({
+                botKey,
+                voiceTranscriber,
+                voiceTranscribers,
+              }),
+              imageOcr: resolveImageOcr({
+                botKey,
+                imageOcr,
+                imageOcrs,
+              }),
+              documentTextExtractor: resolveDocumentTextExtractor({
+                botKey,
+                documentTextExtractor,
+                documentTextExtractors,
+              }),
+              deferMediaProcessing: true,
+            });
+            if (
+              telegramRequest.rejected ||
+              telegramRequest.voiceRejected ||
+              telegramRequest.imageRejected ||
+              telegramRequest.documentRejected ||
+              telegramRequest.isStartCommand
+            ) {
+              sendJson(response, 200, buildImmediateTelegramWebhookResponse(telegramRequest));
+              return;
+            }
+
+            const result = await orchestrator(telegramRequest);
+            sendJson(
+              response,
+              200,
+              buildTelegramWebhookResponse(
+                {
+                  chatId: telegramRequest.chatId,
+                  text: result.answer?.text ?? telegramAcceptedText,
+                },
+                "webhook_response",
+              ),
+            );
             return;
           }
 
