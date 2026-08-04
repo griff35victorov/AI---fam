@@ -628,6 +628,10 @@ export function createProductionDependencies({
       env.TELEGRAM_UPDATE_DISPATCHER_MAX_JOBS,
       25,
     ),
+    telegramUpdateDispatcherMaxConcurrentBatches: parseNumber(
+      env.TELEGRAM_UPDATE_DISPATCHER_MAX_CONCURRENT_BATCHES,
+      2,
+    ),
     telegramUpdateDispatcherMaxAttempts: parseNumber(
       env.TELEGRAM_UPDATE_DISPATCHER_MAX_ATTEMPTS,
       3,

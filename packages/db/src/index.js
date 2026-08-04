@@ -951,6 +951,27 @@ export function createInMemoryRepositories(seed = {}) {
           .map(cloneRecord);
       },
 
+      async listDue({ type = null, now = new Date(), limit = 100 } = {}) {
+        const nowTime = new Date(now).getTime();
+
+        return jobs
+          .filter((job) => {
+            const lockExpired =
+              job.lockedUntil == null ||
+              new Date(job.lockedUntil).getTime() <= nowTime;
+
+            return (
+              (job.status === "queued" || job.status === "running") &&
+              new Date(job.runAt).getTime() <= nowTime &&
+              lockExpired &&
+              (type == null || job.type === type)
+            );
+          })
+          .sort((left, right) => new Date(left.runAt) - new Date(right.runAt))
+          .slice(0, Math.max(0, limit))
+          .map(cloneRecord);
+      },
+
       async listStaleRunning(options = {}) {
         return staleRunningJobs(options);
       },

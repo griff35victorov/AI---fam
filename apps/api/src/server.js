@@ -26,6 +26,7 @@ import {
   handleTelegramUpdate,
   inferIntentFromText,
   startCommandText,
+  telegramMessageFromUpdate,
   telegramUpdateDedupeKeyPart,
 } from "./telegram.js";
 
@@ -1561,132 +1562,308 @@ export async function dispatchTelegramUpdateJobsOnce({
     return { status: "disabled", processed: 0 };
   }
 
-  let processed = 0;
+  const claimedJobs = await claimTelegramUpdateJobsForDispatch({
+    repositories,
+    now,
+    maxJobs,
+  });
+
+  if (claimedJobs.length === 0) {
+    return { status: "ok", processed: 0 };
+  }
+
+  const groupedJobs = groupTelegramUpdateJobsForProcessing(claimedJobs);
+  await Promise.all(
+    groupedJobs.map(async (group) => {
+      for (const job of group) {
+        await processTelegramUpdateJob({
+          repositories,
+          users,
+          orchestrator,
+          telegramSender,
+          telegramSenders,
+          telegramBackgroundSender,
+          telegramBackgroundSenders,
+          voiceTranscriber,
+          voiceTranscribers,
+          imageOcr,
+          imageOcrs,
+          documentTextExtractor,
+          documentTextExtractors,
+          now,
+          maxAttempts,
+          retryDelayMs,
+          job,
+        });
+      }
+    }),
+  );
+
+  return { status: "ok", processed: claimedJobs.length };
+}
+
+async function claimTelegramUpdateJobsForDispatch({
+  repositories,
+  now = new Date(),
+  maxJobs = 10,
+} = {}) {
+  const nowDate = new Date(now);
+  const workerId = "api-telegram-update-dispatcher";
+  const lockMs = 10 * 60_000;
+
+  if (
+    typeof repositories?.jobs?.listDue === "function" &&
+    typeof repositories?.jobs?.listRecent === "function"
+  ) {
+    const activeRunningJobs = await repositories.jobs.listRecent({
+      type: "telegram-update",
+      status: "running",
+      limit: 200,
+    });
+    const reservedProcessingKeys = new Set(
+      activeRunningJobs
+        .filter((job) => telegramUpdateJobLockIsActive(job, nowDate))
+        .map(telegramUpdateJobProcessingKey),
+    );
+    const dueJobs = await repositories.jobs.listDue({
+      type: "telegram-update",
+      now: nowDate,
+      limit: Math.max(50, maxJobs * 10),
+    });
+    const claimedJobs = [];
+
+    for (const candidate of dueJobs) {
+      if (claimedJobs.length >= maxJobs) break;
+
+      const processingKey = telegramUpdateJobProcessingKey(candidate);
+      if (reservedProcessingKeys.has(processingKey)) continue;
+      if (!candidate.dedupeKey) continue;
+
+      const claimed = await repositories.jobs.claim({
+        workerId,
+        now: nowDate,
+        lockMs,
+        type: "telegram-update",
+        dedupeKey: candidate.dedupeKey,
+      });
+      if (!claimed) continue;
+
+      reservedProcessingKeys.add(telegramUpdateJobProcessingKey(claimed));
+      claimedJobs.push(claimed);
+    }
+
+    return claimedJobs;
+  }
+
+  const claimedJobs = [];
+  const reservedProcessingKeys = new Set();
   for (let index = 0; index < maxJobs; index += 1) {
     const job = await repositories.jobs.claim({
-      workerId: "api-telegram-update-dispatcher",
-      now,
-      lockMs: 10 * 60_000,
+      workerId,
+      now: nowDate,
+      lockMs,
       type: "telegram-update",
       dedupeKey: null,
     });
     if (!job) break;
 
-    const payload = job.payload ?? {};
-    const botKey = payload.botKey ?? undefined;
-    const update = payload.update;
-
-    try {
-      if (!update) {
-        throw new Error("Queued Telegram update job has no update payload");
+    const processingKey = telegramUpdateJobProcessingKey(job);
+    if (reservedProcessingKeys.has(processingKey)) {
+      if (typeof repositories.jobs.rescheduleJob === "function") {
+        await repositories.jobs.rescheduleJob(
+          job,
+          {
+            status: "deferred_same_chat",
+            reason: "telegram_chat_already_processing",
+          },
+          nowDate,
+          nowDate,
+        );
       }
+      continue;
+    }
 
-      const sender = resolveTelegramBackgroundSender({
+    reservedProcessingKeys.add(processingKey);
+    claimedJobs.push(job);
+  }
+
+  return claimedJobs;
+}
+
+function groupTelegramUpdateJobsForProcessing(jobs = []) {
+  const groupsByKey = new Map();
+
+  for (const job of jobs) {
+    const key = telegramUpdateJobProcessingKey(job);
+    const group = groupsByKey.get(key) ?? [];
+    group.push(job);
+    groupsByKey.set(key, group);
+  }
+
+  return Array.from(groupsByKey.values());
+}
+
+function telegramUpdateJobProcessingKey(job) {
+  const payload = job?.payload ?? {};
+  const botKey = payload.botKey ?? "default";
+  const update = payload.update ?? {};
+  const message = telegramMessageFromUpdate(update);
+  const chatId = message?.chat?.id;
+
+  if (chatId !== undefined && chatId !== null) {
+    return `${botKey}:chat:${chatId}`;
+  }
+
+  return `${botKey}:job:${job?.id ?? job?.dedupeKey ?? "unknown"}`;
+}
+
+function telegramUpdateJobLockIsActive(job, now = new Date()) {
+  if (job.status !== "running") return false;
+  if (job.lockedUntil == null) return false;
+
+  return new Date(job.lockedUntil).getTime() > new Date(now).getTime();
+}
+
+async function processTelegramUpdateJob({
+  repositories,
+  users,
+  orchestrator,
+  telegramSender,
+  telegramSenders,
+  telegramBackgroundSender,
+  telegramBackgroundSenders,
+  voiceTranscriber,
+  voiceTranscribers,
+  imageOcr,
+  imageOcrs,
+  documentTextExtractor,
+  documentTextExtractors,
+  now,
+  maxAttempts,
+  retryDelayMs,
+  job,
+}) {
+  const payload = job.payload ?? {};
+  const botKey = payload.botKey ?? undefined;
+  const update = payload.update;
+
+  try {
+    if (!update) {
+      throw new Error("Queued Telegram update job has no update payload");
+    }
+
+    const sender = resolveTelegramBackgroundSender({
+      botKey,
+      telegramSender,
+      telegramSenders,
+      telegramBackgroundSender,
+      telegramBackgroundSenders,
+    });
+    if (!sender?.sendMessage) {
+      throw new Error("Telegram sender is not configured for queued update");
+    }
+
+    sendBackgroundChatAction({ telegramSender: sender, body: update });
+
+    const result = await handleTelegramUpdate(update, {
+      users,
+      repositories,
+      orchestrator,
+      telegramSender: sender,
+      voiceTranscriber: resolveVoiceTranscriber({
         botKey,
-        telegramSender,
-        telegramSenders,
-        telegramBackgroundSender,
-        telegramBackgroundSenders,
-      });
-      if (!sender?.sendMessage) {
-        throw new Error("Telegram sender is not configured for queued update");
-      }
-
-      sendBackgroundChatAction({ telegramSender: sender, body: update });
-
-      const result = await handleTelegramUpdate(update, {
-        users,
-        repositories,
-        orchestrator,
-        telegramSender: sender,
-        voiceTranscriber: resolveVoiceTranscriber({
-          botKey,
-          voiceTranscriber,
-          voiceTranscribers,
-        }),
-        imageOcr: resolveImageOcr({
-          botKey,
-          imageOcr,
-          imageOcrs,
-        }),
-        documentTextExtractor: resolveDocumentTextExtractor({
-          botKey,
-          documentTextExtractor,
-          documentTextExtractors,
-        }),
+        voiceTranscriber,
+        voiceTranscribers,
+      }),
+      imageOcr: resolveImageOcr({
         botKey,
-      });
+        imageOcr,
+        imageOcrs,
+      }),
+      documentTextExtractor: resolveDocumentTextExtractor({
+        botKey,
+        documentTextExtractor,
+        documentTextExtractors,
+      }),
+      botKey,
+    });
 
-      await repositories.jobs.completeJob(job, {
+    await repositories.jobs.completeJob(
+      job,
+      {
         status: "completed",
         botKey: botKey ?? "default",
         updateId: update.update_id ?? null,
         duplicate: Boolean(result?.duplicate),
-      }, now);
-    } catch (error) {
-      const attempts = Number(job.attempts ?? 1);
-      const sendWasAttempted = await telegramReplySendWasAttempted({
-        repositories,
-        update,
-        botKey,
-      });
-      const canRetry =
-        attempts < Math.max(1, Number(maxAttempts) || 1) &&
-        !sendWasAttempted &&
-        typeof repositories.jobs.rescheduleJob === "function";
-      const failureResult = {
-        status: "failed",
-        error: error.message,
-        botKey: botKey ?? "default",
-        updateId: update?.update_id ?? null,
-        attempts,
-        sendWasAttempted,
-      };
+      },
+      now,
+    );
+  } catch (error) {
+    const attempts = Number(job.attempts ?? 1);
+    const sendWasAttempted = await telegramReplySendWasAttempted({
+      repositories,
+      update,
+      botKey,
+    });
+    const canRetry =
+      attempts < Math.max(1, Number(maxAttempts) || 1) &&
+      !sendWasAttempted &&
+      typeof repositories.jobs.rescheduleJob === "function";
+    const failureResult = {
+      status: "failed",
+      error: error.message,
+      botKey: botKey ?? "default",
+      updateId: update?.update_id ?? null,
+      attempts,
+      sendWasAttempted,
+    };
 
-      if (canRetry) {
-        await repositories.jobs.rescheduleJob(
-          job,
-          {
-            ...failureResult,
-            status: "retry_scheduled",
-            retryAt: telegramUpdateRetryRunAt({ now, attempts, retryDelayMs }).toISOString(),
-          },
-          telegramUpdateRetryRunAt({ now, attempts, retryDelayMs }),
-          now,
-        );
-      } else {
-        await repositories.jobs.failJob(job, failureResult, now);
-      }
+    if (canRetry) {
+      await repositories.jobs.rescheduleJob(
+        job,
+        {
+          ...failureResult,
+          status: "retry_scheduled",
+          retryAt: telegramUpdateRetryRunAt({ now, attempts, retryDelayMs }).toISOString(),
+        },
+        telegramUpdateRetryRunAt({ now, attempts, retryDelayMs }),
+        now,
+      );
+    } else {
+      await repositories.jobs.failJob(job, failureResult, now);
     }
-
-    processed += 1;
   }
-
-  return { status: "ok", processed };
 }
 
 function startTelegramUpdateDispatcher(options = {}) {
   const intervalMs = options.intervalMs ?? 250;
-  let running = false;
+  const maxConcurrentBatches = Math.max(1, Number(options.maxConcurrentBatches ?? 2) || 1);
+  const activeTicks = new Set();
   let rerunRequested = false;
 
-  const tick = async () => {
-    if (running) {
+  const tick = () => {
+    if (activeTicks.size >= maxConcurrentBatches) {
       rerunRequested = true;
       return;
     }
 
-    running = true;
-    try {
+    let task;
+    task = (async () => {
       do {
         rerunRequested = false;
         await dispatchTelegramUpdateJobsOnce(options);
       } while (rerunRequested);
-    } catch (error) {
-      console.error("telegram update dispatcher failed", error);
-    } finally {
-      running = false;
-    }
+    })()
+      .catch((error) => {
+        console.error("telegram update dispatcher failed", error);
+      })
+      .finally(() => {
+        activeTicks.delete(task);
+        if (rerunRequested) {
+          tick();
+        }
+      });
+    activeTicks.add(task);
   };
 
   const timer = setInterval(tick, intervalMs);
@@ -1787,6 +1964,10 @@ export function createAppServer(options = {}) {
     options.telegramUpdateDispatcherMaxJobs ??
     dependencies.telegramUpdateDispatcherMaxJobs ??
     10;
+  const telegramUpdateDispatcherMaxConcurrentBatches =
+    options.telegramUpdateDispatcherMaxConcurrentBatches ??
+    dependencies.telegramUpdateDispatcherMaxConcurrentBatches ??
+    2;
   const telegramUpdateDispatcherMaxAttempts =
     options.telegramUpdateDispatcherMaxAttempts ??
     dependencies.telegramUpdateDispatcherMaxAttempts ??
@@ -2349,6 +2530,7 @@ export function createAppServer(options = {}) {
         documentTextExtractors,
         intervalMs: telegramUpdateDispatcherIntervalMs,
         maxJobs: telegramUpdateDispatcherMaxJobs,
+        maxConcurrentBatches: telegramUpdateDispatcherMaxConcurrentBatches,
         maxAttempts: telegramUpdateDispatcherMaxAttempts,
         retryDelayMs: telegramUpdateDispatcherRetryDelayMs,
       });

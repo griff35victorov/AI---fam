@@ -97,6 +97,60 @@ function sanitizeTelegramRuntime(runtime) {
   return Object.keys(sanitized).length > 0 ? sanitized : undefined;
 }
 
+function countJobsByStatus(jobs = []) {
+  const counts = {};
+  for (const job of jobs) {
+    const status = job.status ?? "unknown";
+    counts[status] = (counts[status] ?? 0) + 1;
+  }
+
+  return counts;
+}
+
+function countTelegramJobsByBot(jobs = []) {
+  const counts = {};
+  for (const job of jobs) {
+    const botKey = job.payload?.botKey ?? "default";
+    counts[botKey] = (counts[botKey] ?? 0) + 1;
+  }
+
+  return counts;
+}
+
+async function checkJobsRepository(jobsRepository) {
+  if (typeof jobsRepository?.listRecent !== "function") {
+    return healthCheck("not_configured");
+  }
+
+  try {
+    const telegramJobs = await jobsRepository.listRecent({
+      type: "telegram-update",
+      status: ["queued", "running", "failed"],
+      limit: 100,
+    });
+    const staleRunningJobs =
+      typeof jobsRepository.listStaleRunning === "function"
+        ? await jobsRepository.listStaleRunning({
+            type: "telegram-update",
+            limit: 100,
+          })
+        : [];
+
+    return healthCheck("ok", {
+      telegramQueue: {
+        checked: telegramJobs.length,
+        byStatus: countJobsByStatus(telegramJobs),
+        byBot: countTelegramJobsByBot(telegramJobs),
+        staleRunning: staleRunningJobs.length,
+      },
+    });
+  } catch (error) {
+    return healthCheck("error", {
+      error: String(error.message ?? error).slice(0, 160),
+    });
+  }
+}
+
 export async function createDeepHealthResponse({
   repositories,
   capabilities = {},
@@ -115,7 +169,7 @@ export async function createDeepHealthResponse({
   }
 
   checks.materials = configuredCheck(Boolean(repositories?.materials?.search));
-  checks.jobs = configuredCheck(Boolean(repositories?.jobs?.listRecent));
+  checks.jobs = await checkJobsRepository(repositories?.jobs);
   checks.audit_logs = configuredCheck(Boolean(repositories?.auditLogs?.listRecent));
   checks.ai_provider = configuredCheck(Boolean(capabilities.aiProviderConfigured));
   checks.kimi = configuredCheck(Boolean(capabilities.kimiConfigured));

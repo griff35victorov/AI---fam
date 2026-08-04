@@ -30,7 +30,27 @@ test("deep health reports repository and provider readiness", async () => {
       conversations: { listRecentForActor: async () => [] },
       memories: { listForActor: async () => [] },
       materials: { search: async () => [] },
-      jobs: { listRecent: async () => [] },
+      jobs: {
+        listRecent: async () => [
+          {
+            type: "telegram-update",
+            status: "queued",
+            payload: { botKey: "owner" },
+          },
+          {
+            type: "telegram-update",
+            status: "running",
+            payload: { botKey: "teacher" },
+          },
+        ],
+        listStaleRunning: async () => [
+          {
+            type: "telegram-update",
+            status: "running",
+            payload: { botKey: "teacher" },
+          },
+        ],
+      },
       auditLogs: { listRecent: async () => [] },
     },
     capabilities: {
@@ -64,6 +84,12 @@ test("deep health reports repository and provider readiness", async () => {
   assert.equal(response.checks.ai_provider.status, "ok");
   assert.equal(response.checks.google_calendar.status, "not_configured");
   assert.equal(response.checks.ocr.status, "ok");
+  assert.deepEqual(response.checks.jobs.telegramQueue, {
+    checked: 2,
+    byStatus: { queued: 1, running: 1 },
+    byBot: { owner: 1, teacher: 1 },
+    staleRunning: 1,
+  });
   assert.deepEqual(response.checks.telegram.runtime, {
     webhookIngressMode: "relay",
     replyMode: "webhook_response",

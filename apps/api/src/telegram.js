@@ -89,7 +89,7 @@ function telegramTextDocumentFile(message) {
   };
 }
 
-function telegramMessageFromUpdate(update) {
+export function telegramMessageFromUpdate(update) {
   return (
     update?.message ??
     update?.edited_message ??

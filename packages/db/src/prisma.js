@@ -1070,6 +1070,16 @@ export function createPrismaRepositories(prisma) {
         });
       },
 
+      async listDue({ type = null, now = new Date(), limit = 100 } = {}) {
+        const nowDate = new Date(now);
+
+        return prisma.job.findMany({
+          where: claimWhere(nowDate, { type }),
+          orderBy: { runAt: "asc" },
+          take: Math.max(0, limit),
+        });
+      },
+
       async listStaleRunning({ type = null, now = new Date(), limit = 100 } = {}) {
         return prisma.job.findMany({
           where: staleRunningWhere(new Date(now), { type }),

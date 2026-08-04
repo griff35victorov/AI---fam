@@ -943,6 +943,177 @@ test("POST /telegram/owner/webhook keeps burst acknowledgements quiet while send
   );
 });
 
+test("POST /telegram/owner/webhook processes different chats without waiting for a slow chat", async () => {
+  const sentMessages = [];
+  const repositories = createInMemoryRepositories({
+    users: [
+      {
+        id: "owner-1",
+        role: "owner",
+        telegramUserId: "100",
+        workspaceId: "workspace-family",
+      },
+    ],
+  });
+  let releaseSlowAnswer;
+  const slowAnswerGate = new Promise((resolve) => {
+    releaseSlowAnswer = resolve;
+  });
+
+  await withServer(
+    {
+      repositories,
+      orchestrator: async (request) => {
+        if (request.telegramUpdateId === 600) {
+          await slowAnswerGate;
+        }
+        return { answer: { text: `final answer ${request.telegramUpdateId}` } };
+      },
+      dependencies: {
+        telegramReplyMode: "webhook_response",
+        telegramUpdateDispatcherIntervalMs: 10,
+        telegramBackgroundSenders: {
+          owner: {
+            async sendChatAction() {
+              return { ok: true };
+            },
+            async sendMessage(message) {
+              sentMessages.push(message);
+              return { ok: true };
+            },
+          },
+        },
+      },
+    },
+    async (baseUrl) => {
+      const slowResponse = await postJson(`${baseUrl}/telegram/owner/webhook`, {
+        update_id: 600,
+        message: {
+          message_id: 9600,
+          chat: { id: 777 },
+          from: { id: 100 },
+          text: "slow owner task",
+        },
+      });
+      const fastResponse = await postJson(`${baseUrl}/telegram/owner/webhook`, {
+        update_id: 601,
+        message: {
+          message_id: 9601,
+          chat: { id: 778 },
+          from: { id: 100 },
+          text: "fast owner task",
+        },
+      });
+
+      assert.equal(slowResponse.status, 200);
+      await assertSilentWebhookAction(slowResponse, 777);
+      assert.equal(fastResponse.status, 200);
+      await assertSilentWebhookAction(fastResponse, 778);
+
+      await waitFor(
+        () => sentMessages.some((message) => message.text === "final answer 601"),
+        1000,
+        "fast chat waited for slow chat",
+      );
+      assert.equal(sentMessages.some((message) => message.text === "final answer 600"), false);
+
+      releaseSlowAnswer();
+
+      await waitFor(
+        () => sentMessages.length === 2,
+        1000,
+        "slow chat answer was not delivered after release",
+      );
+    },
+  );
+});
+
+test("POST /telegram/owner/webhook preserves message order inside one chat", async () => {
+  const sentMessages = [];
+  const repositories = createInMemoryRepositories({
+    users: [
+      {
+        id: "owner-1",
+        role: "owner",
+        telegramUserId: "100",
+        workspaceId: "workspace-family",
+      },
+    ],
+  });
+  let releaseFirstAnswer;
+  const firstAnswerGate = new Promise((resolve) => {
+    releaseFirstAnswer = resolve;
+  });
+
+  await withServer(
+    {
+      repositories,
+      orchestrator: async (request) => {
+        if (request.telegramUpdateId === 610) {
+          await firstAnswerGate;
+        }
+        return { answer: { text: `final answer ${request.telegramUpdateId}` } };
+      },
+      dependencies: {
+        telegramReplyMode: "webhook_response",
+        telegramUpdateDispatcherIntervalMs: 10,
+        telegramBackgroundSenders: {
+          owner: {
+            async sendChatAction() {
+              return { ok: true };
+            },
+            async sendMessage(message) {
+              sentMessages.push(message);
+              return { ok: true };
+            },
+          },
+        },
+      },
+    },
+    async (baseUrl) => {
+      const firstResponse = await postJson(`${baseUrl}/telegram/owner/webhook`, {
+        update_id: 610,
+        message: {
+          message_id: 9610,
+          chat: { id: 777 },
+          from: { id: 100 },
+          text: "first ordered task",
+        },
+      });
+      const secondResponse = await postJson(`${baseUrl}/telegram/owner/webhook`, {
+        update_id: 611,
+        message: {
+          message_id: 9611,
+          chat: { id: 777 },
+          from: { id: 100 },
+          text: "second ordered task",
+        },
+      });
+
+      assert.equal(firstResponse.status, 200);
+      await assertSilentWebhookAction(firstResponse);
+      assert.equal(secondResponse.status, 200);
+      await assertSilentWebhookAction(secondResponse);
+
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      assert.deepEqual(sentMessages, []);
+
+      releaseFirstAnswer();
+
+      await waitFor(
+        () => sentMessages.length === 2,
+        1000,
+        "ordered chat answers were not delivered",
+      );
+    },
+  );
+
+  assert.deepEqual(
+    sentMessages.map((message) => message.text),
+    ["final answer 610", "final answer 611"],
+  );
+});
+
 test("POST /telegram/owner/webhook queues valid updates before slow user lookup", async () => {
   const sentMessages = [];
   const repositories = createInMemoryRepositories({
