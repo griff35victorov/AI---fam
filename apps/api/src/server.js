@@ -1385,7 +1385,7 @@ function isTelegramStartCommandText(text) {
 
 function isTelegramQueueBypassCommandText(text) {
   const normalized = normalizeTelegramCommandText(text);
-  return /^\/(?:repair|supervisor|diag|diagnostics)(?:@\w+)?$/.test(normalized);
+  return /^\/(?:repair|supervisor|diag|diagnostics|health)(?:@\w+)?$/.test(normalized);
 }
 
 function buildRawQueuedTelegramRequest(update, botKey) {

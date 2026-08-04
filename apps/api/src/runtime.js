@@ -905,6 +905,7 @@ function isDiagnosticsRequest(text) {
   return (
     normalized === "/diag" ||
     normalized === "/diagnostics" ||
+    normalized === "/health" ||
     normalized === "/repair" ||
     normalized === "/supervisor" ||
     normalized === "проверка связи" ||

@@ -1103,6 +1103,41 @@ test("repository backed orchestrator answers diagnostics without calling AI", as
   assert.match(response.answer.text, /relay returned 502/);
 });
 
+test("repository backed orchestrator treats /health as diagnostics without calling AI", async () => {
+  const repositories = createInMemoryRepositories({
+    jobs: [
+      {
+        id: "failed-telegram-update",
+        type: "telegram-update",
+        payload: { botKey: "owner", update: { update_id: 798 } },
+        status: "failed",
+        attempts: 1,
+        error: "relay timeout",
+      },
+    ],
+  });
+  const orchestrator = createRepositoryBackedOrchestrator({
+    repositories,
+    aiProvider: {
+      async complete() {
+        throw new Error("AI should not be called for /health diagnostics");
+      },
+    },
+  });
+
+  const response = await orchestrator({
+    chatId: 777,
+    actor: { id: "owner-1", role: "owner" },
+    intent: "household",
+    text: "/health",
+    telegramUpdateId: 798,
+  });
+
+  assert.equal(response.answer.source, "diagnostics");
+  assert.match(response.answer.text, /Failed jobs/);
+  assert.match(response.answer.text, /relay timeout/);
+});
+
 test("repository backed orchestrator diagnostics include stale jobs outside recent window", async () => {
   const now = new Date("2026-07-22T12:00:00.000Z");
   const freshJobs = Array.from({ length: 220 }, (_, index) => ({

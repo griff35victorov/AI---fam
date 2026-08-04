@@ -1461,6 +1461,62 @@ test("POST /telegram/owner/webhook runs bot-suffixed /repair immediately before 
   );
 });
 
+test("POST /telegram/owner/webhook runs /health immediately before Telegram update queue", async () => {
+  const repositories = createInMemoryRepositories({
+    users: [
+      {
+        id: "owner-1",
+        role: "owner",
+        telegramUserId: "100",
+        workspaceId: "workspace-family",
+      },
+    ],
+    jobs: [
+      {
+        id: "failed-telegram-update",
+        type: "telegram-update",
+        payload: { botKey: "owner", update: { update_id: 996 } },
+        status: "failed",
+        attempts: 1,
+        error: "relay timeout",
+      },
+    ],
+  });
+
+  await withServer(
+    {
+      repositories,
+      dependencies: {
+        telegramReplyMode: "webhook_response",
+        telegramUpdateDispatcherIntervalMs: 60_000,
+        aiProvider: {
+          async complete() {
+            throw new Error("AI should not be called for /health");
+          },
+        },
+      },
+    },
+    async (baseUrl) => {
+      const response = await postJson(`${baseUrl}/telegram/owner/webhook`, {
+        update_id: 997,
+        message: {
+          message_id: 9404,
+          chat: { id: 777 },
+          from: { id: 100 },
+          text: "/health",
+        },
+      });
+
+      assert.equal(response.status, 200);
+      const body = await response.json();
+      assert.equal(body.method, "sendMessage");
+      assert.equal(body.chat_id, 777);
+      assert.match(body.text, /Failed jobs/);
+      assert.match(body.text, /relay timeout/);
+    },
+  );
+});
+
 test("POST /telegram/daughter/webhook rejects non-owner /repair before Telegram update queue", async () => {
   const sentMessages = [];
   const repositories = createInMemoryRepositories({
