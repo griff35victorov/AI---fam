@@ -1,3 +1,5 @@
+const appSourceRevision = "repair-bypass-health-20260804";
+
 function normalizeVersion(version = {}) {
   const commitSha = String(
     version.commitSha ??
@@ -12,12 +14,19 @@ function normalizeVersion(version = {}) {
       process.env.APP_BUILD_TIME ??
       "",
   ).trim();
+  const sourceRevision = String(
+    version.sourceRevision ??
+      process.env.APP_SOURCE_REVISION ??
+      appSourceRevision ??
+      "",
+  ).trim();
 
-  if (!commitSha && !buildTime) return undefined;
+  if (!commitSha && !buildTime && !sourceRevision) return undefined;
 
   return {
     ...(commitSha ? { commitSha, shortCommitSha: commitSha.slice(0, 7) } : {}),
     ...(buildTime ? { buildTime } : {}),
+    ...(sourceRevision ? { sourceRevision } : {}),
   };
 }
 

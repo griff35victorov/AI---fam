@@ -8,6 +8,7 @@ test("health response reports ok and core subsystem names", () => {
 
   assert.equal(response.status, "ok");
   assert.deepEqual(response.subsystems, ["api", "database", "ai_provider", "worker"]);
+  assert.equal(response.version.sourceRevision, "repair-bypass-health-20260804");
 });
 
 test("health response can expose deployment version without secrets", () => {
@@ -20,6 +21,7 @@ test("health response can expose deployment version without secrets", () => {
 
   assert.equal(response.version.commitSha, "46e1f2f235c4aeaea2eb367de1873b8cf234851b");
   assert.equal(response.version.shortCommitSha, "46e1f2f");
+  assert.equal(response.version.sourceRevision, "repair-bypass-health-20260804");
   assert.doesNotMatch(JSON.stringify(response), /token|secret|key/i);
 });
 
@@ -80,6 +82,7 @@ test("deep health reports repository and provider readiness", async () => {
 
   assert.equal(response.status, "degraded");
   assert.equal(response.version.shortCommitSha, "46e1f2f");
+  assert.equal(response.version.sourceRevision, "repair-bypass-health-20260804");
   assert.equal(response.checks.database.status, "ok");
   assert.equal(response.checks.ai_provider.status, "ok");
   assert.equal(response.checks.google_calendar.status, "not_configured");
