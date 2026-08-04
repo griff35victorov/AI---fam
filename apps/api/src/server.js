@@ -1505,7 +1505,9 @@ async function scheduleTelegramBackgroundUpdate({
     return { duplicate: true };
   }
 
+  const bypassDurableQueue = isTelegramQueueBypassCommandText(telegramTextFromUpdate(body));
   if (
+    !bypassDurableQueue &&
     telegramUpdateQueueEnabled &&
     typeof repositories?.jobs?.enqueue === "function" &&
     telegramUpdateJobKey(body, botKey)
@@ -1539,7 +1541,7 @@ async function scheduleTelegramBackgroundUpdate({
       backgroundKey,
       telegramBackgroundUpdates,
     });
-  }, telegramBackgroundDelayMs);
+  }, bypassDurableQueue ? 0 : telegramBackgroundDelayMs);
 
   return { queued: false };
 }

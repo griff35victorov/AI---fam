@@ -1517,6 +1517,99 @@ test("POST /telegram/owner/webhook runs /health immediately before Telegram upda
   );
 });
 
+test("Telegram polling runs /health without durable update queue", async () => {
+  const sentMessages = [];
+  const repositories = createInMemoryRepositories({
+    users: [
+      {
+        id: "owner-1",
+        role: "owner",
+        telegramUserId: "100",
+        workspaceId: "workspace-family",
+      },
+    ],
+    jobs: [
+      {
+        id: "failed-telegram-update",
+        type: "telegram-update",
+        payload: { botKey: "owner", update: { update_id: 998 } },
+        status: "failed",
+        attempts: 1,
+        error: "stuck owner bot",
+      },
+    ],
+  });
+  const originalEnqueue = repositories.jobs.enqueue;
+  let enqueueCount = 0;
+  repositories.jobs.enqueue = async (...args) => {
+    enqueueCount += 1;
+    return originalEnqueue(...args);
+  };
+  let pollingCalls = 0;
+
+  await withServer(
+    {
+      repositories,
+      dependencies: {
+        telegramPollingEnabled: true,
+        telegramPollingBotTokens: { owner: "owner-token" },
+        telegramPollingIntervalMs: 20,
+        telegramPollingErrorDelayMs: 20,
+        telegramPollingTimeoutSeconds: 0,
+        telegramUpdateDispatcherIntervalMs: 60_000,
+        telegramBackgroundSenders: {
+          owner: {
+            async sendMessage(message) {
+              sentMessages.push(message);
+              return { ok: true };
+            },
+            async sendChatAction() {
+              return { ok: true };
+            },
+          },
+        },
+        telegramPollingFetchImpl: async () => {
+          pollingCalls += 1;
+          return Response.json({
+            ok: true,
+            result:
+              pollingCalls === 1
+                ? [
+                    {
+                      update_id: 999,
+                      message: {
+                        message_id: 9405,
+                        chat: { id: 777 },
+                        from: { id: 100 },
+                        text: "/health",
+                      },
+                    },
+                  ]
+                : [],
+          });
+        },
+        aiProvider: {
+          async complete() {
+            throw new Error("AI should not be called for polling /health");
+          },
+        },
+      },
+    },
+    async () => {
+      await waitFor(
+        () => sentMessages.length > 0,
+        250,
+        "polling /health should send diagnostics without waiting for the queue",
+      );
+    },
+  );
+
+  assert.equal(enqueueCount, 0);
+  assert.equal(sentMessages[0].chatId, 777);
+  assert.match(sentMessages[0].text, /Failed jobs/);
+  assert.match(sentMessages[0].text, /stuck owner bot/);
+});
+
 test("POST /telegram/daughter/webhook rejects non-owner /repair before Telegram update queue", async () => {
   const sentMessages = [];
   const repositories = createInMemoryRepositories({
