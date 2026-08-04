@@ -21,6 +21,8 @@ import {
   isMapLocationRequest,
   isMapReferenceRequest,
   isTravelLocalRequest,
+  isCurrentDataRequest,
+  isNewsCurrentDataRequest,
   isWebFetchRequest,
   isWindyWeatherRequest,
   parseMapLocationRequest,
@@ -564,11 +566,13 @@ function parseRequestedSearchLimit(text) {
 }
 
 function buildWebCurrentDataArgs({ request, memories, workspaceId }) {
-  const domain = resolveMemoryDomainHint({
+  const explicitDomain = extractDomainFromRequestUrls(request.text);
+  const memoryDomain = resolveMemoryDomainHint({
     actor: request.actor,
     memories,
     text: request.text,
   });
+  const domain = explicitDomain ?? memoryDomain;
   const limit = parseRequestedSearchLimit(request.text);
 
   return {
@@ -581,6 +585,19 @@ function buildWebCurrentDataArgs({ request, memories, workspaceId }) {
     ...(domain ? { domain } : {}),
     ...(limit ? { limit } : {}),
   };
+}
+
+function extractDomainFromRequestUrls(text) {
+  for (const url of extractUrls(text)) {
+    try {
+      const hostname = new URL(url).hostname.toLowerCase().replace(/^www\./, "");
+      if (hostname) return hostname;
+    } catch {
+      // Ignore malformed URLs; extractUrls already filters most of them.
+    }
+  }
+
+  return null;
 }
 
 function shouldSkipAutomaticMemory(text) {
@@ -1228,9 +1245,41 @@ function buildCapabilityRunArgs({ request, requestContext, base = {} }) {
   };
 }
 
+async function runWebCurrentDataCapability({
+  capabilityRegistry,
+  request,
+  requestContext,
+  memories,
+  workspaceId,
+}) {
+  return capabilityRegistry.run(
+    "web_current_data",
+    buildCapabilityRunArgs({
+      request,
+      requestContext,
+      base: buildWebCurrentDataArgs({
+        request,
+        memories,
+        workspaceId,
+      }),
+    }),
+  );
+}
+
+function shouldRouteUrlThroughCurrentData(text) {
+  return isNewsCurrentDataRequest(text) || isCurrentDataRequest(text);
+}
+
+function webFetchResultNeedsFallback(result) {
+  return (
+    result?.metadata?.emptyReadableText === true ||
+    /Текстовое содержимое не найдено/i.test(String(result?.text ?? ""))
+  );
+}
+
 function parseWeatherMetricFocusFromText(text) {
   const normalized = String(text ?? "").toLowerCase();
-  if (/(?:ветер|wind)/i.test(normalized)) return "wind";
+  if (/(?:ветер|ветр|wind)/i.test(normalized)) return "wind";
   return null;
 }
 
@@ -1257,17 +1306,42 @@ function buildWeatherFollowUpArgs({ text, messages }) {
   const mapLocationRequest = parseMapLocationRequest(text);
   if (!looksLikeShortContextualFollowUp(text) && !mapLocationRequest) return null;
 
-  const previousUserMessage = [...messages]
+  const recentContext = [...messages]
     .reverse()
-    .find((message) => message.role === "user" && String(message.content ?? "").trim());
-  if (!previousUserMessage || !isWeatherRequest(previousUserMessage.content)) return null;
+    .filter((message) =>
+      (message.role === "user" || message.role === "assistant") &&
+      String(message.content ?? "").trim(),
+    )
+    .slice(0, 8);
+  const recentUserMessages = recentContext.filter((message) => message.role === "user");
+  const previousWeatherMessage = recentUserMessages.find((message) =>
+    isWeatherRequest(message.content) || isWindyWeatherRequest(message.content),
+  );
+  if (!previousWeatherMessage) return null;
 
-  const previousWeatherArgs = parseWeatherRequest(previousUserMessage.content);
+  const lastUserMessage = recentUserMessages[0] ?? null;
+  const assistantAskedForWeatherPlace = recentContext.some((message) =>
+    message.role === "assistant" &&
+    /(?:уточните населенный пункт|уточните населённый пункт|не нашел город|не нашёл город|пришлите.*координат|погода|прогноз|ветер)/i.test(
+      String(message.content ?? ""),
+    ),
+  );
+  if (!mapLocationRequest && previousWeatherMessage !== lastUserMessage && !assistantAskedForWeatherPlace) {
+    return null;
+  }
+
+  const previousWeatherArgs = parseWeatherRequest(previousWeatherMessage.content);
+  const followUpLocationArgs = mapLocationRequest
+    ? {}
+    : parseWeatherRequest(`в ${String(text ?? "").trim()} погода`);
   const metricFocus =
-    previousWeatherArgs.metricFocus ?? parseWeatherMetricFocusFromText(previousUserMessage.content);
+    previousWeatherArgs.metricFocus ?? parseWeatherMetricFocusFromText(previousWeatherMessage.content);
 
   return {
-    location: String(text ?? "").trim(),
+    location: followUpLocationArgs.location ?? String(text ?? "").trim(),
+    ...(followUpLocationArgs.displayLocation
+      ? { displayLocation: followUpLocationArgs.displayLocation }
+      : {}),
     target: previousWeatherArgs.target,
     ...(previousWeatherArgs.partOfDay ? { partOfDay: previousWeatherArgs.partOfDay } : {}),
     ...(metricFocus ? { metricFocus } : {}),
@@ -2133,7 +2207,15 @@ export function createRepositoryBackedOrchestrator({
       ? parseMapReferenceRequest(request.text)
       : null;
 
-    if (!requestIsMaterialCommand && !isMapReferenceRequest(request.text) && isWebFetchRequest(request.text)) {
+    if (
+      !requestIsMaterialCommand &&
+      !isMapReferenceRequest(request.text) &&
+      isWebFetchRequest(request.text) &&
+      !(
+        shouldRouteUrlThroughCurrentData(request.text) &&
+        capabilityRegistry?.has?.("web_current_data")
+      )
+    ) {
       let answerText;
       let source = "web_fetch_url";
       let metadata = {};
@@ -2153,18 +2235,68 @@ export function createRepositoryBackedOrchestrator({
               base: { url: urls[0] },
             }),
           );
-          answerText = result.text;
-          metadata = result.metadata ?? {};
+          if (
+            webFetchResultNeedsFallback(result) &&
+            capabilityRegistry?.has?.("web_current_data")
+          ) {
+            const fallbackResult = await runWebCurrentDataCapability({
+              capabilityRegistry,
+              request,
+              requestContext,
+              memories,
+              workspaceId: requestWorkspaceId,
+            });
+            answerText = fallbackResult.text;
+            source = fallbackResult.source ?? "web_current_data";
+            metadata = {
+              ...(fallbackResult.metadata ?? {}),
+              fallbackFrom: "web_fetch_url",
+              directFetchEmpty: true,
+            };
+          } else {
+            answerText = result.text;
+            metadata = result.metadata ?? {};
+          }
         } catch (error) {
-          answerText = [
-            "Я попытался прочитать ссылку через инструмент, но источник не ответил.",
-            "Нужный инструмент: web_fetch_url.",
-            "Попробуйте позже или пришлите другую ссылку.",
-          ].join("\n");
-          source = "web_fetch_error";
-          metadata = {
-            errorMessage: String(error.message ?? "").slice(0, 240),
-          };
+          if (capabilityRegistry?.has?.("web_current_data")) {
+            try {
+              const fallbackResult = await runWebCurrentDataCapability({
+                capabilityRegistry,
+                request,
+                requestContext,
+                memories,
+                workspaceId: requestWorkspaceId,
+              });
+              answerText = fallbackResult.text;
+              source = fallbackResult.source ?? "web_current_data";
+              metadata = {
+                ...(fallbackResult.metadata ?? {}),
+                fallbackFrom: "web_fetch_url",
+                primaryErrorMessage: String(error.message ?? "").slice(0, 240),
+              };
+            } catch (fallbackError) {
+              answerText = [
+                "Я попытался прочитать ссылку напрямую и через запасной поиск, но источник не ответил.",
+                "Нужные инструменты: web_fetch_url и web_current_data.",
+                "Повторите запрос позже или пришлите другую публичную ссылку.",
+              ].join("\n");
+              source = "web_fetch_error";
+              metadata = {
+                errorMessage: String(error.message ?? "").slice(0, 240),
+                fallbackErrorMessage: String(fallbackError.message ?? "").slice(0, 240),
+              };
+            }
+          } else {
+            answerText = [
+              "Я попытался прочитать ссылку через инструмент, но источник не ответил.",
+              "Нужный инструмент: web_fetch_url.",
+              "Для запасного поиска нужен web_current_data provider.",
+            ].join("\n");
+            source = "web_fetch_error";
+            metadata = {
+              errorMessage: String(error.message ?? "").slice(0, 240),
+            };
+          }
         }
       }
 

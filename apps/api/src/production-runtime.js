@@ -202,7 +202,7 @@ function createAiProvider({ env = {}, fetchImpl = fetch } = {}) {
     apiKey: envValue(env.TIMEWEB_AI_API_KEY),
     agentIds: parseTimewebAgentIds(env),
     fetchImpl,
-    timeoutMs: parseNumber(env.TIMEWEB_AI_TIMEOUT_MS, 30_000),
+    timeoutMs: parseNumber(env.TIMEWEB_AI_TIMEOUT_MS, 18_000),
   });
   const providers = {
     timeweb: timewebProvider,
@@ -220,7 +220,7 @@ function createAiProvider({ env = {}, fetchImpl = fetch } = {}) {
         image: envValue(env.KIMI_MODEL_IMAGE),
       }),
       fetchImpl,
-      timeoutMs: parseNumber(env.KIMI_AI_TIMEOUT_MS, 30_000),
+      timeoutMs: parseNumber(env.KIMI_AI_TIMEOUT_MS, 12_000),
       maxCompletionTokens: envValue(env.KIMI_MAX_COMPLETION_TOKENS),
       reasoningEffort: envValue(env.KIMI_REASONING_EFFORT),
     });

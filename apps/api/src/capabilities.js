@@ -208,8 +208,12 @@ const cityAliases = new Map([
 
 const weatherLocalAreaAliases = new Map([
   ["цветочные берега", { location: "Осташево, Московская область", displayLocation: "КП Цветочные берега, Осташево" }],
+  ["цветочных берегах", { location: "Осташево, Московская область", displayLocation: "КП Цветочные берега, Осташево" }],
+  ["цветочных берегов", { location: "Осташево, Московская область", displayLocation: "КП Цветочные берега, Осташево" }],
   ["кп цветочные берега", { location: "Осташево, Московская область", displayLocation: "КП Цветочные берега, Осташево" }],
+  ["кп цветочных берегах", { location: "Осташево, Московская область", displayLocation: "КП Цветочные берега, Осташево" }],
   ["осташево кп цветочные берега", { location: "Осташево, Московская область", displayLocation: "КП Цветочные берега, Осташево" }],
+  ["осташево кп цветочных берегах", { location: "Осташево, Московская область", displayLocation: "КП Цветочные берега, Осташево" }],
   ["осташево", { location: "Осташево, Московская область", displayLocation: "Осташево, Рузский округ" }],
   ["рузское водохранилище", { location: "Рузское водохранилище, Московская область", displayLocation: "Рузское водохранилище" }],
   ["рузского водохранилища", { location: "Рузское водохранилище, Московская область", displayLocation: "Рузское водохранилище" }],
@@ -296,7 +300,7 @@ function parseWeatherDayPart(lowerText) {
 }
 
 function parseWeatherMetricFocus(lowerText) {
-  if (/(?:ветер|wind)/i.test(lowerText)) return "wind";
+  if (/(?:ветер|ветр|wind)/i.test(lowerText)) return "wind";
   return null;
 }
 
@@ -393,6 +397,7 @@ export function createCapabilityRegistry({
           fetchImpl,
           dnsLookup,
           timeoutMs: args.timeoutMs ?? 7000,
+          maxRedirects: args.maxRedirects ?? 5,
         });
       }
 
@@ -528,7 +533,7 @@ function capabilityAvailable(capabilityId, deps) {
 
 export function isWeatherRequest(text) {
   const normalized = String(text ?? "").toLowerCase();
-  return /(?:погода|температур|дожд|снег|ветер|weather|forecast)/i.test(normalized);
+  return /(?:погода|температур|дожд|снег|ветер|ветр|weather|forecast)/i.test(normalized);
 }
 
 export function parseWeatherRequest(text) {
@@ -795,10 +800,11 @@ export function detectRequiredCapability(text) {
   if (isWeatherRequest(text)) return "weather_forecast";
   if (isWindyWeatherRequest(text)) return "windy_weather";
   if (isMapLocationRequest(text) || isMapReferenceRequest(text)) return "travel_local";
+  if (isNewsCurrentDataRequest(text)) return "web_current_data";
+  if (isWebFetchRequest(text) && isCurrentDataRequest(text)) return "web_current_data";
   if (isWebFetchRequest(text)) return "web_fetch_url";
   if (isTimeLocationRequest(text)) return "time_location_context";
   if (isTravelLocalRequest(text)) return "travel_local";
-  if (isNewsCurrentDataRequest(text)) return "web_current_data";
 
   if (/(?:ежедневн.*сводк|утренн.*сводк|дайджест дня|daily briefing|morning briefing)/i.test(normalized)) {
     return "daily_briefing";
@@ -1210,6 +1216,7 @@ export async function fetchWebPageSummary({
   fetchImpl = fetch,
   dnsLookup = lookup,
   timeoutMs = 7000,
+  maxRedirects = 5,
 } = {}) {
   const targetUrl = cleanUrl(url ?? extractUrls(text)[0]);
   if (!targetUrl) {
@@ -1228,6 +1235,7 @@ export async function fetchWebPageSummary({
     response = await fetchPublicUrl(fetchImpl, targetUrl, {
       timeoutMs,
       dnsLookup,
+      maxRedirects,
     });
   } catch (error) {
     if (isBlockedFetchError(error)) {
@@ -1259,6 +1267,8 @@ export async function fetchWebPageSummary({
       title,
       contentType,
       contentLength: body.length,
+      readableTextLength: excerpt.length,
+      emptyReadableText: excerpt.length === 0,
     },
   };
 }
@@ -1826,9 +1836,9 @@ async function fetchWithTimeout(fetchImpl, url, { timeoutMs, headers, redirect }
   }
 }
 
-async function fetchPublicUrl(fetchImpl, url, { timeoutMs, dnsLookup }) {
+async function fetchPublicUrl(fetchImpl, url, { timeoutMs, dnsLookup, maxRedirects = 5 }) {
   let currentUrl = url;
-  for (let redirectCount = 0; redirectCount < 2; redirectCount += 1) {
+  for (let redirectCount = 0; redirectCount < maxRedirects; redirectCount += 1) {
     const checkedTarget = await assertPublicFetchUrl(currentUrl, dnsLookup);
     const response =
       fetchImpl === fetch

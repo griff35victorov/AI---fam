@@ -1437,15 +1437,17 @@ test("repository backed orchestrator treats short location message as weather fo
   assert.deepEqual(
     {
       location: weatherCalls[1].location,
+      displayLocation: weatherCalls[1].displayLocation,
       target: weatherCalls[1].target,
       metricFocus: weatherCalls[1].metricFocus,
       inheritedFrom: weatherCalls[1].inheritedFrom,
     },
     {
-    location: "Осташево КП Цветочные берега",
-    target: "tomorrow",
-    metricFocus: "wind",
-    inheritedFrom: "weather_follow_up",
+      location: "Осташево, Московская область",
+      displayLocation: "КП Цветочные берега, Осташево",
+      target: "tomorrow",
+      metricFocus: "wind",
+      inheritedFrom: "weather_follow_up",
     },
   );
   assert.deepEqual(weatherCalls[1].recentMessages, [
@@ -1951,6 +1953,132 @@ test("repository backed orchestrator scopes current-data search to remembered si
   assert.equal(calls[0].capabilityId, "web_current_data");
   assert.equal(calls[0].args.domain, "rksurfmag.club");
   assert.equal(calls[0].args.limit, 10);
+});
+
+test("repository backed orchestrator routes URL news requests to current-data search", async () => {
+  const repositories = createInMemoryRepositories();
+  const calls = [];
+  const orchestrator = createRepositoryBackedOrchestrator({
+    repositories,
+    capabilityRegistry: {
+      has(capabilityId) {
+        return capabilityId === "web_current_data" || capabilityId === "web_fetch_url";
+      },
+      async run(capabilityId, args) {
+        calls.push({ capabilityId, args });
+        if (capabilityId === "web_fetch_url") {
+          throw new Error("URL news should not use direct URL fetch first");
+        }
+        return {
+          text: "site news results",
+          source: "web_current_data",
+          metadata: { provider: "test" },
+        };
+      },
+    },
+    aiProvider: {
+      async complete() {
+        throw new Error("AI should not be called for URL news");
+      },
+    },
+  });
+
+  const response = await orchestrator({
+    chatId: 777,
+    actor: { id: "owner-1", role: "owner" },
+    intent: "household",
+    text: "какие последние 10 новостей на https://rksurfmag.club/?",
+    telegramUpdateId: 814,
+  });
+
+  assert.equal(response.answer.source, "web_current_data");
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].capabilityId, "web_current_data");
+  assert.equal(calls[0].args.domain, "rksurfmag.club");
+  assert.equal(calls[0].args.limit, 10);
+});
+
+test("repository backed orchestrator falls back from URL fetch to current-data search", async () => {
+  const repositories = createInMemoryRepositories();
+  const calls = [];
+  const orchestrator = createRepositoryBackedOrchestrator({
+    repositories,
+    capabilityRegistry: {
+      has(capabilityId) {
+        return capabilityId === "web_current_data" || capabilityId === "web_fetch_url";
+      },
+      async run(capabilityId, args) {
+        calls.push({ capabilityId, args });
+        if (capabilityId === "web_fetch_url") {
+          throw new Error("source timeout");
+        }
+        return {
+          text: "Fallback search result.",
+          source: "web_current_data",
+          metadata: { provider: "test" },
+        };
+      },
+    },
+    aiProvider: {
+      async complete() {
+        throw new Error("AI should not be called when web fallback works");
+      },
+    },
+  });
+
+  const response = await orchestrator({
+    chatId: 777,
+    actor: { id: "owner-1", role: "owner" },
+    intent: "household",
+    text: "проанализируй сайт https://example.com/page",
+    telegramUpdateId: 815,
+  });
+
+  assert.equal(response.answer.source, "web_current_data");
+  assert.deepEqual(calls.map((call) => call.capabilityId), [
+    "web_fetch_url",
+    "web_current_data",
+  ]);
+  assert.equal(calls[1].args.domain, "example.com");
+});
+
+test("repository backed orchestrator can read current URL requests when search is unavailable", async () => {
+  const repositories = createInMemoryRepositories();
+  const calls = [];
+  const orchestrator = createRepositoryBackedOrchestrator({
+    repositories,
+    capabilityRegistry: {
+      has(capabilityId) {
+        return capabilityId === "web_fetch_url";
+      },
+      async run(capabilityId, args) {
+        calls.push({ capabilityId, args });
+        return {
+          text: "Direct page summary.",
+          source: "web_fetch_url",
+          metadata: { url: args.url },
+        };
+      },
+    },
+    aiProvider: {
+      async complete() {
+        throw new Error("AI should not be called for direct URL fallback");
+      },
+    },
+  });
+
+  const response = await orchestrator({
+    chatId: 777,
+    actor: { id: "owner-1", role: "owner" },
+    intent: "household",
+    text: "актуальная информация на https://example.com/page",
+    telegramUpdateId: 821,
+  });
+
+  assert.equal(response.answer.source, "web_fetch_url");
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].capabilityId, "web_fetch_url");
+  assert.equal(calls[0].args.url, "https://example.com/page");
 });
 
 test("public web search provider adds safe site scope when domain is supplied", async () => {
@@ -2807,6 +2935,69 @@ test("repository backed orchestrator uses Yandex Maps ll coordinates as weather 
     {
       latitude: 55.831423,
       longitude: 35.930186,
+      target: "weekend",
+      metricFocus: "wind",
+      inheritedFrom: "weather_follow_up",
+    },
+  );
+});
+
+test("repository backed orchestrator keeps weather context for short place follow ups", async () => {
+  const repositories = createInMemoryRepositories();
+  const weatherCalls = [];
+  const orchestrator = createRepositoryBackedOrchestrator({
+    repositories,
+    capabilityRegistry: {
+      has(capabilityId) {
+        return capabilityId === "weather_forecast";
+      },
+      async run(capabilityId, args) {
+        assert.equal(capabilityId, "weather_forecast");
+        weatherCalls.push(args);
+        return {
+          text: weatherCalls.length === 1
+            ? "Уточните населенный пункт."
+            : "Weekend weather for Цветочные берега.",
+          source: "weather_forecast",
+        };
+      },
+    },
+    aiProvider: {
+      async complete() {
+        throw new Error("AI should not be called for weather follow up");
+      },
+    },
+  });
+
+  await orchestrator({
+    chatId: 777,
+    actor: { id: "owner-1", role: "owner" },
+    intent: "household",
+    text: "Какая погода на выходных и что с ветром?",
+    telegramUpdateId: 819,
+  });
+
+  const response = await orchestrator({
+    chatId: 777,
+    actor: { id: "owner-1", role: "owner" },
+    intent: "household",
+    text: "Осташево КП Цветочные берега",
+    telegramUpdateId: 820,
+  });
+
+  assert.equal(response.answer.source, "weather_forecast");
+  assert.equal(weatherCalls.length, 2);
+  assert.deepEqual(
+    {
+      location: weatherCalls[1].location,
+      displayLocation: weatherCalls[1].displayLocation,
+      target: weatherCalls[1].target,
+      metricFocus: weatherCalls[1].metricFocus,
+      inheritedFrom: weatherCalls[1].inheritedFrom,
+    },
+    {
+      location: "Осташево, Московская область",
+      displayLocation: "КП Цветочные берега, Осташево",
       target: "weekend",
       metricFocus: "wind",
       inheritedFrom: "weather_follow_up",
